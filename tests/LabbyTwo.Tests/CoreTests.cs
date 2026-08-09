@@ -476,3 +476,27 @@ public class ProbeErrorTests
         Assert.DoesNotContain("  ", message);
     }
 }
+
+public class ErsatzTvPlaylistTests
+{
+    [Fact]
+    public void ChannelsAreCountedFromExtinfLines()
+    {
+        const string playlist = """
+            #EXTM3U
+            #EXTINF:-1 tvg-id="1" tvg-name="Movies",Movies
+            http://ersatztv:8409/iptv/channel/1.m3u8
+            #EXTINF:-1 tvg-id="2" tvg-name="Comedy",Comedy
+            http://ersatztv:8409/iptv/channel/2.m3u8
+            """;
+
+        Assert.Equal(2, ErsatzTvProvider.CountChannels(playlist));
+    }
+
+    [Fact]
+    public void AnEmptyPlaylistIsZeroChannelsRatherThanAFailure()
+    {
+        // A fresh ErsatzTV with no channels yet is working correctly, not broken.
+        Assert.Equal(0, ErsatzTvProvider.CountChannels("#EXTM3U\n"));
+    }
+}

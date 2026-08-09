@@ -144,6 +144,12 @@ monitoring works.
 | **Sonarr** / **Radarr** / **Lidarr** / **Readarr** | Version, reachability, and download queue depth. |
 | **Prowlarr** | Version and reachability for your indexer manager. |
 | **Plex** | Server version and what is playing right now. |
+| **Tautulli** | Active Plex streams, how many are transcoding, and total bandwidth. |
+| **Bazarr** | How many episodes and movies are still missing subtitles. |
+| **Overseerr** / **Jellyseerr** | Version, and requests pending, approved or available. |
+| **NZBGet** | Download rate, queue size, free disk, and whether it is paused. |
+| **ErsatzTV** | Reachability and how many channels it is publishing. |
+| **Unmanic** | Pending tasks and how many workers are busy. |
 | **Webhook** | *Alert channel.* Discord, Slack or ntfy — the payload shape is detected from the URL. |
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
 
