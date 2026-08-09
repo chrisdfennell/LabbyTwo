@@ -1,0 +1,63 @@
+# Copy this to docker-compose.override.yml and edit that.
+#
+#     cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# Compose reads both files automatically and merges this one on top. It is gitignored and
+# the installer never touches it, so your local changes survive every update — unlike
+# edits to docker-compose.yml, which updates replace.
+#
+# Everything below is commented out. Uncomment what you need.
+
+services:
+  labbytwo:
+
+    # ---- reaching containers in another stack ----------------------------------------
+    #
+    # A container cannot always reach another container through the host's IP: NAS
+    # firmware often refuses to forward between its bridge networks, which shows up as a
+    # timeout even though the same URL works from a shell on the NAS itself.
+    #
+    # Join the other stack's network and address its containers by name. Find the name
+    # with `docker network ls`, and confirm with:
+    #   docker ps --format '{{.Names}}\t{{.Networks}}'
+    #
+    # Then the URL in a connection becomes http://sonarr:8989 — the container's own name
+    # and its *internal* port, not the published one.
+    #
+    # networks:
+    #   - default
+    #   - media-stack
+
+    # ---- names your NAS resolves but a container cannot ------------------------------
+    #
+    # Containers inherit neither /etc/hosts nor NetBIOS nor mDNS. A hostname can also
+    # resolve to a dozen bridge gateways with the real address last, which times out.
+    #
+    # extra_hosts:
+    #   - "my-nas:192.168.1.50"
+
+    # ---- the Docker provider ---------------------------------------------------------
+    #
+    # It cannot see the daemon without this. Read-only, and worth a thought first: access
+    # to that socket is effectively root on the host. Nothing else in LabbyTwo needs it.
+    #
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    # ---- last resort: share the host's network ---------------------------------------
+    #
+    # Reaches everything the NAS can reach, and skips bridge networking entirely. Two
+    # consequences: port mapping stops applying, so LABBY_PORT does nothing and the port
+    # below is the real one; and the container is no longer isolated from the host's
+    # network. Prefer joining a network above if you can.
+    #
+    # network_mode: host
+    # environment:
+    #   ASPNETCORE_HTTP_PORTS: 5150
+
+# Every external network named above has to be declared here too. "external" means
+# Compose attaches to a network something else created, rather than making its own.
+#
+# networks:
+#   media-stack:
+#     external: true

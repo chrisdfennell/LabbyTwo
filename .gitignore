@@ -1,6 +1,10 @@
 # Real environment file — never commit
 .env
 
+# Local Compose customisation: extra networks, the Docker socket, host mode. Yours, not
+# the project's, and the installer must never replace it.
+docker-compose.override.yml
+
 # Build output
 bin/
 obj/

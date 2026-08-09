@@ -65,6 +65,17 @@ To skip the prompt — for a script, a cron job, or CI — set the directory up 
 `LABBY_DIR=/opt/labbytwo bash install.sh`, or `.\install.ps1 -Dir D:\labbytwo`. Add
 `LABBY_PORT=5151` / `-Port 5151` if 5150 is taken.
 
+**Changing the Compose setup?** Put it in `docker-compose.override.yml` rather than
+editing `docker-compose.yml` — Compose merges it automatically, it is gitignored, and
+updates leave it alone. `docker-compose.override.yml.example` covers the usual cases:
+joining another stack's network so you can reach its containers by name, `extra_hosts`
+for names your NAS resolves but a container cannot, and mounting the Docker socket.
+
+That first one bites on a NAS in particular. Container Station gives each stack its own
+bridge, and the firmware will not always forward between them — so a service that answers
+fine from a shell on the NAS times out from inside LabbyTwo. Join its network and use
+`http://sonarr:8989` instead of the host's IP.
+
 **No git?** Fine — NAS firmware like QNAP Container Station and Synology ships Docker
 without it. The script falls back to downloading a tarball, and updates still work.
 It needs Docker plus either git, or curl/wget and tar.
