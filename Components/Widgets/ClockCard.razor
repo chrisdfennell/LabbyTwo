@@ -1,0 +1,31 @@
+@implements IDisposable
+
+<div class="metric-value">@_now.ToString(TimeFormat)</div>
+@if (Context.Widget.Settings.GetBool("show_date", true))
+{
+    <div class="tile-meta">@_now.ToString("dddd, d MMMM yyyy")</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private DateTimeOffset _now = DateTimeOffset.Now;
+    private Timer? _timer;
+
+    private bool Seconds => Context.Widget.Settings.GetBool("seconds");
+    private string TimeFormat => Seconds ? "HH:mm:ss" : "HH:mm";
+
+    protected override void OnInitialized()
+    {
+        // Ticking every second when seconds aren't shown would push a re-render down the
+        // circuit 59 times for nothing.
+        var period = Seconds ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(20);
+        _timer = new Timer(_ => InvokeAsync(() =>
+        {
+            _now = DateTimeOffset.Now;
+            StateHasChanged();
+        }), null, period, period);
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

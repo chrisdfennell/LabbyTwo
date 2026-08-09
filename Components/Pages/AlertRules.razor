@@ -1,0 +1,449 @@
+@page "/settings/alerts"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject AlertRuleStore Rules
+@inject ConfigStore Config
+@inject Registry Registry
+@inject HistoryStore History
+@inject MetricAlertService Evaluator
+@inject AlertService Alerts
+
+<PageTitle>Alert rules · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>🚨 Alert rules</h1>
+        <p class="subtitle">
+            Up/down alerting covers a service being unreachable. These cover the numbers —
+            a volume filling, a battery draining, a temperature climbing.
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="settings/connections">Alert channels</a>
+        <button class="btn btn-sm btn-primary" @onclick="StartNew">+ New rule</button>
+    </div>
+</div>
+
+@if (_channelCount == 0)
+{
+    <div class="alert alert-warning py-2">
+        No alert channel is configured, so nothing will actually be delivered.
+        <a href="settings/connections">Add a webhook or Pushover channel</a> first.
+    </div>
+}
+
+@if (_suggestions.Count > 0)
+{
+    <div class="widget mb-3">
+        <div class="widget-head">
+            <h2 class="widget-title">Suggested for what you have connected</h2>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="AddAllSuggestionsAsync"
+                    disabled="@_adding">Add all @_suggestions.Count</button>
+        </div>
+        <div class="widget-body">
+            <p class="tile-meta">
+                Sensible starting points from each integration. Nothing is created until you say so,
+                and each one is an ordinary rule you can edit or delete afterwards.
+            </p>
+            <div class="d-flex flex-column gap-2">
+                @foreach (var offer in _suggestions)
+                {
+                    var current = offer;
+                    <div class="d-flex align-items-start gap-2">
+                        <button class="btn btn-sm btn-outline-primary flex-none" disabled="@_adding"
+                                @onclick="() => AddSuggestionAsync(current)">+ Add</button>
+                        <div class="min-w-0">
+                            <div class="tile-name">
+                                @offer.Connection.Name · @offer.Rule.Name
+                                <span class="tile-meta">
+                                    @offer.Rule.Metric @offer.Rule.ComparisonWord @offer.Rule.Threshold.ToString("0.##")
+                                    @if (offer.Rule.ForMinutes > 0)
+                                    {
+                                        <text> for @offer.Rule.ForMinutes min</text>
+                                    }
+                                </span>
+                            </div>
+                            @if (offer.Rule.Why is { Length: > 0 })
+                            {
+                                <div class="tile-meta">@offer.Rule.Why</div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@if (_rules.Count == 0)
+{
+    <div class="empty-state">
+        <p class="mb-3">No rules yet.</p>
+        <button class="btn btn-primary btn-sm" @onclick="StartNew">Add the first rule</button>
+        <div class="form-text mt-3">
+            A good first one: <code>disk_percent</code> above <code>90</code> on any connection.
+        </div>
+    </div>
+}
+else
+{
+    <div class="widget">
+        <div class="widget-body p-0">
+            <table class="table mb-0 align-middle">
+                <thead>
+                    <tr class="tile-meta">
+                        <th style="width: 2.5rem"></th>
+                        <th>Rule</th>
+                        <th>Condition</th>
+                        <th>Now</th>
+                        <th style="width: 10rem"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var rule in _rules)
+                    {
+                        var firing = Evaluator.IsFiring(rule.Id);
+                        var spec = SpecFor(rule);
+                        <tr>
+                            <td>
+                                <span class="status-dot @(!rule.Enabled ? "status-unknown" : firing ? "status-down" : "status-up")"
+                                      title="@(!rule.Enabled ? "Disabled" : firing ? "Firing" : "OK")"></span>
+                            </td>
+                            <td>
+                                <div class="tile-name">@rule.Describe(spec.Label, NameOf(rule.ConnectionId))</div>
+                                <div class="tile-meta">
+                                    @(rule.ConnectionId is null ? "Any connection reporting this metric" : NameOf(rule.ConnectionId))
+                                    @if (rule.ForMinutes > 0)
+                                    {
+                                        <text> · sustained @rule.ForMinutes min</text>
+                                    }
+                                </div>
+                            </td>
+                            <td class="tile-meta">
+                                <code>@rule.Metric</code> @rule.ComparisonWord @spec.Format(rule.Threshold)
+                                @if (rule.ClearThreshold is { } clear && Math.Abs(clear - rule.Threshold) > double.Epsilon)
+                                {
+                                    <div>clears past @spec.Format(clear)</div>
+                                }
+                            </td>
+                            <td>
+                                @foreach (var breach in Readings(rule))
+                                {
+                                    <div class="@(breach.Firing ? "text-danger" : "tile-meta")">
+                                        @SpecFor(rule, breach.ConnectionId).Format(breach.LastValue, 1)
+                                        <span class="tile-meta">@NameOf(breach.ConnectionId)</span>
+                                    </div>
+                                }
+                                @if (Readings(rule).Count == 0)
+                                {
+                                    <span class="tile-meta">no data yet</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(rule)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = rule">✕</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_draft is { } draft)
+{
+    <Modal Title="@(_isNew ? "New alert rule" : "Edit alert rule")" OnClose="() => _draft = null">
+        <ChildContent>
+            <div class="mb-3">
+                <label class="form-label" for="rule-connection">Watch</label>
+                <select id="rule-connection" class="form-select" value="@(draft.ConnectionId ?? "")"
+                        @onchange="e => OnConnectionChangedAsync(e.Value?.ToString())">
+                    <option value="">Any connection reporting the metric</option>
+                    @foreach (var connection in _connections)
+                    {
+                        <option value="@connection.Id">@connection.Name</option>
+                    }
+                </select>
+                <div class="form-text">
+                    “Any” means a NAS you add next month is covered by this rule with no edit.
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="rule-metric">Metric</label>
+                <input id="rule-metric" class="form-control font-monospace" list="rule-metric-options"
+                       value="@draft.Metric" placeholder="disk_percent"
+                       @onchange="e => _draft = draft with { Metric = e.Value?.ToString() ?? string.Empty }" />
+                <datalist id="rule-metric-options">
+                    @foreach (var option in _metricOptions)
+                    {
+                        <option value="@option.Value">@option.Label</option>
+                    }
+                </datalist>
+            </div>
+
+            <div class="row g-2 mb-3">
+                <div class="col-5">
+                    <label class="form-label" for="rule-comparison">When it is</label>
+                    @* The handler is a method rather than a lambda because a string
+                       literal inside a quoted Razor attribute ends the attribute. *@
+                    <select id="rule-comparison" class="form-select" value="@draft.Comparison.ToString()"
+                            @onchange="SetComparison">
+                        <option value="Above">above</option>
+                        <option value="Below">below</option>
+                    </select>
+                </div>
+                <div class="col-7">
+                    <label class="form-label" for="rule-threshold">Threshold</label>
+                    <input id="rule-threshold" type="number" step="any" class="form-control" value="@draft.Threshold"
+                           @onchange="e => _draft = draft with { Threshold = Parse(e.Value, draft.Threshold) }" />
+                </div>
+            </div>
+
+            <div class="row g-2 mb-3">
+                <div class="col-6">
+                    <label class="form-label" for="rule-for">For (minutes)</label>
+                    <input id="rule-for" type="number" min="0" class="form-control" value="@draft.ForMinutes"
+                           @onchange="e => _draft = draft with { ForMinutes = (int)Parse(e.Value, 0) }" />
+                    <div class="form-text">0 fires immediately. A few minutes ignores the nightly backup spike.</div>
+                </div>
+                <div class="col-6">
+                    <label class="form-label" for="rule-clear">Clears at</label>
+                    <input id="rule-clear" type="number" step="any" class="form-control"
+                           value="@(draft.ClearThreshold?.ToString() ?? "")" placeholder="@draft.Threshold.ToString()"
+                           @onchange="e => _draft = draft with { ClearThreshold = ParseOptional(e.Value) }" />
+                    <div class="form-text">
+                        Blank uses the threshold. Setting it slightly back stops a metric sitting on the
+                        line from alerting over and over.
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="rule-name">Name</label>
+                <input id="rule-name" class="form-control" value="@draft.Name" placeholder="@Preview(draft)"
+                       @onchange="e => _draft = draft with { Name = e.Value?.ToString() ?? string.Empty }" />
+            </div>
+
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="rule-enabled"
+                       checked="@draft.Enabled"
+                       @onchange="e => _draft = draft with { Enabled = e.Value is true }" />
+                <label class="form-check-label" for="rule-enabled">Enabled</label>
+            </div>
+
+            @if (_validation is { Length: > 0 })
+            {
+                <div class="alert alert-warning py-2 mt-3 mb-0">@_validation</div>
+            }
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _draft = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveAsync">Save</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_confirmDelete is { } deleting)
+{
+    <ConfirmDialog Title="Delete this rule?"
+                   Message="@($"“{deleting.Describe(SpecFor(deleting).Label, NameOf(deleting.ConnectionId))}” will stop being checked.")"
+                   ConfirmText="Delete"
+                   OnCancel="() => _confirmDelete = null"
+                   OnConfirm="DeleteConfirmedAsync" />
+}
+
+@code {
+    private IReadOnlyList<AlertRule> _rules = [];
+    private IReadOnlyList<Connection> _connections = [];
+    private IReadOnlyList<SelectOption> _metricOptions = [];
+    private int _channelCount;
+    private List<Offer> _suggestions = [];
+    private bool _adding;
+
+    private sealed record Offer(Connection Connection, SuggestedRule Rule);
+
+    private AlertRule? _draft;
+    private AlertRule? _confirmDelete;
+    private bool _isNew;
+    private string? _validation;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Rules.Changed += OnChanged;
+        Evaluator.Updated += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _rules = await Rules.AllAsync();
+        _connections = [.. (await Config.ConnectionsAsync()).Where(c => Registry.Provider(c.Provider)?.IsMonitored != false)];
+        _channelCount = (await Alerts.ChannelsAsync()).Count;
+        LoadSuggestions();
+        await LoadMetricsAsync(_draft?.ConnectionId);
+    }
+
+    /// <summary>
+    /// What each connected provider recommends, minus anything an existing rule already
+    /// covers — including a rule that watches every connection, since that covers this
+    /// one too.
+    /// </summary>
+    private void LoadSuggestions()
+    {
+        _suggestions = [.. _connections
+            .SelectMany(connection => (Registry.Provider(connection.Provider)?.SuggestedRules ?? [])
+                .Where(rule => !_rules.Any(existing => rule.IsCoveredBy(existing, connection.Id)))
+                .Select(rule => new Offer(connection, rule)))];
+    }
+
+    private async Task AddSuggestionAsync(Offer offer)
+    {
+        _adding = true;
+        try
+        {
+            await Rules.SaveAsync(offer.Rule.ForConnection(offer.Connection.Id));
+        }
+        finally
+        {
+            _adding = false;
+        }
+    }
+
+    private async Task AddAllSuggestionsAsync()
+    {
+        _adding = true;
+        try
+        {
+            // Snapshot first: saving raises Changed, which reloads and rewrites the list
+            // being iterated.
+            foreach (var offer in _suggestions.ToList())
+                await Rules.SaveAsync(offer.Rule.ForConnection(offer.Connection.Id));
+        }
+        finally
+        {
+            _adding = false;
+        }
+    }
+
+    /// <summary>
+    /// Suggestions come from the whole install when the rule is not pinned to one
+    /// connection, because that is exactly the case where the user cannot know which
+    /// names are available.
+    /// </summary>
+    private async Task LoadMetricsAsync(string? connectionId)
+    {
+        var declared = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var connection in connectionId is null ? _connections : _connections.Where(c => c.Id == connectionId))
+        {
+            foreach (var metric in Registry.MetricsFor(connection))
+                declared.TryAdd(metric.Key, metric.Label);
+            foreach (var key in await History.MetricsAsync(connection.Id))
+                declared.TryAdd(key, MetricSpec.Fallback(key).Label);
+        }
+
+        _metricOptions = [.. declared.OrderBy(pair => pair.Key).Select(pair => new SelectOption(pair.Key, pair.Value))];
+    }
+
+    private async Task OnConnectionChangedAsync(string? id)
+    {
+        var connectionId = string.IsNullOrEmpty(id) ? null : id;
+        _draft = _draft! with { ConnectionId = connectionId };
+        await LoadMetricsAsync(connectionId);
+    }
+
+    private MetricSpec SpecFor(AlertRule rule, string? connectionId = null)
+    {
+        var connection = _connections.FirstOrDefault(c => c.Id == (connectionId ?? rule.ConnectionId));
+        return Registry.Metric(connection, rule.Metric);
+    }
+
+    private string NameOf(string? connectionId) =>
+        _connections.FirstOrDefault(c => c.Id == connectionId)?.Name ?? "";
+
+    // Firing ones first: on an "any connection" rule watching a dozen boxes, the one
+    // that is actually in trouble should not be somewhere down the list.
+    private List<MetricAlertService.Breach> Readings(AlertRule rule) =>
+        [.. Evaluator.All.Where(b => b.RuleId == rule.Id).OrderByDescending(b => b.Firing).ThenBy(b => NameOf(b.ConnectionId))];
+
+    private string Preview(AlertRule rule) =>
+        rule.Describe(SpecFor(rule).Label, NameOf(rule.ConnectionId) is { Length: > 0 } n ? n : null);
+
+    private void SetComparison(ChangeEventArgs args)
+    {
+        var below = string.Equals(args.Value?.ToString(), nameof(Comparison.Below), StringComparison.Ordinal);
+        _draft = _draft! with { Comparison = below ? Comparison.Below : Comparison.Above };
+    }
+
+    private static double Parse(object? value, double fallback) =>
+        double.TryParse(value?.ToString(), out var parsed) ? parsed : fallback;
+
+    private static double? ParseOptional(object? value) =>
+        double.TryParse(value?.ToString(), out var parsed) ? parsed : null;
+
+    private void StartNew()
+    {
+        _isNew = true;
+        _validation = null;
+        _draft = new AlertRule { Metric = "disk_percent", Comparison = Comparison.Above, Threshold = 90, ForMinutes = 5 };
+    }
+
+    private void Edit(AlertRule rule)
+    {
+        _isNew = false;
+        _validation = null;
+        _draft = rule;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_draft is not { } rule)
+            return;
+
+        if (rule.Metric.Trim().Length == 0)
+        {
+            _validation = "Pick a metric — that is the number being watched.";
+            return;
+        }
+
+        // A clear threshold on the wrong side of the trigger would mean the alert can
+        // fire and never clear, which is worse than no alert at all.
+        if (rule.ClearThreshold is { } clear)
+        {
+            if (rule.Comparison == Comparison.Above && clear > rule.Threshold)
+            {
+                _validation = $"For an “above” rule, “clears at” must be at or below {rule.Threshold:0.##} — otherwise it could never clear.";
+                return;
+            }
+            if (rule.Comparison == Comparison.Below && clear < rule.Threshold)
+            {
+                _validation = $"For a “below” rule, “clears at” must be at or above {rule.Threshold:0.##} — otherwise it could never clear.";
+                return;
+            }
+        }
+
+        await Rules.SaveAsync(rule with { Metric = rule.Metric.Trim(), Name = rule.Name.Trim() });
+        _draft = null;
+    }
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_confirmDelete is { } rule)
+            await Rules.DeleteAsync(rule.Id);
+        _confirmDelete = null;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Rules.Changed -= OnChanged;
+        Evaluator.Updated -= OnChanged;
+    }
+}

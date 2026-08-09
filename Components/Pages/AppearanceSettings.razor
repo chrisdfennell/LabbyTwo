@@ -1,0 +1,142 @@
+@page "/settings/appearance"
+@rendermode InteractiveServer
+@inject AppSettingsStore AppSettings
+@inject NavigationManager Nav
+
+<PageTitle>Appearance · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>🎨 Appearance</h1>
+        <p class="subtitle">Applies to every browser that opens this dashboard — it is stored with the rest of your setup, not per-device.</p>
+    </div>
+    <a class="btn btn-sm btn-outline-secondary" href="settings">Back to settings</a>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Theme</h2></div>
+            <div class="widget-body">
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    @foreach (var (value, label, hint) in Themes)
+                    {
+                        <button class="btn btn-sm @(_theme == value ? "btn-primary" : "btn-outline-secondary")"
+                                title="@hint" @onclick="() => SetThemeAsync(value)">@label</button>
+                    }
+                </div>
+
+                <label class="form-label" for="accent">Accent colour</label>
+                <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
+                    @foreach (var preset in Presets)
+                    {
+                        <button class="color-swatch @(_accent == preset ? "is-active" : "")"
+                                style="background: @preset" title="@preset"
+                                aria-label="@preset" @onclick="() => SetAccentAsync(preset)"></button>
+                    }
+                    <input type="color" id="accent" class="form-control form-control-color"
+                           value="@_accent" @onchange="e => SetAccentAsync(e.Value?.ToString())" />
+                </div>
+                <div class="form-text mb-3">
+                    Used for links, buttons, the active tab and every chart.
+                </div>
+
+                <label class="form-label" for="density">Density</label>
+                <select id="density" class="form-select" value="@_density"
+                        @onchange="e => SetDensityAsync(e.Value?.ToString())">
+                    <option value="compact">Compact — more on screen</option>
+                    <option value="comfortable">Comfortable</option>
+                    <option value="roomy">Roomy — easier across a room</option>
+                </select>
+                <div class="form-text">Roomy suits a wall-mounted tablet; compact suits a laptop.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Name</h2></div>
+            <div class="widget-body">
+                <label class="form-label" for="brand">What this dashboard is called</label>
+                <input id="brand" class="form-control" value="@_brand" maxlength="40"
+                       placeholder="LabbyTwo" @onchange="e => SetBrandAsync(e.Value?.ToString())" />
+                <div class="form-text">
+                    Shown in the sidebar. Call it after your lab, your house, or leave it as it is.
+                </div>
+
+                <hr class="my-3" />
+
+                <p class="tile-meta mb-2">Preview</p>
+                <div class="panel p-3">
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <span style="color: var(--accent)">◆</span>
+                        <strong>@(_brand is { Length: > 0 } ? _brand : "LabbyTwo")</strong>
+                    </div>
+                    <div class="d-flex gap-2 align-items-center mb-2">
+                        <span class="status-dot status-up"></span><span class="tile-meta">Something that is up</span>
+                    </div>
+                    <div class="usage-bar mb-3"><span style="width: 62%"></span></div>
+                    <button class="btn btn-primary btn-sm">A button</button>
+                    <a class="ms-2" href="settings/appearance">and a link</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _theme = Appearance.Default.Theme;
+    private string _accent = Appearance.Default.Accent;
+    private string _density = Appearance.Default.Density;
+    private string _brand = Appearance.Default.BrandName;
+
+    private static readonly (string Value, string Label, string Hint)[] Themes =
+    [
+        ("system", "Follow the OS", "Light or dark, whichever this device is set to"),
+        ("dark", "Dark", "Always dark"),
+        ("light", "Light", "Always light"),
+    ];
+
+    private static readonly string[] Presets =
+        ["#4da3ff", "#35d07f", "#a78bfa", "#ff8a5c", "#f472b6", "#22d3ee", "#facc15"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var look = Appearance.From(await AppSettings.AllAsync());
+        (_theme, _accent, _density, _brand) = (look.Theme, look.Accent, look.Density, look.BrandName);
+    }
+
+    // The theme is read while the page is server-rendered, so a change only shows once the
+    // document is rebuilt — a reload of the current page is the honest way to apply it.
+    private async Task SaveAsync(string key, string value)
+    {
+        await AppSettings.SaveAsync(key, value);
+        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+    }
+
+    private async Task SetThemeAsync(string value)
+    {
+        _theme = value;
+        await SaveAsync(Appearance.ThemeKey, value);
+    }
+
+    private async Task SetAccentAsync(string? value)
+    {
+        if (!Appearance.IsValidColor(value))
+            return;
+        _accent = value!;
+        await SaveAsync(Appearance.AccentKey, value!);
+    }
+
+    private async Task SetDensityAsync(string? value)
+    {
+        _density = value is "compact" or "roomy" ? value : "comfortable";
+        await SaveAsync(Appearance.DensityKey, _density);
+    }
+
+    private async Task SetBrandAsync(string? value)
+    {
+        _brand = value?.Trim() is { Length: > 0 } name ? name : Appearance.Default.BrandName;
+        await SaveAsync(Appearance.BrandKey, _brand);
+    }
+}

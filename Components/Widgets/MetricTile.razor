@@ -1,0 +1,77 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else
+{
+    <div class="metric-value">
+        @if (_value is { } value)
+        {
+            @value.ToString($"F{Decimals}")
+            <span class="metric-unit">@Unit</span>
+        }
+        else
+        {
+            <span class="metric-unit">no data yet</span>
+        }
+    </div>
+    <div class="tile-meta">@Spec.Label · @Context.Connection.Name</div>
+
+    @if (Context.Widget.Settings.GetBool("show_sparkline", true))
+    {
+        <div class="mt-2">
+            <Sparkline Values="_series" Label="@Spec.Label" />
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private double? _value;
+    private IReadOnlyList<double> _series = [];
+
+    private string Metric => Context.Widget.Settings.Get("metric", "latency_ms");
+    // The provider decides what this metric is called and how it reads; the widget's own
+    // settings still win, so a user can override a unit they disagree with.
+    private MetricSpec Spec => Registry.Metric(Context.Connection, Metric);
+    private int Decimals => Math.Clamp(Context.Widget.Settings.GetInt("decimals", Spec.Decimals), 0, 4);
+    private string Unit => Context.Widget.Settings.Get("suffix", Spec.Unit);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        // Prefer the live probe; fall back to the last stored sample so a tile still reads
+        // sensibly right after a restart, before the first sweep lands.
+        var state = Health.State(Context.Connection.Id);
+        if (state?.Metrics.TryGetValue(Metric, out var live) == true)
+            _value = live;
+
+        var samples = await History.SamplesAsync(Context.Connection.Id, Metric, TimeSpan.FromHours(6));
+        _series = [.. samples.Select(s => s.Value)];
+        _value ??= samples.Count > 0 ? samples[^1].Value : null;
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

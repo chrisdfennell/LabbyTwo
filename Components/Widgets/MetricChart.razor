@@ -1,0 +1,104 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+@using System.Globalization
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (_samples.Count < 2)
+{
+    <p class="tile-meta mb-0">
+        Nothing recorded yet for <code>@Metric</code>.
+        @if (_available.Count > 0)
+        {
+            <span>This connection reports: @string.Join(", ", _available).</span>
+        }
+    </p>
+}
+else
+{
+    <div class="d-flex justify-content-between tile-meta mb-1">
+        <span>@Spec.Label · last @Hours h</span>
+        <span>now @Format(_samples[^1].Value) · peak @Format(_max)</span>
+    </div>
+    <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%; height:150px" role="img"
+         aria-label="@Spec.Label over the last @Hours hours">
+        @* Three gridlines are enough to read a level off without becoming graph paper. *@
+        @foreach (var fraction in new[] { 0.25, 0.5, 0.75 })
+        {
+            var y = (40 - fraction * 36 - 2).ToString("0.##", CultureInfo.InvariantCulture);
+            <line x1="0" y1="@y" x2="100" y2="@y" stroke="var(--edge)" stroke-width="0.4" vector-effect="non-scaling-stroke" />
+        }
+        <polygon points="@($"0,40 {_points} 100,40")" fill="var(--accent)" opacity="0.14" />
+        <polyline points="@_points" fill="none" stroke="var(--accent)" stroke-width="1.5"
+                  vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+    </svg>
+    <div class="d-flex justify-content-between tile-meta">
+        <span>@_samples[0].At.ToString("HH:mm")</span>
+        <span>@_samples[^1].At.ToString("HH:mm")</span>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<HistoryStore.Sample> _samples = [];
+    private IReadOnlyList<string> _available = [];
+    private string _points = "";
+    private double _max;
+
+    private string Metric => Context.Widget.Settings.Get("metric", "latency_ms");
+    private MetricSpec Spec => Registry.Metric(Context.Connection, Metric);
+    private int Hours => Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
+
+    // Keep a decimal up to three figures: a temperature of 41.5 reading as "42" looks
+    // like a rounding bug, while a latency of 250.4 ms gains nothing from the ".4".
+    private string Format(double value) =>
+        Spec.Format(value, Math.Abs(value) < 100 ? 1 : 0);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+        _samples = await History.SamplesAsync(Context.Connection.Id, Metric, TimeSpan.FromHours(Hours));
+        if (_samples.Count < 2)
+        {
+            _available = await History.MetricsAsync(Context.Connection.Id);
+            return;
+        }
+
+        var values = _samples.Select(s => s.Value).ToList();
+        var min = values.Min();
+        _max = values.Max();
+        var range = _max - min;
+        var scale = range > 0 ? range : 1;
+        var offset = range > 0 ? min : min - 0.5;
+
+        var step = 100d / (_samples.Count - 1);
+        _points = string.Join(' ', values.Select((value, index) =>
+        {
+            var x = index * step;
+            var y = 38 - (value - offset) / scale * 36;
+            return $"{x.ToString("0.##", CultureInfo.InvariantCulture)},{y.ToString("0.##", CultureInfo.InvariantCulture)}";
+        }));
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

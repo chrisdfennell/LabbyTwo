@@ -1,0 +1,114 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a weather station.</p>
+}
+else if (_metrics is null || !_metrics.ContainsKey("temp_indoor_c") || !_metrics.ContainsKey("temp_outdoor_c"))
+{
+    <p class="tile-meta mb-0">
+        Waiting for a station that reports both indoor and outdoor temperature.
+    </p>
+}
+else
+{
+    <div class="row g-3">
+        <div class="col-6">
+            <div class="tile-meta">Inside</div>
+            <div class="metric-value">@FormatTemp(Indoor)</div>
+            @if (_metrics.TryGetValue("humidity_indoor", out var inside))
+            {
+                <div class="tile-meta">@($"{inside:0}") % humidity</div>
+            }
+        </div>
+        <div class="col-6">
+            <div class="tile-meta">Outside</div>
+            <div class="metric-value">@FormatTemp(Outdoor)</div>
+            @if (_metrics.TryGetValue("humidity", out var outside))
+            {
+                <div class="tile-meta">@($"{outside:0}") % humidity</div>
+            }
+        </div>
+    </div>
+
+    <div class="mt-2 pt-2 border-top-subtle">
+        @* The point of the card: not two numbers, but what to do about them. *@
+        <div class="tile-name">@Verdict</div>
+        <div class="tile-meta">@($"{FormatDelta(Math.Abs(Difference))} {(Difference > 0 ? "warmer" : "cooler")} inside")</div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyDictionary<string, double>? _metrics;
+
+    private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
+
+    private double Indoor => _metrics!.GetValueOrDefault("temp_indoor_c");
+    private double Outdoor => _metrics!.GetValueOrDefault("temp_outdoor_c");
+    private double Difference => Indoor - Outdoor;
+
+    /// <summary>The target the advice is measured against — what you want it to be inside.</summary>
+    private double ComfortC => Context.Widget.Settings.GetDouble("comfort_c", 21);
+
+    private string Verdict
+    {
+        get
+        {
+            // "Open the windows" only makes sense if outside is closer to comfortable
+            // than inside is; otherwise you are letting the wrong air in.
+            var insideOff = Math.Abs(Indoor - ComfortC);
+            var outsideOff = Math.Abs(Outdoor - ComfortC);
+
+            if (insideOff < 1.5)
+                return "Comfortable inside.";
+            if (outsideOff + 1 < insideOff)
+                return Indoor > ComfortC ? "Cooler outside — open up." : "Warmer outside — open up.";
+            return Indoor > ComfortC ? "Warm inside, and no better out." : "Cool inside, and no better out.";
+        }
+    }
+
+    private string FormatTemp(double celsius) =>
+        Metric ? $"{celsius:0.0}°C" : $"{AmbientWeatherProvider.CToF(celsius):0.0}°F";
+
+    /// <summary>A difference rather than a reading, so it converts as an interval.</summary>
+    private string FormatDelta(double celsius) =>
+        Metric ? $"{celsius:0.0}°C" : $"{celsius * 9 / 5:0.0}°F";
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    /// <summary>
+    /// The live probe first, then the last recorded readings. Without the fallback the
+    /// card would sit blank for a whole probe interval after every restart.
+    /// </summary>
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+        {
+            _metrics = null;
+            return;
+        }
+
+        var live = Health.State(Context.Connection.Id)?.Metrics;
+        if (live is { Count: > 0 })
+        {
+            _metrics = live;
+            return;
+        }
+
+        _metrics = await History.LatestAsync(Context.Connection.Id, TimeSpan.FromHours(6));
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

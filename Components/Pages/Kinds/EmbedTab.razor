@@ -1,0 +1,43 @@
+@* An entire page that is somebody else's web UI. This one tab kind replaces what would
+   otherwise be a hardcoded page per embedded app. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "" : Tab.Icon + " ")@Tab.Name</h1>
+        @if (Tab.Settings.Get("subtitle") is { Length: > 0 } subtitle)
+        {
+            <p class="subtitle">@subtitle</p>
+        }
+    </div>
+    @if (Url is { Length: > 0 })
+    {
+        <a class="btn btn-sm btn-outline-secondary" href="@Url" target="_blank" rel="noreferrer">Open in a new tab ↗</a>
+    }
+</div>
+
+@if (string.IsNullOrWhiteSpace(Url))
+{
+    <div class="empty-state">
+        <p class="mb-3">This tab has no URL yet.</p>
+        <a class="btn btn-primary btn-sm" href="settings/tabs">Set one</a>
+    </div>
+}
+else
+{
+    <iframe class="embed-frame" src="@Url" title="@Tab.Name" style="height:@Height"
+            referrerpolicy="no-referrer" allow="fullscreen"></iframe>
+    <p class="tile-meta mt-2 mb-0">
+        Loaded by your browser, not the server — if this stays blank, the URL has to be reachable
+        from this device, and an https page cannot frame a plain-http one.
+    </p>
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private string Url => Tab.Settings.Get("url");
+
+    private string Height => Tab.Settings.Get("height") is { Length: > 0 } value && int.TryParse(value, out var px)
+        ? $"{Math.Clamp(px, 200, 4000)}px"
+        : "calc(100vh - 11rem)";
+}

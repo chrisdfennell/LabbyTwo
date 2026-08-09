@@ -1,0 +1,29 @@
+@* A plain GET form to the engine's own URL. No JavaScript, no proxy, no interactivity —
+   the browser navigates exactly as it would from the address bar, which also means the
+   engine never sees LabbyTwo in the request. *@
+
+<form class="search-box" method="get" action="@Action" target="@(NewTab ? "_blank" : null)" rel="noreferrer">
+    @foreach (var (key, value) in Engine.ExtraParameters)
+    {
+        <input type="hidden" name="@key" value="@value" />
+    }
+    <input type="search" name="@Engine.QueryParameter" placeholder="@Placeholder"
+           aria-label="@Placeholder" autocomplete="off" autofocus="@AutoFocus" />
+    <button type="submit" class="btn btn-primary">@Engine.Icon</button>
+</form>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private SearchEngine Engine => SearchEngine.Resolve(
+        Context.Widget.Settings.Get("engine", "duckduckgo"),
+        Context.Widget.Settings.Get("custom_url"));
+
+    private string Action => Engine.Url;
+    private bool NewTab => Context.Widget.Settings.GetBool("new_tab", false);
+    private bool AutoFocus => Context.Widget.Settings.GetBool("autofocus", false);
+
+    private string Placeholder => Context.Widget.Settings.Get("placeholder") is { Length: > 0 } custom
+        ? custom
+        : $"Search {Engine.DisplayName}…";
+}

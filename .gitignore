@@ -1,0 +1,22 @@
+# Real environment file — never commit
+.env
+
+# Build output
+bin/
+obj/
+publish/
+
+# The database, the keyring, and every credential you have entered
+data/
+
+# IDE / tooling
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Test output
+[Tt]est[Rr]esults/
+
+# Docker image exports
+*.tar

@@ -1,0 +1,197 @@
+@page "/settings/import"
+@rendermode InteractiveServer
+@inject DashboardImportService Importers
+@inject NavigationManager Nav
+
+<PageTitle>Import a dashboard · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>📥 Import a dashboard</h1>
+        <p class="subtitle">Bring across what you already built somewhere else.</p>
+    </div>
+    <a class="btn btn-sm btn-outline-secondary" href="settings">Back to settings</a>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-5">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">What it can read</h2></div>
+            <div class="widget-body">
+                <ul class="list-unstyled mb-0 small">
+                    @foreach (var importer in Importers.Importers)
+                    {
+                        <li class="mb-2">
+                            <strong>@importer.Icon @importer.DisplayName</strong>
+                            <div class="tile-meta">@importer.Description</div>
+                        </li>
+                    }
+                </ul>
+                <hr class="my-3" />
+                <p class="tile-meta mb-0">
+                    Importing only ever adds. Your existing tabs and connections are untouched,
+                    so there is nothing to undo beyond deleting what you do not want.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Upload</h2></div>
+            <div class="widget-body">
+                <label class="form-label" for="import-format">Format</label>
+                <select id="import-format" class="form-select mb-3" @bind="_format">
+                    <option value="">Detect automatically</option>
+                    @foreach (var importer in Importers.Importers)
+                    {
+                        <option value="@importer.Key">@importer.Icon @importer.DisplayName</option>
+                    }
+                </select>
+
+                <label class="form-label" for="import-file">File</label>
+                <InputFile id="import-file" class="form-control mb-2" OnChange="OnFileAsync" />
+                <div class="form-text mb-3">Up to @(MaxBytes / 1024 / 1024) MB.</div>
+
+                @if (_error is { Length: > 0 })
+                {
+                    <div class="alert alert-danger py-2">@_error</div>
+                }
+
+                @if (_plan is { } plan)
+                {
+                    <div class="panel p-3 mb-3">
+                        <p class="mb-2">
+                            <strong>@_fileName</strong> holds
+                            @Count(plan.Tabs.Count, "tab"),
+                            @Count(plan.WidgetCount, "card")
+                            and @Count(plan.Connections.Count, "connection").
+                        </p>
+
+                        @foreach (var tab in plan.Tabs)
+                        {
+                            <div class="mb-2">
+                                <div class="tile-meta">@tab.Icon @tab.Name</div>
+                                <div class="small">
+                                    @string.Join(", ", tab.Widgets.Select(Describe).Take(12))
+                                    @(tab.Widgets.Count > 12 ? $" and {tab.Widgets.Count - 12} more" : "")
+                                </div>
+                            </div>
+                        }
+
+                        @if (plan.Notes.Count > 0)
+                        {
+                            <ul class="small tile-meta mb-0 mt-2 ps-3">
+                                @foreach (var note in plan.Notes)
+                                {
+                                    <li>@note</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+
+                    <button class="btn btn-primary" @onclick="ApplyAsync" disabled="@_working">
+                        @(_working ? "Importing…" : "Import it")
+                    </button>
+                    <button class="btn btn-outline-secondary ms-2" @onclick="Reset" disabled="@_working">Cancel</button>
+                }
+
+                @if (_result is { } result)
+                {
+                    <div class="alert alert-success py-2 mb-0">
+                        Imported @Count(result.Tabs, "tab"), @Count(result.Widgets, "card")
+                        and @Count(result.Connections, "connection").
+                        @if (result.FirstSlug is { } slug)
+                        {
+                            <a href="@($"t/{slug}")">Open it</a>
+                            <text>.</text>
+                        }
+                        @if (result.Notes.Count > 0)
+                        {
+                            <ul class="mb-0 mt-2 small">
+                                @foreach (var note in result.Notes)
+                                {
+                                    <li>@note</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const long MaxBytes = 8 * 1024 * 1024;
+
+    private string _format = "";
+    private string _fileName = "";
+    private ImportPlan? _plan;
+    private DashboardImportService.Result? _result;
+    private string? _error;
+    private bool _working;
+
+    private static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? "" : "s")}";
+
+    private string Describe(ImportedWidget widget) =>
+        widget.Title is { Length: > 0 } title ? title : widget.Type;
+
+    private async Task OnFileAsync(InputFileChangeEventArgs args)
+    {
+        Reset();
+        var file = args.File;
+        if (file is null)
+            return;
+
+        if (file.Size > MaxBytes)
+        {
+            _error = $"That file is {file.Size / 1024 / 1024} MB. The limit is {MaxBytes / 1024 / 1024} MB.";
+            return;
+        }
+
+        try
+        {
+            using var memory = new MemoryStream();
+            await file.OpenReadStream(MaxBytes).CopyToAsync(memory);
+            _fileName = file.Name;
+
+            // Parsing is CPU work on a potentially large file; keeping it off the circuit's
+            // thread stops one import freezing every other open page.
+            var source = new ImportSource(file.Name, memory.ToArray());
+            var format = _format.Length > 0 ? _format : null;
+            _plan = await Task.Run(() => Importers.Preview(source, format));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (_plan is null)
+            return;
+        _working = true;
+        try
+        {
+            _result = await Importers.ApplyAsync(_plan);
+            _plan = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _working = false;
+        }
+    }
+
+    private void Reset()
+    {
+        _plan = null;
+        _result = null;
+        _error = null;
+    }
+}

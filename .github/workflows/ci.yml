@@ -1,0 +1,24 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - run: dotnet restore
+
+      # Warnings are kept at zero, so a new one should fail the build rather than pile up.
+      - run: dotnet build --no-restore --configuration Release -warnaserror
+
+      - run: dotnet test --no-build --configuration Release --verbosity normal

@@ -1,0 +1,12 @@
+@inject Markdown Markdown
+
+<div class="markdown-body">@((MarkupString)_html)</div>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private string _html = "";
+
+    protected override void OnParametersSet() =>
+        _html = Markdown.ToHtml(Context.Widget.Settings.Get("content"));
+}

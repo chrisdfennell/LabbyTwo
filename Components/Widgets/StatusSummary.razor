@@ -1,0 +1,62 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject ConfigStore Config
+
+<div class="d-flex align-items-baseline gap-3">
+    <div>
+        <div class="metric-value" style="color:var(--up)">@_up</div>
+        <div class="tile-meta">up</div>
+    </div>
+    <div>
+        <div class="metric-value" style="color:@(_down > 0 ? "var(--down)" : "var(--muted)")">@_down</div>
+        <div class="tile-meta">down</div>
+    </div>
+    @if (_pending > 0)
+    {
+        <div>
+            <div class="metric-value" style="color:var(--muted)">@_pending</div>
+            <div class="tile-meta">checking</div>
+        </div>
+    }
+</div>
+
+@if (_downNames.Count > 0)
+{
+    <div class="tile-meta mt-2 text-truncate" title="@string.Join(", ", _downNames)">
+        @string.Join(", ", _downNames)
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private int _up, _down, _pending;
+    private List<string> _downNames = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        // Alert channels and disabled connections aren't services, so counting them here
+        // would report a webhook URL as something that is "up".
+        var connections = (await Config.ConnectionsAsync()).Where(Health.IsMonitored).ToList();
+        var states = connections.ToDictionary(c => c, c => Health.State(c.Id));
+        _up = states.Count(s => s.Value?.IsUp == true);
+        _down = states.Count(s => s.Value?.IsUp == false);
+        // Anything never probed shows as "checking" rather than being counted as healthy.
+        _pending = states.Count(s => s.Value?.IsUp is null);
+        _downNames = [.. states.Where(s => s.Value?.IsUp == false).Select(s => s.Key.Name)];
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

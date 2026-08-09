@@ -1,0 +1,66 @@
+@* A repeating name/URL/icon editor stored as a JSON array in one settings key. Used by
+   the bookmarks widget and anything else that needs a list rather than a scalar. *@
+
+<div class="link-list">
+    @for (var i = 0; i < _rows.Count; i++)
+    {
+        var index = i;
+        var row = _rows[index];
+        <div class="d-flex gap-2 mb-2 align-items-center">
+            <input class="form-control icon-input text-center" maxlength="4" placeholder="🔗"
+                   value="@row.Icon" @onchange="e => Update(index, row with { Icon = Text(e.Value) })" />
+            <input class="form-control" placeholder="Name" style="max-width: 12rem"
+                   value="@row.Name" @onchange="e => Update(index, row with { Name = Text(e.Value) })" />
+            <input class="form-control" placeholder="https://…"
+                   value="@row.Url" @onchange="e => Update(index, row with { Url = Text(e.Value) })" />
+            <button type="button" class="btn btn-sm btn-outline-danger" title="Remove"
+                    @onclick="() => Remove(index)">✕</button>
+        </div>
+    }
+</div>
+<button type="button" class="btn btn-sm btn-outline-secondary" @onclick="Add">+ Add link</button>
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private static string Text(object? value) => value?.ToString() ?? string.Empty;
+
+    private List<LinkRow> _rows = [];
+    private string? _lastValue;
+
+    protected override void OnParametersSet()
+    {
+        // Only re-read the JSON when the parent hands us something new; otherwise typing
+        // in a row would be overwritten by the round trip it just caused.
+        if (Value == _lastValue)
+            return;
+        _lastValue = Value;
+        _rows = LinkRow.Parse(Value);
+    }
+
+    private async Task Push()
+    {
+        _lastValue = LinkRow.Serialize(_rows);
+        await ValueChanged.InvokeAsync(_lastValue);
+    }
+
+    private async Task Add()
+    {
+        // Blank icon so the card falls back to the site's own favicon.
+        _rows.Add(new LinkRow("", "", ""));
+        await Push();
+    }
+
+    private async Task Update(int index, LinkRow row)
+    {
+        _rows[index] = row;
+        await Push();
+    }
+
+    private async Task Remove(int index)
+    {
+        _rows.RemoveAt(index);
+        await Push();
+    }
+}

@@ -1,0 +1,337 @@
+@page "/settings"
+@rendermode InteractiveServer
+@inject ConfigStore Config
+@inject Registry Registry
+@inject HealthMonitor Health
+@inject AlertService Alerts
+@inject ConfigTransfer Transfer
+@inject Db Database
+@inject AppSettingsStore AppSettings
+@inject NavigationManager Nav
+@inject ModuleCatalog Catalog
+@inject DashboardImportService Imports
+@inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
+@using System.Reflection
+
+<PageTitle>Settings · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>⚙️ Settings</h1>
+        <p class="subtitle">Everything else lives in the database — this is the app itself.</p>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">This install</h2></div>
+            <div class="widget-body">
+                <dl class="row mb-0 small">
+                    <dt class="col-6 tile-meta">Version</dt><dd class="col-6">@Version</dd>
+                    <dt class="col-6 tile-meta">Probe interval</dt><dd class="col-6">@Options.Value.ProbeSeconds s</dd>
+                    <dt class="col-6 tile-meta">Failures before down</dt><dd class="col-6">@Options.Value.FailuresBeforeDown</dd>
+                    <dt class="col-6 tile-meta">History retention</dt><dd class="col-6">@Options.Value.RetentionDays days</dd>
+                    <dt class="col-6 tile-meta">Login</dt>
+                    <dd class="col-6">@(Options.Value.Auth.Enabled ? $"on ({Options.Value.Auth.Username})" : "off — open on this network")</dd>
+                    <dt class="col-6 tile-meta">Database</dt><dd class="col-6">@Size</dd>
+                    <dt class="col-6 tile-meta">Contents</dt>
+                    <dd class="col-6">@_connectionCount connections · @_tabCount tabs · @_widgetCount widgets</dd>
+                    <dt class="col-6 tile-meta">Alert channels</dt>
+                    <dd class="col-6">
+                        @if (_channelCount == 0)
+                        {
+                            <a href="settings/connections">none configured</a>
+                        }
+                        else
+                        {
+                            @($"{_channelCount} configured")
+                        }
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Backup</h2></div>
+            <div class="widget-body">
+                <p class="tile-meta">
+                    The database holds every connection, tab, widget, note and metric. Download a
+                    consistent copy without stopping the app.
+                </p>
+                <a class="btn btn-sm btn-outline-secondary" href="api/backup">Download database</a>
+
+                <hr class="my-3" />
+
+                <p class="tile-meta">
+                    Or export just the configuration as JSON — useful for moving to another machine,
+                    keeping a copy in version control, or sharing a dashboard with somebody else.
+                </p>
+                <div class="d-flex gap-2 flex-wrap">
+                    <a class="btn btn-sm btn-outline-secondary" href="api/export">Export (no secrets)</a>
+                    <a class="btn btn-sm btn-outline-danger" href="api/export?secrets=true">Export with secrets</a>
+                </div>
+                <div class="form-text">
+                    “With secrets” writes every stored password and API key into the file in plain text.
+                    Only use it for a backup you keep somewhere safe.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head"><h2 class="widget-title">Public status page</h2></div>
+            <div class="widget-body">
+                <p class="tile-meta">
+                    A read-only page anyone with the link can open without signing in — names,
+                    uptime percentages and the daily bars. Deliberately not the probe messages,
+                    which carry internal hostnames and API errors.
+                </p>
+
+                @if (_statusToken is { Length: > 0 })
+                {
+                    <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
+                        <input class="form-control font-monospace" readonly value="@StatusUrl" style="max-width: 34rem" />
+                        <a class="btn btn-sm btn-outline-secondary" href="@StatusUrl" target="_blank" rel="noreferrer">Open</a>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="RotateStatusTokenAsync">
+                            Rotate link
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="DisableStatusPageAsync">
+                            Turn off
+                        </button>
+                    </div>
+                    <div class="form-text">
+                        Anyone with the link can read it — that is the point, so treat it as public.
+                        Rotating breaks the old link immediately.
+                    </div>
+                }
+                else
+                {
+                    <button class="btn btn-sm btn-primary" @onclick="RotateStatusTokenAsync">
+                        Create a share link
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head">
+                <h2 class="widget-title">Import configuration</h2>
+                <a class="btn btn-sm btn-outline-secondary" href="settings/import">
+                    Coming from Homer, Homepage or Heimdall?
+                </a>
+            </div>
+            <div class="widget-body">
+                <p class="tile-meta">
+                    Paste an export below. Anything with a matching id is overwritten; everything else
+                    is left alone, so this adds a dashboard rather than replacing your setup.
+                </p>
+                <textarea class="form-control font-monospace mb-2" rows="6" placeholder='{ "version": 1, … }'
+                          @bind="_importJson" @bind:event="oninput"></textarea>
+                <button class="btn btn-sm btn-primary" @onclick="ImportAsync"
+                        disabled="@(_importing || string.IsNullOrWhiteSpace(_importJson))">
+                    @(_importing ? "Importing…" : "Import")
+                </button>
+
+                @if (_importError is { Length: > 0 })
+                {
+                    <div class="alert alert-danger py-2 mt-3 mb-0">@_importError</div>
+                }
+                @if (_importResult is { } result)
+                {
+                    <div class="alert alert-success py-2 mt-3 mb-0">
+                        Imported @result.Connections connections, @result.Tabs tabs, @result.Widgets widgets and @result.Rules alert rules.
+                        @if (result.Warnings.Count > 0)
+                        {
+                            <ul class="mb-0 mt-2 small">
+                                @foreach (var warning in result.Warnings)
+                                {
+                                    <li>@warning</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head"><h2 class="widget-title">Installed extensions</h2></div>
+            <div class="widget-body">
+                <p class="tile-meta">
+                    What this build can talk to and display. Everything here was found by scanning for
+                    classes, not from a list — adding to it is one file.
+                </p>
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <div class="tile-meta mb-1">Providers (@Registry.Providers.Count)</div>
+                        <ul class="small mb-0 ps-3">
+                            @foreach (var provider in Registry.Providers)
+                            {
+                                <li>@provider.Icon @provider.DisplayName <span class="tile-meta">— @provider.Category</span></li>
+                            }
+                        </ul>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="tile-meta mb-1">Widgets (@Registry.Widgets.Count)</div>
+                        <ul class="small mb-0 ps-3">
+                            @foreach (var widget in Registry.Widgets)
+                            {
+                                <li>@widget.Icon @widget.DisplayName</li>
+                            }
+                        </ul>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="tile-meta mb-1">Tab kinds (@Registry.TabKinds.Count)</div>
+                        <ul class="small mb-0 ps-3">
+                            @foreach (var kind in Registry.TabKinds)
+                            {
+                                <li>@kind.Icon @kind.DisplayName</li>
+                            }
+                        </ul>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="tile-meta mb-1">Importers (@Imports.Importers.Count)</div>
+                        <ul class="small mb-0 ps-3">
+                            @foreach (var importer in Imports.Importers)
+                            {
+                                <li>@importer.Icon @importer.DisplayName</li>
+                            }
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head"><h2 class="widget-title">Plugins</h2></div>
+            <div class="widget-body">
+                <p class="tile-meta">
+                    Any .NET assembly in this folder is scanned at startup and anything it declares —
+                    providers, widgets, tab kinds, importers — joins the lists above. Restart to pick up
+                    a change.
+                </p>
+                <p class="font-monospace small mb-3">@Catalog.PluginDirectory</p>
+
+                @if (!Catalog.Plugins.Any() && Catalog.Failures.Count == 0)
+                {
+                    <p class="tile-meta mb-0">No plugins installed.</p>
+                }
+
+                @foreach (var plugin in Catalog.Plugins)
+                {
+                    <div class="panel p-2 mb-2">
+                        <div class="d-flex gap-2 align-items-baseline flex-wrap">
+                            <strong>@plugin.Name</strong>
+                            <span class="tile-meta">@plugin.Version</span>
+                            <span class="tile-meta">· @plugin.TypeCount extension(s)</span>
+                        </div>
+                        <div class="tile-meta font-monospace" style="word-break: break-all">@plugin.Path</div>
+                    </div>
+                }
+
+                @foreach (var failure in Catalog.Failures)
+                {
+                    <div class="alert alert-warning py-2 mb-2">
+                        <div class="font-monospace small" style="word-break: break-all">@failure.Path</div>
+                        @failure.Reason
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private int _connectionCount, _tabCount, _widgetCount, _channelCount;
+    private string _statusToken = "";
+
+    private string StatusUrl => $"{Nav.BaseUri.TrimEnd('/')}/status/{_statusToken}";
+    private string _importJson = "";
+    private bool _importing;
+    private string? _importError;
+    private ConfigTransfer.ImportResult? _importResult;
+
+    private static string Version =>
+        typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            is { Length: > 0 } informational
+            ? informational.Split('+')[0]   // strip the source-revision suffix the SDK appends
+            : "dev";
+
+    private string Size
+    {
+        get
+        {
+            double bytes = Database.SizeBytes;
+            string[] units = ["B", "KB", "MB", "GB"];
+            var unit = 0;
+            while (bytes >= 1024 && unit < units.Length - 1)
+            {
+                bytes /= 1024;
+                unit++;
+            }
+            return $"{bytes:0.#} {units[unit]}";
+        }
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _connectionCount = (await Config.ConnectionsAsync()).Count;
+        _tabCount = (await Config.TabsAsync()).Count;
+        _widgetCount = (await Config.WidgetsAsync()).Count;
+        _channelCount = (await Alerts.ChannelsAsync()).Count;
+        _statusToken = await AppSettings.GetAsync(PublicStatus.PublicStatusToken);
+    }
+
+    /// <summary>
+    /// A fresh random token. Url-safe base64 of 24 bytes — long enough that guessing it
+    /// is not a strategy, short enough to paste into a chat.
+    /// </summary>
+    private async Task RotateStatusTokenAsync()
+    {
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(24);
+        var token = Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+        await AppSettings.SaveAsync(PublicStatus.PublicStatusToken, token);
+        await LoadAsync();
+    }
+
+    private async Task DisableStatusPageAsync()
+    {
+        await AppSettings.SaveAsync(PublicStatus.PublicStatusToken, "");
+        await LoadAsync();
+    }
+
+    private async Task ImportAsync()
+    {
+        _importing = true;
+        _importError = null;
+        _importResult = null;
+        try
+        {
+            _importResult = await Transfer.ImportAsync(_importJson);
+            _importJson = "";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _importError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _importing = false;
+        }
+    }
+}

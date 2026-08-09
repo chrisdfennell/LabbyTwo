@@ -1,0 +1,16 @@
+@if (string.IsNullOrWhiteSpace(Url))
+{
+    <p class="tile-meta mb-0">No URL configured.</p>
+}
+else
+{
+    <iframe class="embed-frame" src="@Url" style="height:@(Height)px" title="@Context.Widget.Title"
+            loading="lazy" referrerpolicy="no-referrer"></iframe>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private string Url => Context.Widget.Settings.Get("url");
+    private int Height => Math.Clamp(Context.Widget.Settings.GetInt("height", 320), 80, 2000);
+}

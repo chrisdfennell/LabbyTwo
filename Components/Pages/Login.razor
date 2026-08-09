@@ -1,0 +1,102 @@
+@page "/login"
+@layout BareLayout
+@attribute [AllowAnonymous]
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using Microsoft.AspNetCore.Mvc
+@using System.Security.Claims
+@using Microsoft.Extensions.Options
+@inject IOptions<LabbyOptions> Options
+@inject NavigationManager Nav
+
+<PageTitle>Sign in · LabbyTwo</PageTitle>
+
+<div class="login-wrap">
+    <form method="post" @formname="login" @onsubmit="SignInAsync" class="panel p-4" style="width: min(24rem, 100%)">
+        <AntiforgeryToken />
+        <h1 class="h5 mb-3">◆ LabbyTwo</h1>
+
+        @if (_error is { Length: > 0 })
+        {
+            <div class="alert alert-danger py-2">@_error</div>
+        }
+
+        <div class="mb-3">
+            <label class="form-label" for="username">Username</label>
+            <input id="username" name="Model.Username" class="form-control" autocomplete="username" value="@Model?.Username" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="password">Password</label>
+            <input id="password" name="Model.Password" type="password" class="form-control"
+                   autocomplete="current-password" />
+        </div>
+        <button class="btn btn-primary w-100" type="submit">Sign in</button>
+    </form>
+</div>
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    // No initializer: a form post overwrites this property, and an initializer here would
+    // fight the binder (BL0008). OnInitialized fills it in for the first GET.
+    [SupplyParameterFromForm] private Credentials? Model { get; set; }
+
+    [SupplyParameterFromQuery] private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    public sealed class Credentials
+    {
+        public string Username { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+
+    protected override void OnInitialized() => Model ??= new Credentials();
+
+    private async Task SignInAsync()
+    {
+        var auth = Options.Value.Auth;
+        var model = Model ?? new Credentials();
+
+        // A static-rendered form post is the only way to write an auth cookie — an
+        // interactive circuit has already sent its headers.
+        if (HttpContext is null)
+        {
+            _error = "Sign-in must be submitted as a form post.";
+            return;
+        }
+
+        if (!string.Equals(model.Username, auth.Username, StringComparison.OrdinalIgnoreCase) ||
+            !CryptographicEquals(model.Password, auth.Password))
+        {
+            _error = "Wrong username or password.";
+            return;
+        }
+
+        var identity = new ClaimsIdentity(
+            [new Claim(ClaimTypes.Name, auth.Username)],
+            CookieAuthenticationDefaults.AuthenticationScheme);
+        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(identity), new AuthenticationProperties { IsPersistent = true });
+
+        Nav.NavigateTo(IsSafeReturnPath(ReturnUrl) ? ReturnUrl! : "", forceLoad: true);
+    }
+
+    /// <summary>
+    /// Guards against being bounced off-site after signing in. Rejecting only "//" is not
+    /// enough — a browser reads "/\evil.com" as protocol-relative too. RedirectToLogin
+    /// always produces a base-relative path with no leading separator, so anything that
+    /// starts with one did not come from us and is refused outright.
+    /// </summary>
+    private static bool IsSafeReturnPath(string? path) =>
+        path is { Length: > 0 }
+        && path[0] is not ('/' or '\\')
+        && !path.Contains('\\')
+        && !path.Contains(':')
+        && Uri.IsWellFormedUriString(path, UriKind.Relative);
+
+    private static bool CryptographicEquals(string presented, string expected) =>
+        System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(presented)),
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(expected)));
+}

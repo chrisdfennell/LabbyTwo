@@ -1,0 +1,95 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject NavigationManager Nav
+@inject AppSettingsStore AppSettings
+
+<nav class="app-nav">
+    <a class="nav-brand" href="/">
+        <span class="nav-brand-mark">◆</span>
+        <span class="nav-brand-text">@_brand</span>
+    </a>
+
+    @if (_downCount > 0)
+    {
+        <a class="nav-alert" href="/settings/connections">
+            @_downCount @(_downCount == 1 ? "service is" : "services are") down
+        </a>
+    }
+
+    <div class="nav-links">
+        @foreach (var tab in _tabs)
+        {
+            <NavLink class="nav-item-link" href="@($"t/{tab.Slug}")">
+                <span class="nav-icon">@(string.IsNullOrWhiteSpace(tab.Icon) ? "▪" : tab.Icon)</span>
+                <span class="nav-text">@tab.Name</span>
+            </NavLink>
+        }
+
+        @if (_tabs.Count == 0)
+        {
+            <p class="nav-empty">No tabs yet.</p>
+        }
+    </div>
+
+    <div class="nav-footer">
+        <NavLink class="nav-item-link" href="settings/tabs">
+            <span class="nav-icon">🗂️</span><span class="nav-text">Tabs</span>
+        </NavLink>
+        <NavLink class="nav-item-link" href="settings/connections">
+            <span class="nav-icon">🔌</span><span class="nav-text">Connections</span>
+        </NavLink>
+        <NavLink class="nav-item-link" href="settings/alerts">
+            <span class="nav-icon">🚨</span><span class="nav-text">Alerts</span>
+        </NavLink>
+        <NavLink class="nav-item-link" href="settings/appearance">
+            <span class="nav-icon">🎨</span><span class="nav-text">Appearance</span>
+        </NavLink>
+        <NavLink class="nav-item-link" href="settings" Match="NavLinkMatch.All">
+            <span class="nav-icon">⚙️</span><span class="nav-text">Settings</span>
+        </NavLink>
+    </div>
+</nav>
+
+@code {
+    private IReadOnlyList<Tab> _tabs = [];
+    private int _downCount;
+    private string _brand = Appearance.Default.BrandName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Config.Changed += OnChanged;
+        Health.Updated += OnHealthUpdated;
+        AppSettings.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _tabs = [.. (await Config.TabsAsync()).Where(t => t.Enabled)];
+        _downCount = Health.Snapshot.Count(s => s.IsUp == false);
+        _brand = (await AppSettings.AllAsync()).Get(Appearance.BrandKey, Appearance.Default.BrandName);
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private void OnHealthUpdated() => _ = InvokeAsync(() =>
+    {
+        var count = Health.Snapshot.Count(s => s.IsUp == false);
+        if (count == _downCount)
+            return;
+        _downCount = count;
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        Health.Updated -= OnHealthUpdated;
+        AppSettings.Changed -= OnChanged;
+    }
+}

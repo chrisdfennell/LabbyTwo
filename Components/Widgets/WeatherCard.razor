@@ -1,0 +1,103 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a weather station.</p>
+}
+else if (_metrics is null || _metrics.Count == 0)
+{
+    <p class="tile-meta mb-0">Waiting for the first reading…</p>
+}
+else
+{
+    <div class="d-flex align-items-baseline gap-2">
+        <div class="metric-value">@Temp("temp_outdoor_c")</div>
+        @if (_metrics.TryGetValue("feels_like_c", out var feels))
+        {
+            <div class="tile-meta">feels @(FormatTemp(feels))</div>
+        }
+    </div>
+
+    <div class="row g-2 mt-1">
+        @foreach (var (label, text) in Rows())
+        {
+            <div class="col-6">
+                <div class="tile-meta">@label</div>
+                <div>@text</div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyDictionary<string, double>? _metrics;
+
+    private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    /// <summary>
+    /// Live probe first, last recorded readings second — the same fallback the other
+    /// weather cards use, so none of them sits blank for a probe interval after a restart.
+    /// </summary>
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+        {
+            _metrics = null;
+            return;
+        }
+
+        var live = Health.State(Context.Connection.Id)?.Metrics;
+        _metrics = live is { Count: > 0 }
+            ? live
+            : await History.LatestAsync(Context.Connection.Id, TimeSpan.FromHours(6));
+    }
+
+    private string Temp(string key) => _metrics!.TryGetValue(key, out var c) ? FormatTemp(c) : "—";
+
+    private string FormatTemp(double celsius) =>
+        Metric ? $"{celsius:0.0}°C" : $"{AmbientWeatherProvider.CToF(celsius):0.0}°F";
+
+    private IEnumerable<(string Label, string Value)> Rows()
+    {
+        if (_metrics!.TryGetValue("humidity", out var humidity))
+            yield return ("Humidity", $"{humidity:0}%");
+
+        if (_metrics.TryGetValue("wind_mph", out var wind))
+        {
+            var gust = _metrics.TryGetValue("gust_mph", out var g) ? g : (double?)null;
+            var speed = Metric ? $"{wind * 1.60934:0} km/h" : $"{wind:0} mph";
+            var gustText = gust is { } value
+                ? Metric ? $" (gust {value * 1.60934:0})" : $" (gust {value:0})"
+                : "";
+            yield return ("Wind", speed + gustText);
+        }
+
+        if (_metrics.TryGetValue("pressure_inhg", out var pressure))
+            yield return ("Pressure", Metric ? $"{pressure * 33.8639:0} hPa" : $"{pressure:0.00} inHg");
+
+        if (_metrics.TryGetValue("rain_in", out var rain))
+            yield return ("Rain today", Metric ? $"{rain * 25.4:0.0} mm" : $"{rain:0.00} in");
+
+        if (_metrics.TryGetValue("temp_indoor_c", out var indoor))
+            yield return ("Indoor", FormatTemp(indoor));
+
+        if (_metrics.TryGetValue("uv_index", out var uv))
+            yield return ("UV index", $"{uv:0}");
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

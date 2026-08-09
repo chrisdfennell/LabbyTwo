@@ -1,0 +1,129 @@
+@inject Registry Registry
+@inject ConfigStore Config
+@inject HistoryStore History
+
+<Modal Title="@($"Edit {_type?.DisplayName ?? "widget"}")" OnClose="OnClose">
+    <ChildContent>
+    <div class="mb-3">
+        <label class="form-label" for="widget-title">Title</label>
+        <input id="widget-title" class="form-control" @bind="_title" @bind:event="oninput"
+               placeholder="Leave blank to hide the header" />
+    </div>
+
+    @if (_type?.NeedsConnection == true)
+    {
+        <div class="mb-3">
+            <label class="form-label" for="widget-connection">Connection</label>
+            <select id="widget-connection" class="form-select" @bind="_connectionId" @bind:after="LoadMetricsAsync">
+                <option value="">— choose —</option>
+                @foreach (var connection in _candidates)
+                {
+                    <option value="@connection.Id">@connection.Name (@ProviderName(connection))</option>
+                }
+            </select>
+            @if (_candidates.Count == 0)
+            {
+                <div class="form-text text-warning">
+                    No compatible connection exists yet. <a href="settings/connections">Add one</a> first.
+                </div>
+            }
+        </div>
+    }
+
+    <div class="mb-3">
+        <label class="form-label" for="widget-width">Width</label>
+        <select id="widget-width" class="form-select" @bind="_width">
+            <option value="2">Tiny (1/6)</option>
+            <option value="3">Small (1/4)</option>
+            <option value="4">Medium (1/3)</option>
+            <option value="6">Half</option>
+            <option value="8">Two thirds</option>
+            <option value="12">Full width</option>
+        </select>
+    </div>
+
+    @if (_type is not null)
+    {
+        <SettingsForm Fields="_type.Fields" Values="_settings" DynamicOptions="Suggestions"
+                      EmptyMessage="This widget has nothing to configure." />
+    }
+    </ChildContent>
+
+    <Footer>
+        <button class="btn btn-secondary btn-sm" @onclick="() => OnClose.InvokeAsync()">Cancel</button>
+        <button class="btn btn-primary btn-sm" @onclick="SaveAsync">Save</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter, EditorRequired] public Widget Widget { get; set; } = default!;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private IWidgetType? _type;
+    private List<Connection> _candidates = [];
+    private IReadOnlyList<SelectOption> _metricOptions = [];
+
+    private string _title = "";
+    private string _connectionId = "";
+    private int _width = 4;
+    private SettingsBag _settings = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _type = Registry.WidgetType(Widget.Type);
+        _title = Widget.Title;
+        _connectionId = Widget.ConnectionId ?? "";
+        _width = Widget.Width;
+        // Edit a copy so cancelling actually cancels.
+        _settings = Widget.Settings.Clone();
+
+        var connections = await Config.ConnectionsAsync();
+        _candidates = _type is null ? [] : [.. connections.Where(c => Registry.Accepts(_type, c.Provider))];
+        await LoadMetricsAsync();
+    }
+
+    /// <summary>
+    /// What to offer for a metric field: everything the provider declares, plus anything
+    /// history has actually recorded that it did not. The union matters — a declared
+    /// metric is offered before the first probe lands, and an undeclared one a provider
+    /// really reports is offered once it has.
+    /// </summary>
+    private async Task LoadMetricsAsync()
+    {
+        if (_type?.Fields.All(f => f.Kind != FieldKind.Metric) != false || _connectionId.Length == 0)
+        {
+            _metricOptions = [];
+            return;
+        }
+
+        var connection = await Config.ConnectionAsync(_connectionId);
+        var declared = Registry.MetricsFor(connection);
+        var recorded = await History.MetricsAsync(_connectionId);
+
+        var options = declared.Select(m => new SelectOption(m.Key, m.Label)).ToList();
+        var known = declared.Select(m => m.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        options.AddRange(recorded
+            .Where(key => !known.Contains(key))
+            .Select(key => new SelectOption(key, MetricSpec.Fallback(key).Label + " (recorded)")));
+
+        _metricOptions = options;
+    }
+
+    private IReadOnlyList<SelectOption> Suggestions(FieldSpec field) =>
+        field.Kind == FieldKind.Metric ? _metricOptions : field.Options ?? [];
+
+    private string ProviderName(Connection connection) =>
+        Registry.Provider(connection.Provider)?.DisplayName ?? connection.Provider;
+
+    private async Task SaveAsync()
+    {
+        await Config.SaveWidgetAsync(Widget with
+        {
+            Title = _title,
+            ConnectionId = _connectionId.Length > 0 ? _connectionId : null,
+            Width = _width,
+            Settings = _settings,
+        });
+        await OnClose.InvokeAsync();
+    }
+}

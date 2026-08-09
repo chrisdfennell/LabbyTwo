@@ -1,0 +1,54 @@
+@inject Registry Registry
+@inject ConfigStore Config
+
+<Modal Title="Add a widget" Size="xl" OnClose="OnClose">
+    <div class="card-picker">
+        @foreach (var type in Registry.Widgets)
+        {
+            var usable = !type.NeedsConnection || CompatibleCount(type) > 0;
+            <button type="button" disabled="@(!usable)" @onclick="() => AddAsync(type)">
+                <span class="picker-title">@type.Icon @type.DisplayName</span>
+                <span class="picker-desc">@type.Description</span>
+                @if (!usable)
+                {
+                    <span class="picker-desc text-warning">
+                        Needs a @string.Join(" or ", type.ProviderTypes) connection first.
+                    </span>
+                }
+            </button>
+        }
+    </div>
+</Modal>
+
+@code {
+    [Parameter, EditorRequired] public string TabId { get; set; } = "";
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<Widget> OnPicked { get; set; }
+
+    private IReadOnlyList<Connection> _connections = [];
+
+    protected override async Task OnInitializedAsync() => _connections = await Config.ConnectionsAsync();
+
+    private int CompatibleCount(IWidgetType type) =>
+        _connections.Count(c => Registry.Accepts(type, c.Provider));
+
+    private async Task AddAsync(IWidgetType type)
+    {
+        // Bind straight to the only candidate when there is exactly one — the editor still
+        // opens, so the choice stays visible and changeable.
+        var candidates = _connections.Where(c => Registry.Accepts(type, c.Provider)).ToList();
+        var widget = new Widget
+        {
+            TabId = TabId,
+            Type = type.Type,
+            // No title by default — most widgets already say what they are (a tile shows
+            // the service name), and a redundant header just costs a row of height.
+            Title = "",
+            Width = type.DefaultWidth,
+            Sort = await Config.NextWidgetSortAsync(TabId),
+            ConnectionId = type.NeedsConnection && candidates.Count == 1 ? candidates[0].Id : null,
+        };
+        await Config.SaveWidgetAsync(widget);
+        await OnPicked.InvokeAsync(widget);
+    }
+}

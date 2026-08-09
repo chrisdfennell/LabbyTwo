@@ -1,0 +1,40 @@
+@* Bootstrap markup without Bootstrap's JS — Blazor already owns whether the dialog is
+   in the DOM, so the two never disagree about whether it is open. *@
+
+<div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true">
+    <div class="modal-dialog @SizeClass modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">@Title</h5>
+                <button type="button" class="btn-close btn-close-white" aria-label="Close"
+                        @onclick="() => OnClose.InvokeAsync()"></button>
+            </div>
+            <div class="modal-body">
+                @ChildContent
+            </div>
+            @if (Footer is not null)
+            {
+                <div class="modal-footer">
+                    @Footer
+                </div>
+            }
+        </div>
+    </div>
+</div>
+<div class="modal-backdrop fade show" @onclick="() => OnClose.InvokeAsync()"></div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string Size { get; set; } = "lg";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string SizeClass => Size switch
+    {
+        "sm" => "modal-sm",
+        "xl" => "modal-xl",
+        "lg" => "modal-lg",
+        _ => "",
+    };
+}

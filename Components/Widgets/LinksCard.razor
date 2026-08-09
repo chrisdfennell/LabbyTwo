@@ -1,0 +1,42 @@
+@if (_links.Count == 0)
+{
+    <p class="tile-meta mb-0">No links yet — edit this widget to add some.</p>
+}
+else
+{
+    <div class="d-flex flex-column gap-1">
+        @foreach (var link in _links.Where(l => !string.IsNullOrWhiteSpace(l.Url)))
+        {
+            <a class="tile-link link-row" href="@link.Url"
+               target="@(NewTab ? "_blank" : null)" rel="noreferrer">
+                @if (link.Icon is { Length: > 0 })
+                {
+                    <span class="flex-none">@link.Icon</span>
+                }
+                else if (ShowFavicons)
+                {
+                    @* A site with no icon 404s here, and the browser then shows the alt
+                       text — a link emoji — rather than a broken-image glyph. *@
+                    <img class="link-favicon" loading="lazy" alt="🔗"
+                         src="@($"api/favicon?url={Uri.EscapeDataString(link.Url)}")" />
+                }
+                else
+                {
+                    <span class="flex-none">🔗</span>
+                }
+                <span class="text-truncate">@(string.IsNullOrWhiteSpace(link.Name) ? link.Url : link.Name)</span>
+            </a>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private List<LinkRow> _links = [];
+    private bool NewTab => Context.Widget.Settings.GetBool("new_tab", true);
+    private bool ShowFavicons => Context.Widget.Settings.GetBool("favicons", true);
+
+    protected override void OnParametersSet() =>
+        _links = LinkRow.Parse(Context.Widget.Settings.Get("links"));
+}

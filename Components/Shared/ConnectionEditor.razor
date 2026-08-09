@@ -1,0 +1,160 @@
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject AlertService Alerts
+
+<Modal Title="@($"{Provider.Icon} {Provider.DisplayName}")" OnClose="OnClose">
+    <ChildContent>
+    <p class="tile-meta">@Provider.Description</p>
+
+    <div class="row g-3 mb-3">
+        <div class="col-8">
+            <label class="form-label" for="conn-name">Name</label>
+            <input id="conn-name" class="form-control" @bind="_name" @bind:event="oninput" />
+        </div>
+        <div class="col-4">
+            <label class="form-label" for="conn-icon">Icon</label>
+            <input id="conn-icon" class="form-control text-center" maxlength="4" @bind="_icon" @bind:event="oninput" />
+        </div>
+    </div>
+
+    <SettingsForm Fields="Provider.Fields" Values="_settings" Changed="() => _result = null" />
+
+    <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" role="switch" id="conn-enabled" @bind="_enabled" />
+        <label class="form-check-label" for="conn-enabled">
+            @(IsAlertChannel ? "Use this channel" : "Monitor this connection")
+            <span class="form-text d-block">
+                @(IsAlertChannel
+                    ? "Off keeps the settings but stops sending notifications here."
+                    : "Off keeps the settings but stops probing and hides it from status counts.")
+            </span>
+        </label>
+    </div>
+
+    @if (!IsAlertChannel)
+    {
+        <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="conn-alerts" @bind="_alerts" />
+            <label class="form-check-label" for="conn-alerts">
+                Send alerts when this goes down
+                <span class="form-text d-block">Off still records uptime — it just stops the notifications for this one thing.</span>
+            </label>
+        </div>
+    }
+
+    @if (_result is { } result)
+    {
+        <div class="alert @(result.Ok ? "alert-success" : "alert-danger") py-2 mb-0">
+            <strong>@(result.Ok ? "Connected" : "Failed")</strong> — @result.Message
+            <span class="d-block small">@($"{result.Duration.TotalMilliseconds:0} ms")</span>
+            @if (result.Metrics is { Count: > 0 })
+            {
+                <div class="small mt-1">
+                    Reporting: @string.Join(", ", result.Metrics.Keys.Where(k => k != "latency_ms"))
+                </div>
+            }
+        </div>
+    }
+    </ChildContent>
+
+    <Footer>
+        @if (IsAlertChannel)
+        {
+            @* Probing a webhook proves nothing, so the meaningful test is an actual message. *@
+            <button class="btn btn-outline-secondary btn-sm me-auto" @onclick="SendTestAsync" disabled="@_testing">
+                @(_testing ? "Sending…" : "Send test notification")
+            </button>
+        }
+        else
+        {
+            <button class="btn btn-outline-secondary btn-sm me-auto" @onclick="TestAsync" disabled="@_testing">
+                @(_testing ? "Testing…" : "Test connection")
+            </button>
+        }
+        <button class="btn btn-secondary btn-sm" @onclick="() => OnClose.InvokeAsync()">Cancel</button>
+        <button class="btn btn-primary btn-sm" @onclick="SaveAsync">Save</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter, EditorRequired] public Connection Draft { get; set; } = default!;
+    [Parameter, EditorRequired] public IConnectionProvider Provider { get; set; } = default!;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string _name = "";
+    private string _icon = "";
+    private bool _enabled = true;
+    private bool _alerts = true;
+    private SettingsBag _settings = new();
+    private ProbeResult? _result;
+    private bool _testing;
+
+    private bool IsAlertChannel => Provider is IAlertChannel;
+
+    protected override void OnInitialized()
+    {
+        _name = Draft.Name;
+        _icon = Draft.Icon;
+        _enabled = Draft.Enabled;
+        _alerts = Draft.AlertsEnabled;
+        _settings = Draft.Settings.Clone();
+    }
+
+    private Connection Current => Draft with
+    {
+        Name = _name,
+        Icon = _icon,
+        Enabled = _enabled,
+        AlertsEnabled = _alerts,
+        Settings = _settings,
+    };
+
+    private async Task SendTestAsync()
+    {
+        _testing = true;
+        _result = null;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await Alerts.SendTestAsync(Current, cts.Token);
+            _result = ProbeResult.Up(TimeSpan.Zero, "Test notification sent — check the channel.");
+        }
+        catch (Exception ex)
+        {
+            _result = ProbeResult.Down(TimeSpan.Zero, ex.GetBaseException().Message);
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private async Task TestAsync()
+    {
+        _testing = true;
+        _result = null;
+        try
+        {
+            // The unsaved draft is probed, so Test says something about what is on screen
+            // rather than about what was saved earlier.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            _result = await Health.ProbeAsync(Current, cts.Token);
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        var saved = Current;
+        await Config.SaveConnectionAsync(saved);
+        // Probe immediately so the tile is green before the user navigates away, rather
+        // than sitting on "checking…" until the next sweep. Alert channels are not probed
+        // at all — doing so would write a status event for something that is not a service.
+        if (Health.IsMonitored(saved))
+            _ = Health.RefreshAsync(saved);
+        await OnClose.InvokeAsync();
+    }
+}

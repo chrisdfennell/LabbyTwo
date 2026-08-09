@@ -1,0 +1,80 @@
+@implements IDisposable
+@inject MetricAlertService Evaluator
+@inject AlertRuleStore Rules
+@inject ConfigStore Config
+@inject Registry Registry
+
+@if (_firing.Count == 0)
+{
+    <div class="d-flex align-items-center gap-2">
+        <span class="status-dot status-up"></span>
+        <span class="tile-meta">@(_ruleCount == 0 ? "No alert rules set up." : "Everything within limits.")</span>
+    </div>
+}
+else
+{
+    <div class="d-flex flex-column gap-2">
+        @foreach (var row in _firing)
+        {
+            <div class="d-flex align-items-start gap-2">
+                <span class="status-dot status-down mt-1"></span>
+                <div class="min-w-0">
+                    <div class="tile-name text-truncate">@row.Title</div>
+                    <div class="tile-meta">@row.Detail</div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Row(string Title, string Detail);
+
+    private List<Row> _firing = [];
+    private int _ruleCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Evaluator.Updated += OnUpdated;
+        Rules.Changed += OnUpdated;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var rules = await Rules.AllAsync();
+        var connections = await Config.ConnectionsAsync();
+        _ruleCount = rules.Count(r => r.Enabled);
+
+        _firing = [.. Evaluator.Firing
+            .Select(breach =>
+            {
+                var rule = rules.FirstOrDefault(r => r.Id == breach.RuleId);
+                var connection = connections.FirstOrDefault(c => c.Id == breach.ConnectionId);
+                if (rule is null || connection is null)
+                    return null;
+
+                var spec = Registry.Metric(connection, rule.Metric);
+                return new Row(
+                    $"{connection.Name} · {spec.Label}",
+                    $"{spec.Format(breach.LastValue, 1)} — {rule.ComparisonWord} {spec.Format(rule.Threshold)}" +
+                    (breach.Since is { } since ? $", since {since:HH:mm}" : ""));
+            })
+            .OfType<Row>()
+            .OrderBy(r => r.Title)];
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Evaluator.Updated -= OnUpdated;
+        Rules.Changed -= OnUpdated;
+    }
+}

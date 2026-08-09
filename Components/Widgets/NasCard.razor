@@ -1,0 +1,127 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject QnapProvider Qnap
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a NAS.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_info is null)
+{
+    <p class="tile-meta mb-0">Loading…</p>
+}
+else
+{
+    <div class="d-flex flex-wrap gap-4 mb-3">
+        <div>
+            <div class="tile-meta">Model</div>
+            <div>@(_info.Model ?? "—")</div>
+        </div>
+        <div>
+            <div class="tile-meta">Firmware</div>
+            <div>@(_info.Firmware ?? "—")</div>
+        </div>
+        <div>
+            <div class="tile-meta">Uptime</div>
+            <div>@(_info.Uptime is { } up ? $"{(int)up.TotalDays}d {up.Hours}h" : "—")</div>
+        </div>
+        <div>
+            <div class="tile-meta">CPU</div>
+            <div>@(_info.CpuPercent is { } cpu ? $"{cpu:0}%" : "—")</div>
+        </div>
+        <div>
+            <div class="tile-meta">Memory</div>
+            <div>@MemoryText</div>
+        </div>
+        @if (_info.CpuTempC is { } temp)
+        {
+            <div>
+                <div class="tile-meta">CPU temp</div>
+                <div>@($"{temp:0}°C")</div>
+            </div>
+        }
+    </div>
+
+    @foreach (var volume in _volumes)
+    {
+        <div class="mb-2">
+            <div class="d-flex justify-content-between tile-meta">
+                <span class="text-truncate">@volume.Label</span>
+                <span>@Bytes(volume.UsedBytes) / @Bytes(volume.TotalBytes) · @($"{volume.UsedPercent:0}%")</span>
+            </div>
+            <div class="usage-bar @(volume.UsedPercent >= 90 ? "is-full" : volume.UsedPercent >= 75 ? "is-warn" : "")">
+                <span style="width:@volume.UsedPercent.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private QnapProvider.SystemInfo? _info;
+    private IReadOnlyList<QnapProvider.VolumeInfo> _volumes = [];
+    private string? _error;
+
+    private string MemoryText => _info is { TotalMemoryMb: > 0, FreeMemoryMb: not null }
+        ? $"{(_info.TotalMemoryMb.Value - _info.FreeMemoryMb.Value) / 1024:0.0} / {_info.TotalMemoryMb.Value / 1024:0.0} GB"
+        : "—";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        // The monitor already proved reachability; skip the calls when it says the NAS is
+        // down so a dead host doesn't stall the page for a timeout on every render.
+        if (Health.State(Context.Connection.Id) is { IsUp: false } state)
+        {
+            _error = state.Message;
+            return;
+        }
+
+        try
+        {
+            _info = await Qnap.SystemInfoAsync(Context.Connection, CancellationToken.None);
+            _volumes = await Qnap.VolumesAsync(Context.Connection, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private static string Bytes(long value)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB", "PB"];
+        double size = value;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+        return $"{size:0.#} {units[unit]}";
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

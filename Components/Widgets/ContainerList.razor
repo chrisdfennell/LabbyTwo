@@ -1,0 +1,85 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject DockerProvider Docker
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Docker host.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_containers.Count == 0)
+{
+    <p class="tile-meta mb-0">No containers.</p>
+}
+else
+{
+    <div class="container-list">
+        @foreach (var container in _shown)
+        {
+            <div class="d-flex align-items-center gap-2">
+                <span class="status-dot @(container.State == "running" ? "status-up" : "status-unknown")"></span>
+                <span class="text-truncate">@container.Name</span>
+                <span class="tile-meta ms-auto flex-none text-truncate" style="max-width:11rem"
+                      title="@container.Image">@container.Status</span>
+            </div>
+        }
+    </div>
+    @if (_containers.Count > _shown.Count)
+    {
+        <div class="tile-meta mt-2">+@(_containers.Count - _shown.Count) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<DockerProvider.ContainerInfo> _containers = [];
+    private IReadOnlyList<DockerProvider.ContainerInfo> _shown = [];
+    private string? _error;
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 10), 1, 100);
+    private bool RunningOnly => Context.Widget.Settings.GetBool("running_only");
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+        if (Health.State(Context.Connection.Id) is { IsUp: false } state)
+        {
+            _error = state.Message;
+            return;
+        }
+        try
+        {
+            var all = await Docker.ContainersAsync(Context.Connection, CancellationToken.None);
+            _containers = RunningOnly
+                ? [.. all.Where(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase))]
+                : all;
+            _shown = [.. _containers.Take(Limit)];
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

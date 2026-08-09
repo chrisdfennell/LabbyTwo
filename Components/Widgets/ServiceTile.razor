@@ -1,0 +1,116 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">This tile is not bound to a connection.</p>
+}
+else
+{
+    <a class="tile-link" href="@LinkUrl" target="_blank" rel="noreferrer">
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="status-dot @DotClass"></span>
+            <span class="tile-name text-truncate">
+                @(string.IsNullOrWhiteSpace(Context.Connection.Icon) ? "" : Context.Connection.Icon + " ")@Context.Connection.Name
+            </span>
+        </div>
+        <div class="tile-meta text-truncate" title="@(_state?.Message)">
+            @(_state is null ? "checking…" : _state.Message)
+        </div>
+    </a>
+
+    <div class="d-flex justify-content-between align-items-baseline mt-2">
+        <span class="tile-meta">
+            @if (_state?.Metrics.TryGetValue("latency_ms", out var latency) == true)
+            {
+                @($"{latency:0} ms")
+            }
+            else if (_state?.Metrics.TryGetValue("rtt_ms", out var rtt) == true)
+            {
+                @($"{rtt:0} ms")
+            }
+        </span>
+        @if (ShowUptime && _uptime is { Samples: >= 0 })
+        {
+            <span class="tile-meta" title="Uptime over the last 24 hours">@($"{_uptime.Percent:0.0}%")</span>
+        }
+    </div>
+
+    @if (ShowSparkline)
+    {
+        <div class="mt-1">
+            <Sparkline Values="_series" Color="@(_state?.IsUp == false ? "#ff5c6c" : "#4da3ff")"
+                       Label="@($"{Context.Connection.Name} response time")" />
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private HealthMonitor.ProbeState? _state;
+    private HistoryStore.Uptime? _uptime;
+    private IReadOnlyList<double> _series = [];
+
+    private bool ShowSparkline => Context.Widget.Settings.GetBool("show_sparkline", true);
+    private bool ShowUptime => Context.Widget.Settings.GetBool("show_uptime", true);
+
+    private string LinkUrl
+    {
+        get
+        {
+            var settings = Context.Connection!.Settings;
+            // "open_url" exists so the tile can point at a public hostname while the probe
+            // keeps hitting the LAN address.
+            var url = settings.Get("open_url", settings.Get("url"));
+            if (url.Length > 0)
+                return url;
+            var host = settings.Get("host");
+            return host.Length > 0 ? $"http://{host}" : "#";
+        }
+    }
+
+    private string DotClass => _state switch
+    {
+        // A failed probe that has not yet crossed FailuresBeforeDown is neither up nor
+        // down; showing it green next to the failure message looks like a broken tile.
+        { IsUp: true, ConsecutiveFailures: > 0 } => "status-flapping",
+        { IsUp: true } => "status-up",
+        { IsUp: false } => "status-down",
+        _ => "status-unknown",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+        _state = Health.State(Context.Connection.Id);
+
+        if (ShowSparkline)
+        {
+            var metric = _state?.Metrics.ContainsKey("rtt_ms") == true ? "rtt_ms" : "latency_ms";
+            var samples = await History.SamplesAsync(Context.Connection.Id, metric, TimeSpan.FromHours(1));
+            _series = [.. samples.Select(s => s.Value)];
+        }
+
+        if (ShowUptime)
+            _uptime = await History.UptimeAsync(Context.Connection.Id, TimeSpan.FromHours(24));
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

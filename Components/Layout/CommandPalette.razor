@@ -1,0 +1,170 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+@* Ctrl+K / Cmd+K from anywhere. The entries are built from the database, so a tab or a
+   connection added a minute ago is immediately reachable without a page reload. *@
+
+@if (_open)
+{
+    <div class="palette-backdrop" @onclick="Close"></div>
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+        <input class="palette-input" placeholder="Jump to a tab, a connection, a setting…"
+               autofocus
+               @ref="_input"
+               @bind="_query" @bind:event="oninput"
+               @onkeydown="OnKeyDownAsync" />
+
+        @if (_matches.Count == 0)
+        {
+            <div class="palette-empty">Nothing matches “@_query”.</div>
+        }
+        else
+        {
+            <div class="palette-results">
+                @for (var i = 0; i < _matches.Count; i++)
+                {
+                    var index = i;
+                    var entry = _matches[index];
+                    <button type="button" class="palette-item @(index == _selected ? "is-selected" : "")"
+                            @onclick="() => Go(entry)"
+                            @onmouseover="() => _selected = index">
+                        <span class="palette-icon">@entry.Icon</span>
+                        <span class="palette-label text-truncate">@entry.Label</span>
+                        <span class="palette-kind">@entry.Kind</span>
+                    </button>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private sealed record Entry(string Icon, string Label, string Kind, string Url);
+
+    private bool _open;
+    private string _query = "";
+    private int _selected;
+    private List<Entry> _all = [];
+    private ElementReference _input;
+
+    private List<Entry> _matches => Filter();
+
+    protected override void OnInitialized() => Config.Changed += OnChanged;
+
+    /// <summary>Called from JS when the shortcut fires.</summary>
+    [JSInvokable]
+    public async Task OpenAsync()
+    {
+        await BuildAsync();
+        _query = "";
+        _selected = 0;
+        _open = true;
+        StateHasChanged();
+        // The autofocus attribute only applies on first insert, so focus explicitly each time.
+        try
+        {
+            await _input.FocusAsync();
+        }
+        catch (Exception)
+        {
+            // The element may not be in the DOM yet on the very first open; the next
+            // render's autofocus covers it.
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        await JS.InvokeVoidAsync("labbyPalette.register", DotNetObjectReference.Create(this));
+    }
+
+    private async Task BuildAsync()
+    {
+        var entries = new List<Entry>();
+        foreach (var tab in (await Config.TabsAsync()).Where(t => t.Enabled))
+            entries.Add(new Entry(string.IsNullOrWhiteSpace(tab.Icon) ? "▪" : tab.Icon, tab.Name, "tab", $"t/{tab.Slug}"));
+
+        foreach (var connection in await Config.ConnectionsAsync())
+        {
+            // Connections open their own URL when they have one — jumping to a service is
+            // more often what you want than jumping to its settings row.
+            var target = connection.Settings.Get("open_url", connection.Settings.Get("url"));
+            entries.Add(new Entry(
+                string.IsNullOrWhiteSpace(connection.Icon) ? "🔌" : connection.Icon,
+                connection.Name,
+                target.Length > 0 ? "open" : "connection",
+                target.Length > 0 ? target : "settings/connections"));
+        }
+
+        entries.Add(new Entry("🗂️", "Tabs", "settings", "settings/tabs"));
+        entries.Add(new Entry("🔌", "Connections", "settings", "settings/connections"));
+        entries.Add(new Entry("🚨", "Alert rules", "settings", "settings/alerts"));
+        entries.Add(new Entry("🎨", "Appearance", "settings", "settings/appearance"));
+        entries.Add(new Entry("📥", "Import a dashboard", "settings", "settings/import"));
+        entries.Add(new Entry("⚙️", "Settings", "settings", "settings"));
+        _all = entries;
+    }
+
+    private List<Entry> Filter()
+    {
+        if (_query.Trim() is not { Length: > 0 } needle)
+            return [.. _all.Take(12)];
+
+        // Rank exact prefix matches above substring hits so typing "st" finds "Status"
+        // before "Plex — now playing".
+        return
+        [
+            .. _all
+                .Where(e => e.Label.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(e => e.Label.StartsWith(needle, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(e => e.Label)
+                .Take(12)
+        ];
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs args)
+    {
+        var matches = _matches;
+        switch (args.Key)
+        {
+            case "Escape":
+                Close();
+                break;
+            case "ArrowDown":
+                _selected = matches.Count == 0 ? 0 : (_selected + 1) % matches.Count;
+                break;
+            case "ArrowUp":
+                _selected = matches.Count == 0 ? 0 : (_selected - 1 + matches.Count) % matches.Count;
+                break;
+            case "Enter":
+                if (_selected < matches.Count)
+                    Go(matches[_selected]);
+                break;
+        }
+        await Task.CompletedTask;
+    }
+
+    private void Go(Entry entry)
+    {
+        _open = false;
+        // External service URLs leave the app; internal ones stay in the circuit.
+        if (entry.Url.StartsWith("http://") || entry.Url.StartsWith("https://"))
+            Nav.NavigateTo(entry.Url, forceLoad: true);
+        else
+            Nav.NavigateTo(entry.Url);
+    }
+
+    private void Close() => _open = false;
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        if (_open)
+            await BuildAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Config.Changed -= OnChanged;
+}

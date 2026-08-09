@@ -1,0 +1,54 @@
+@page "/"
+@rendermode InteractiveServer
+@inject ConfigStore Config
+@inject Seeder Seeder
+@inject NavigationManager Nav
+
+<PageTitle>LabbyTwo</PageTitle>
+
+@if (_loading)
+{
+    <p class="tile-meta">Loading…</p>
+}
+else
+{
+    @* Only reachable with no tabs — otherwise OnInitialized has already redirected. *@
+    <div class="empty-state">
+        <h1 class="h4 mb-2">Welcome to LabbyTwo</h1>
+        <p class="mb-4">
+            Nothing here is hardcoded. Tabs, the things they show, and everything LabbyTwo
+            talks to are all added from this interface and stored in one database file.
+        </p>
+        <div class="d-flex gap-2 justify-content-center flex-wrap">
+            <button class="btn btn-primary" @onclick="StartAsync" disabled="@_working">
+                @(_working ? "Setting up…" : "Create a starter dashboard")
+            </button>
+            <a class="btn btn-outline-secondary" href="settings/connections">Add a connection first</a>
+            <a class="btn btn-outline-secondary" href="settings/tabs">Build tabs myself</a>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _working;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var tabs = await Config.TabsAsync();
+        var first = tabs.FirstOrDefault(t => t.Enabled);
+        if (first is not null)
+        {
+            Nav.NavigateTo($"t/{first.Slug}", replace: true);
+            return;
+        }
+        _loading = false;
+    }
+
+    private async Task StartAsync()
+    {
+        _working = true;
+        var slug = await Seeder.CreateStarterLayoutAsync();
+        Nav.NavigateTo($"t/{slug}");
+    }
+}

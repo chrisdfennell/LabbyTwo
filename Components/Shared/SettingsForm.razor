@@ -1,0 +1,177 @@
+@* Renders any list of FieldSpec into a form. Providers, widgets and tab kinds all
+   describe themselves with FieldSpec and none of them ship UI — this is the one place
+   that knows how a field becomes an input, so a new integration needs no Razor at all. *@
+
+@if (Fields.Count == 0 && EmptyMessage is not null)
+{
+    <p class="text-secondary small mb-0">@EmptyMessage</p>
+}
+
+@foreach (var field in Fields)
+{
+    <div class="mb-3">
+        @if (field.Kind != FieldKind.Bool)
+        {
+            <label class="form-label" for="@FieldId(field)">
+                @field.Label
+                @if (field.Required)
+                {
+                    <span class="text-danger" title="Required">*</span>
+                }
+            </label>
+        }
+
+        @switch (field.Kind)
+        {
+            case FieldKind.Bool:
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="@FieldId(field)"
+                           checked="@Values.GetBool(field.Key, field.Default == "true")"
+                           @onchange="e => SetBool(field, e.Value)" />
+                    <label class="form-check-label" for="@FieldId(field)">@field.Label</label>
+                </div>
+                break;
+
+            case FieldKind.Select:
+                <select class="form-select" id="@FieldId(field)"
+                        value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                        @onchange="e => Set(field, e.Value)">
+                    @foreach (var option in field.Options ?? [])
+                    {
+                        <option value="@option.Value">@option.Label</option>
+                    }
+                </select>
+                break;
+
+            case FieldKind.Textarea:
+                <textarea class="form-control font-monospace" id="@FieldId(field)" rows="4"
+                          placeholder="@field.Placeholder"
+                          value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                          @onchange="e => Set(field, e.Value)"></textarea>
+                break;
+
+            case FieldKind.Password:
+                @* Never echo a stored secret back to the browser. An empty box means
+                   "keep what is saved", which is also what makes editing safe. *@
+                <input type="password" class="form-control" id="@FieldId(field)" autocomplete="new-password"
+                       placeholder="@SecretPlaceholder(field)"
+                       @onchange="e => SetSecret(field, e.Value)" />
+                break;
+
+            case FieldKind.Number:
+                <input type="number" class="form-control" id="@FieldId(field)"
+                       placeholder="@field.Placeholder"
+                       value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                       @onchange="e => Set(field, e.Value)" />
+                break;
+
+            case FieldKind.Icon:
+                <div class="d-flex gap-2 align-items-center flex-wrap">
+                    <input type="text" class="form-control icon-input text-center" id="@FieldId(field)"
+                           maxlength="4" placeholder="🏠"
+                           value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                           @onchange="e => Set(field, e.Value)" />
+                    @foreach (var suggestion in IconSuggestions)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                                @onclick="() => SetValue(field, suggestion)">@suggestion</button>
+                    }
+                </div>
+                break;
+
+            case FieldKind.LinkList:
+                <LinkListEditor Value="@Values.Get(field.Key)" ValueChanged="json => SetValue(field, json)" />
+                break;
+
+            case FieldKind.Metric:
+                @* A datalist suggests without restricting: the provider's declared metrics
+                   and whatever history has recorded are offered, but a name neither knows
+                   about can still be typed, which matters for providers that report more
+                   than they document. *@
+                <input type="text" class="form-control font-monospace" id="@FieldId(field)"
+                       list="@($"{FieldId(field)}-options")" placeholder="@field.Placeholder"
+                       value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                       @onchange="e => Set(field, e.Value)" />
+                <datalist id="@($"{FieldId(field)}-options")">
+                    @foreach (var option in Suggestions(field))
+                    {
+                        <option value="@option.Value">@option.Label</option>
+                    }
+                </datalist>
+                break;
+
+            default:
+                <input type="@(field.Kind == FieldKind.Url ? "url" : "text")" class="form-control" id="@FieldId(field)"
+                       placeholder="@field.Placeholder"
+                       value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                       @onchange="e => Set(field, e.Value)" />
+                break;
+        }
+
+        @if (field.Help is { Length: > 0 })
+        {
+            <div class="form-text">@field.Help</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<FieldSpec> Fields { get; set; } = [];
+
+    /// <summary>Mutated in place; the parent saves it when the user submits.</summary>
+    [Parameter, EditorRequired] public SettingsBag Values { get; set; } = new();
+
+    [Parameter] public string? EmptyMessage { get; set; }
+    [Parameter] public EventCallback Changed { get; set; }
+
+    /// <summary>
+    /// Options a field can only know at runtime — the metrics of whichever connection is
+    /// currently selected, say. The form stays generic; the caller supplies the context.
+    /// </summary>
+    [Parameter] public Func<FieldSpec, IReadOnlyList<SelectOption>>? DynamicOptions { get; set; }
+
+    private IReadOnlyList<SelectOption> Suggestions(FieldSpec field) =>
+        DynamicOptions?.Invoke(field) ?? field.Options ?? [];
+
+    /// <summary>Keys whose stored secret existed when the form opened, for the placeholder text.</summary>
+    private HashSet<string> _storedSecrets = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly string[] IconSuggestions =
+        ["🏠", "💾", "🌐", "🎬", "📺", "⬇️", "📊", "🖥️", "🔒", "📡", "⚡", "🧰"];
+
+    private readonly string _formId = Ids.New();
+
+    protected override void OnParametersSet()
+    {
+        _storedSecrets = [.. Fields.Where(f => f.IsSecret && Values.Get(f.Key).Length > 0).Select(f => f.Key)];
+
+        // Seed defaults so what gets saved matches what the form showed.
+        foreach (var field in Fields.Where(f => f.Default is { Length: > 0 } && !Values.ContainsKey(f.Key)))
+            Values[field.Key] = field.Default!;
+    }
+
+    private string FieldId(FieldSpec field) => $"f-{_formId}-{field.Key}";
+
+    private string? SecretPlaceholder(FieldSpec field) =>
+        _storedSecrets.Contains(field.Key) ? "•••••••• saved — type to replace" : field.Placeholder;
+
+    private Task Set(FieldSpec field, object? value) => SetValue(field, value?.ToString() ?? string.Empty);
+
+    private Task SetBool(FieldSpec field, object? value) =>
+        SetValue(field, value is bool flag && flag ? "true" : "false");
+
+    private async Task SetValue(FieldSpec field, string value)
+    {
+        Values[field.Key] = value;
+        await Changed.InvokeAsync();
+    }
+
+    private async Task SetSecret(FieldSpec field, object? value)
+    {
+        // Blank means "leave the saved secret alone" — only overwrite on a real entry.
+        var text = value?.ToString() ?? string.Empty;
+        if (text.Length == 0)
+            return;
+        await SetValue(field, text);
+    }
+}

@@ -1,0 +1,54 @@
+@* Server-rendered SVG. No charting library and no JS interop, which means it also works
+   during prerender and inside a static render. *@
+
+@if (_points is null)
+{
+    <div class="sparkline"></div>
+}
+else
+{
+    <svg class="sparkline" viewBox="0 0 100 34" preserveAspectRatio="none" role="img"
+         aria-label="@Label">
+        @if (Filled)
+        {
+            <polygon points="@($"0,34 {_points} 100,34")" fill="@Color" opacity="0.15" />
+        }
+        <polyline points="@_points" fill="none" stroke="@Color" stroke-width="1.5"
+                  vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round" />
+    </svg>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<double> Values { get; set; } = [];
+    [Parameter] public string Color { get; set; } = "#4da3ff";
+    [Parameter] public bool Filled { get; set; } = true;
+    [Parameter] public string Label { get; set; } = "trend";
+
+    private string? _points;
+
+    protected override void OnParametersSet()
+    {
+        if (Values.Count < 2)
+        {
+            _points = null;
+            return;
+        }
+
+        var min = Values.Min();
+        var max = Values.Max();
+        // A flat series has no range to scale into; draw it down the middle rather than
+        // dividing by zero or pinning it to the floor.
+        var range = max - min;
+        var scale = range > 0 ? range : 1;
+        var offset = range > 0 ? min : min - 0.5;
+
+        var step = 100d / (Values.Count - 1);
+        _points = string.Join(' ', Values.Select((value, index) =>
+        {
+            var x = index * step;
+            var y = 32 - (value - offset) / scale * 30;
+            return $"{x.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}," +
+                   $"{y.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}";
+        }));
+    }
+}

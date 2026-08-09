@@ -1,0 +1,28 @@
+# LabbyTwo holds no configuration of its own — everything you connect and every tab you
+# build is stored in the mounted volume. That is why this file is nine lines and has no
+# per-integration environment variables to keep in sync.
+services:
+  labbytwo:
+    build: .
+    # Or skip the build and pull a published image instead:
+    # image: yourname/labbytwo:latest
+    container_name: labbytwo
+    restart: unless-stopped
+    ports:
+      - "5150:8080"
+    environment:
+      # Without this the container runs on UTC and every displayed time is wrong.
+      TZ: ${TZ:-UTC}
+      # Setting a password turns the login screen on. Empty leaves LabbyTwo open, which
+      # is fine on a trusted LAN and not fine anywhere else.
+      Labby__Auth__Username: ${LABBY_AUTH_USERNAME:-labby}
+      Labby__Auth__Password: ${LABBY_AUTH_PASSWORD:-}
+      # Seconds between probes of every connection.
+      Labby__ProbeSeconds: ${LABBY_PROBE_SECONDS:-30}
+      # Days of metric history to keep.
+      Labby__RetentionDays: ${LABBY_RETENTION_DAYS:-30}
+    volumes:
+      - labbytwo-data:/app/data
+
+volumes:
+  labbytwo-data:

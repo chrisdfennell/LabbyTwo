@@ -1,0 +1,230 @@
+@page "/settings/tabs"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ConfigStore Config
+@inject Registry Registry
+@inject NavigationManager Nav
+
+<PageTitle>Tabs · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>🗂️ Tabs</h1>
+        <p class="subtitle">The nav is whatever you put here — add, rename, reorder, remove.</p>
+    </div>
+    <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add tab</button>
+</div>
+
+@if (_tabs.Count == 0)
+{
+    <div class="empty-state">
+        <p class="mb-3">No tabs yet.</p>
+        <button class="btn btn-primary btn-sm" @onclick="() => _picking = true">Add the first tab</button>
+    </div>
+}
+else
+{
+    <div class="panel">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th style="width:6rem">Order</th>
+                    <th>Tab</th>
+                    <th>Kind</th>
+                    <th>Contents</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var tab in _tabs)
+                {
+                    <tr>
+                        <td>
+                            <div class="d-flex gap-1">
+                                <button class="btn btn-sm btn-outline-secondary" title="Move up"
+                                        @onclick="() => Config.ReorderTabAsync(tab.Id, -1)">↑</button>
+                                <button class="btn btn-sm btn-outline-secondary" title="Move down"
+                                        @onclick="() => Config.ReorderTabAsync(tab.Id, 1)">↓</button>
+                            </div>
+                        </td>
+                        <td>
+                            <a href="@($"t/{tab.Slug}")" class="d-flex align-items-center gap-2">
+                                <span>@(string.IsNullOrWhiteSpace(tab.Icon) ? "▪" : tab.Icon)</span>
+                                <span>@tab.Name</span>
+                            </a>
+                            <div class="tile-meta">/t/@tab.Slug</div>
+                        </td>
+                        <td class="tile-meta">@(Registry.TabKind(tab.Kind)?.DisplayName ?? tab.Kind)</td>
+                        <td class="tile-meta">@ContentSummary(tab)</td>
+                        <td class="text-end">
+                            <div class="d-flex gap-1 justify-content-end">
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(tab)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = tab">✕</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (_picking)
+{
+    <Modal Title="What kind of tab?" OnClose="() => _picking = false">
+        <div class="card-picker">
+            @foreach (var kind in Registry.TabKinds)
+            {
+                <button type="button" @onclick="() => StartNew(kind)">
+                    <span class="picker-title">@kind.Icon @kind.DisplayName</span>
+                    <span class="picker-desc">@kind.Description</span>
+                </button>
+            }
+        </div>
+    </Modal>
+}
+
+@if (_draft is not null && _draftKind is not null)
+{
+    <Modal Title="@($"{_draftKind.Icon} {_draftKind.DisplayName} tab")" OnClose="Cancel">
+        <ChildContent>
+        <div class="row g-3 mb-3">
+            <div class="col-8">
+                <label class="form-label" for="tab-name">Name</label>
+                <input id="tab-name" class="form-control" @bind="_name" @bind:event="oninput" />
+            </div>
+            <div class="col-4">
+                <label class="form-label" for="tab-icon">Icon</label>
+                <input id="tab-icon" class="form-control text-center" maxlength="4" @bind="_icon" @bind:event="oninput" />
+            </div>
+        </div>
+
+        <SettingsForm Fields="_draftKind.Fields" Values="_settings"
+                      EmptyMessage="Nothing to configure — add widgets from the tab itself." />
+
+        <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="tab-enabled" @bind="_enabled" />
+            <label class="form-check-label" for="tab-enabled">Show in the nav</label>
+        </div>
+        </ChildContent>
+
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="Cancel">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@string.IsNullOrWhiteSpace(_name)">Save</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_confirmDelete is not null)
+{
+    <ConfirmDialog Title="Delete this tab?"
+                   Message="@($"“{_confirmDelete.Name}” and everything on it will be removed. Connections stay.")"
+                   OnCancel="() => _confirmDelete = null"
+                   OnConfirm="DeleteAsync" />
+}
+
+@code {
+    private IReadOnlyList<Tab> _tabs = [];
+    private IReadOnlyList<Widget> _widgets = [];
+    private bool _picking;
+    private Tab? _draft;
+    private ITabKind? _draftKind;
+    private Tab? _confirmDelete;
+
+    private string _name = "";
+    private string _icon = "";
+    private bool _enabled = true;
+    private SettingsBag _settings = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Config.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _tabs = await Config.TabsAsync();
+        _widgets = await Config.WidgetsAsync();
+    }
+
+    private string ContentSummary(Tab tab)
+    {
+        if (tab.Kind == TabKinds.Embed)
+            return tab.Settings.Get("url") is { Length: > 0 } url ? url : "no URL set";
+        if (tab.Kind == TabKinds.Grid)
+        {
+            var count = _widgets.Count(w => w.TabId == tab.Id);
+            return count == 1 ? "1 widget" : $"{count} widgets";
+        }
+        return "";
+    }
+
+    private void StartNew(ITabKind kind)
+    {
+        _picking = false;
+        _draftKind = kind;
+        _draft = new Tab { Kind = kind.Kind, Name = "", Icon = kind.Icon };
+        _name = "";
+        _icon = kind.Icon;
+        _enabled = true;
+        _settings = new SettingsBag();
+    }
+
+    private void Edit(Tab tab)
+    {
+        _draftKind = Registry.TabKind(tab.Kind);
+        _draft = tab;
+        _name = tab.Name;
+        _icon = tab.Icon;
+        _enabled = tab.Enabled;
+        _settings = tab.Settings.Clone();
+    }
+
+    private void Cancel()
+    {
+        _draft = null;
+        _draftKind = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_draft is null)
+            return;
+
+        // Keep the slug stable once a tab exists — renaming a tab should not break a
+        // bookmark. New tabs get one derived from the name.
+        var slug = _draft.Slug.Length > 0 ? _draft.Slug : await Config.UniqueSlugAsync(_name, _draft.Id);
+        var sort = _draft.Slug.Length > 0 ? _draft.Sort : _tabs.Count;
+
+        await Config.SaveTabAsync(_draft with
+        {
+            Name = _name.Trim(),
+            Icon = _icon,
+            Enabled = _enabled,
+            Settings = _settings,
+            Slug = slug,
+            Sort = sort,
+        });
+
+        var isNew = _draft.Slug.Length == 0;
+        Cancel();
+        if (isNew)
+            Nav.NavigateTo($"t/{slug}");
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_confirmDelete is not null)
+            await Config.DeleteTabAsync(_confirmDelete.Id);
+        _confirmDelete = null;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Config.Changed -= OnChanged;
+}

@@ -1,0 +1,57 @@
+@page "/t/{Slug}"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ConfigStore Config
+@inject Registry Registry
+@inject NavigationManager Nav
+
+<PageTitle>@(_tab?.Name ?? "LabbyTwo")</PageTitle>
+
+@if (_tab is null)
+{
+    <div class="empty-state">
+        <h1 class="h5">No tab called “@Slug”</h1>
+        <p class="mb-3">It may have been renamed or deleted.</p>
+        <a class="btn btn-outline-secondary btn-sm" href="settings/tabs">Manage tabs</a>
+    </div>
+}
+else if (_kind is null)
+{
+    <div class="empty-state">
+        <h1 class="h5">Unknown tab kind “@_tab.Kind”</h1>
+        <p class="mb-0">This tab was made by a newer version of LabbyTwo, or by a plugin that is no longer installed.</p>
+    </div>
+}
+else
+{
+    @* The page knows nothing about grids, embeds or notes — it renders whatever the
+       registered kind points at, which is what lets a new kind be one more class. *@
+    <DynamicComponent Type="_kind.Component" Parameters="_parameters" @key="_tab.Id" />
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+
+    private Tab? _tab;
+    private ITabKind? _kind;
+    private Dictionary<string, object> _parameters = [];
+
+    protected override void OnInitialized() => Config.Changed += OnChanged;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _tab = await Config.TabBySlugAsync(Slug);
+        _kind = _tab is null ? null : Registry.TabKind(_tab.Kind);
+        _parameters = _tab is null ? [] : new Dictionary<string, object> { ["Tab"] = _tab };
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Config.Changed -= OnChanged;
+}

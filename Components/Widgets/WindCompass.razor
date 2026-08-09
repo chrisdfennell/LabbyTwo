@@ -1,0 +1,128 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@using System.Globalization
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a weather station.</p>
+}
+else if (_metrics is null || !_metrics.ContainsKey("wind_mph"))
+{
+    <p class="tile-meta mb-0">Waiting for the first reading…</p>
+}
+else
+{
+    <div class="d-flex align-items-center gap-3">
+        @* Server-rendered SVG, like every other chart here — no plotting library and
+           nothing to load. *@
+        <svg viewBox="0 0 100 100" class="wind-dial" role="img"
+             aria-label="@($"Wind {Speed:0} {SpeedUnit} from {Cardinal}")">
+            <circle cx="50" cy="50" r="46" fill="none" stroke="var(--edge)" stroke-width="1.5" />
+            <circle cx="50" cy="50" r="3" fill="var(--muted)" />
+
+            @* Razor claims <text> as its own tag, so the compass letters are built as
+               markup instead. Everything in them is a constant or a computed number. *@
+            @CardinalLabels
+
+            @if (_metrics.ContainsKey("wind_dir"))
+            {
+                @* Meteorological convention: the direction is where the wind comes FROM,
+                   so the arrow points inward from that bearing. *@
+                <g transform="@($"rotate({N(Direction)} 50 50)")">
+                    <polygon points="50,12 44,30 50,26 56,30" fill="var(--accent)" />
+                    <line x1="50" y1="26" x2="50" y2="50" stroke="var(--accent)" stroke-width="2" />
+                </g>
+            }
+        </svg>
+
+        <div class="min-w-0">
+            <div class="metric-value">@($"{Speed:0}")<span class="metric-unit">@SpeedUnit</span></div>
+            <div class="tile-meta">
+                @if (_metrics.ContainsKey("wind_dir"))
+                {
+                    <span>from @Cardinal (@($"{Direction:0}")°)</span>
+                }
+                else
+                {
+                    <span>direction not reported</span>
+                }
+            </div>
+            @if (_metrics.TryGetValue("gust_mph", out var gust))
+            {
+                <div class="tile-meta">gusting @($"{Convert(gust):0}") @SpeedUnit</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyDictionary<string, double>? _metrics;
+
+    private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
+    private string SpeedUnit => Metric ? "km/h" : "mph";
+
+    private double Direction => _metrics!.GetValueOrDefault("wind_dir");
+    private double Speed => Convert(_metrics!.GetValueOrDefault("wind_mph"));
+
+    private double Convert(double mph) => Metric ? mph * 1.60934 : mph;
+
+    private static string N(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static readonly (string Label, int Bearing)[] Points =
+        [("N", 0), ("E", 90), ("S", 180), ("W", 270)];
+
+    private static readonly MarkupString CardinalLabels = new(string.Concat(
+        Points.Select(point =>
+        {
+            var radians = (point.Bearing - 90) * Math.PI / 180;
+            var x = N(50 + Math.Cos(radians) * 38);
+            var y = N(50 + Math.Sin(radians) * 38 + 3);
+            return $"""<text x="{x}" y="{y}" text-anchor="middle" font-size="10" fill="var(--muted)">{point.Label}</text>""";
+        })));
+
+    private static readonly string[] Sixteenths =
+    [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+    ];
+
+    /// <summary>Degrees to a compass point — 22.5° per sector, rounded to the nearest.</summary>
+    private string Cardinal => Sixteenths[(int)Math.Round(((Direction % 360) + 360) % 360 / 22.5) % 16];
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    /// <summary>
+    /// The live probe first, then the last recorded readings. Without the fallback the
+    /// card would sit blank for a whole probe interval after every restart.
+    /// </summary>
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+        {
+            _metrics = null;
+            return;
+        }
+
+        var live = Health.State(Context.Connection.Id)?.Metrics;
+        if (live is { Count: > 0 })
+        {
+            _metrics = live;
+            return;
+        }
+
+        _metrics = await History.LatestAsync(Context.Connection.Id, TimeSpan.FromHours(6));
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

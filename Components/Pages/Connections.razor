@@ -1,0 +1,190 @@
+@page "/settings/connections"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ConfigStore Config
+@inject Registry Registry
+@inject HealthMonitor Health
+
+<PageTitle>Connections · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>🔌 Connections</h1>
+        <p class="subtitle">Everything LabbyTwo talks to. Widgets bind to these.</p>
+    </div>
+    <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add connection</button>
+</div>
+
+@if (_connections.Count == 0)
+{
+    <div class="empty-state">
+        <p class="mb-3">Nothing connected yet.</p>
+        <button class="btn btn-primary btn-sm" @onclick="() => _picking = true">Add the first one</button>
+    </div>
+}
+else
+{
+    <div class="panel">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th style="width:2.5rem"></th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Last probe</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var connection in _connections)
+                {
+                    var state = Health.State(connection.Id);
+                    <tr>
+                        <td><span class="status-dot @DotClass(connection, state)"></span></td>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <span>@(string.IsNullOrWhiteSpace(connection.Icon) ? "" : connection.Icon)</span>
+                                <span>@connection.Name</span>
+                                @if (!connection.Enabled)
+                                {
+                                    <span class="badge text-bg-secondary">paused</span>
+                                }
+                            </div>
+                        </td>
+                        <td class="tile-meta">@ProviderName(connection)</td>
+                        <td class="tile-meta">
+                            @if (IsAlertChannel(connection))
+                            {
+                                @* Nothing to poll — the meaningful test is sending a message, which lives in the editor. *@
+                                <span>@(connection.Enabled ? "alert channel" : "disabled")</span>
+                            }
+                            else if (!connection.Enabled)
+                            {
+                                <span>not monitored</span>
+                            }
+                            else if (state is null)
+                            {
+                                <span>checking…</span>
+                            }
+                            else
+                            {
+                                <span>@state.Message</span>
+                                <span class="ms-2">@state.At.ToString("HH:mm:ss")</span>
+                            }
+                        </td>
+                        <td class="text-end">
+                            <div class="d-flex gap-1 justify-content-end">
+                                @if (!IsAlertChannel(connection))
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(connection)">Test</button>
+                                }
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(connection)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = connection">✕</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (_picking)
+{
+    <Modal Title="What are you connecting?" Size="xl" OnClose="() => _picking = false">
+        @foreach (var category in Registry.Providers.GroupBy(p => p.Category))
+        {
+            <h6 class="text-uppercase tile-meta mt-3 mb-2">@category.Key</h6>
+            <div class="card-picker">
+                @foreach (var provider in category)
+                {
+                    <button type="button" @onclick="() => StartNew(provider)">
+                        <span class="picker-title">@provider.Icon @provider.DisplayName</span>
+                        <span class="picker-desc">@provider.Description</span>
+                    </button>
+                }
+            </div>
+        }
+    </Modal>
+}
+
+@if (_draft is not null && _draftProvider is not null)
+{
+    <ConnectionEditor Draft="_draft" Provider="_draftProvider" OnClose="CloseEditor" />
+}
+
+@if (_confirmDelete is not null)
+{
+    <ConfirmDialog Title="Delete this connection?"
+                   Message="@($"“{_confirmDelete.Name}” and its recorded history will be removed. Widgets using it will ask for a new one.")"
+                   OnCancel="() => _confirmDelete = null"
+                   OnConfirm="DeleteAsync" />
+}
+
+@code {
+    private IReadOnlyList<Connection> _connections = [];
+    private bool _picking;
+    private Connection? _draft;
+    private IConnectionProvider? _draftProvider;
+    private Connection? _confirmDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Config.Changed += OnChanged;
+        Health.Updated += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _connections = await Config.ConnectionsAsync();
+
+    private string ProviderName(Connection connection) =>
+        Registry.Provider(connection.Provider)?.DisplayName ?? $"{connection.Provider} (not installed)";
+
+    private bool IsAlertChannel(Connection connection) => Registry.Provider(connection.Provider) is IAlertChannel;
+
+    private string DotClass(Connection connection, HealthMonitor.ProbeState? state) =>
+        !connection.Enabled || IsAlertChannel(connection) ? "status-unknown"
+        : state?.IsUp switch { true => "status-up", false => "status-down", _ => "status-unknown" };
+
+    private void StartNew(IConnectionProvider provider)
+    {
+        _picking = false;
+        _draftProvider = provider;
+        _draft = new Connection { Provider = provider.Type, Name = provider.DisplayName, Icon = provider.Icon };
+    }
+
+    private void Edit(Connection connection)
+    {
+        _draftProvider = Registry.Provider(connection.Provider);
+        // Editing a clone means Cancel leaves the stored connection untouched.
+        _draft = connection with { Settings = connection.Settings.Clone() };
+    }
+
+    private async Task CloseEditor()
+    {
+        _draft = null;
+        _draftProvider = null;
+        await LoadAsync();
+    }
+
+    private async Task RefreshAsync(Connection connection) => await Health.RefreshAsync(connection);
+
+    private async Task DeleteAsync()
+    {
+        if (_confirmDelete is not null)
+            await Config.DeleteConnectionAsync(_confirmDelete.Id);
+        _confirmDelete = null;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        Health.Updated -= OnChanged;
+    }
+}

@@ -1,0 +1,46 @@
+@implements IDisposable
+
+<div class="greeting-line">@Greeting</div>
+@if (ShowDate)
+{
+    <div class="greeting-sub">@_now.ToString("dddd, d MMMM")</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private DateTimeOffset _now = DateTimeOffset.Now;
+    private Timer? _timer;
+
+    private string Name => Context.Widget.Settings.Get("name");
+    private bool ShowDate => Context.Widget.Settings.GetBool("show_date", true);
+
+    private string Greeting
+    {
+        get
+        {
+            var part = _now.Hour switch
+            {
+                < 5 => "Good night",
+                < 12 => "Good morning",
+                < 18 => "Good afternoon",
+                < 22 => "Good evening",
+                _ => "Good night",
+            };
+            return Name is { Length: > 0 } name ? $"{part}, {name}" : part;
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        // Once a minute is plenty: the only thing that changes is which side of noon we
+        // are on, and a per-second tick would push a render to every open browser.
+        _timer = new Timer(_ => InvokeAsync(() =>
+        {
+            _now = DateTimeOffset.Now;
+            StateHasChanged();
+        }), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

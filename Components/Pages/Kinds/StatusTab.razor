@@ -1,0 +1,180 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "" : Tab.Icon + " ")@Tab.Name</h1>
+        <p class="subtitle">Uptime for everything being monitored, from recorded history.</p>
+    </div>
+</div>
+
+@if (_rows.Count == 0)
+{
+    <div class="empty-state">
+        <p class="mb-3">Nothing is being monitored yet.</p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add a connection</a>
+    </div>
+}
+else
+{
+    <div class="panel p-3 mb-4">
+        @foreach (var row in _rows)
+        {
+            <div class="status-row">
+                <div class="status-row-head">
+                    <span class="status-dot @DotClass(row)"></span>
+                    <span class="tile-name text-truncate">
+                        @(string.IsNullOrWhiteSpace(row.Connection.Icon) ? "" : row.Connection.Icon + " ")@row.Connection.Name
+                    </span>
+                    <span class="tile-meta ms-auto flex-none" title="@PartialNote(row)">
+                        @Percent(row.Day) <span class="opacity-50">24h</span>
+                        &nbsp;·&nbsp;
+                        @Percent(row.Week) <span class="opacity-50">7d</span>
+                        &nbsp;·&nbsp;
+                        @Percent(row.Month) <span class="opacity-50">30d</span>
+                        @if (row.Month.IsPartial)
+                        {
+                            @* Percentages measured over less than the stated window would
+                               otherwise look like a service with a suspiciously round score. *@
+                            <span class="opacity-50">*</span>
+                        }
+                    </span>
+                </div>
+
+                @* One bar per day, oldest on the left. A day with no history is drawn hollow
+                   rather than red so a new install doesn't look like a month of outages. *@
+                <div class="uptime-strip" role="img" aria-label="@($"Daily uptime for {row.Connection.Name} over {row.Days.Count} days")">
+                    @foreach (var day in row.Days)
+                    {
+                        <span class="uptime-day @DayClass(day.Percent)"
+                              title="@($"{day.Date:ddd d MMM} — {(day.Percent is { } p ? $"{p:0.0}% up" : "no data")}")"></span>
+                    }
+                </div>
+
+                <div class="tile-meta d-flex justify-content-between">
+                    <span>@(row.Days.Count) days ago</span>
+                    <span>@StateLine(row)</span>
+                    <span>today</span>
+                </div>
+            </div>
+        }
+    </div>
+
+    <h2 class="h6 text-uppercase tile-meta mb-2">Recent changes</h2>
+    @if (_events.Count == 0)
+    {
+        <p class="tile-meta">Nothing has changed state yet.</p>
+    }
+    else
+    {
+        <div class="panel">
+            <table class="table table-sm mb-0">
+                <tbody>
+                    @foreach (var entry in _events)
+                    {
+                        <tr>
+                            <td style="width:2rem"><span class="status-dot @(entry.IsUp ? "status-up" : "status-down")"></span></td>
+                            <td>@NameOf(entry.ConnectionId)</td>
+                            <td class="tile-meta">@(entry.IsUp ? "recovered" : "went down")</td>
+                            <td class="tile-meta text-truncate" style="max-width:26rem">@entry.Message</td>
+                            <td class="tile-meta text-end">@entry.At.ToString("d MMM HH:mm")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private sealed record Row(
+        Connection Connection,
+        HealthMonitor.ProbeState? State,
+        HistoryStore.Uptime Day,
+        HistoryStore.Uptime Week,
+        HistoryStore.Uptime Month,
+        IReadOnlyList<HistoryStore.Day> Days);
+
+    private List<Row> _rows = [];
+    private IReadOnlyList<HistoryStore.StatusEvent> _events = [];
+    private Dictionary<string, string> _names = [];
+
+    private int WindowDays => Math.Clamp(Tab.Settings.GetInt("days", 30), 7, 90);
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var all = await Config.ConnectionsAsync();
+        var connections = all.Where(Health.IsMonitored).ToList();
+        // Name every connection, not just the monitored ones, so an old event from
+        // something since unmonitored still reads as itself rather than "(deleted)".
+        _names = all.ToDictionary(c => c.Id, c => c.Name);
+
+        var rows = new List<Row>();
+        foreach (var connection in connections)
+        {
+            rows.Add(new Row(
+                connection,
+                Health.State(connection.Id),
+                await History.UptimeAsync(connection.Id, TimeSpan.FromHours(24)),
+                await History.UptimeAsync(connection.Id, TimeSpan.FromDays(7)),
+                await History.UptimeAsync(connection.Id, TimeSpan.FromDays(30)),
+                await History.DailyUptimeAsync(connection.Id, WindowDays)));
+        }
+        _rows = rows;
+        // Only events for things currently monitored — an alert channel is not an outage.
+        var monitored = connections.Select(c => c.Id).ToHashSet();
+        _events = [.. (await History.RecentEventsAsync(null, 60)).Where(e => monitored.Contains(e.ConnectionId)).Take(25)];
+    }
+
+    private string NameOf(string id) => _names.TryGetValue(id, out var name) ? name : "(deleted)";
+
+    private static string Percent(HistoryStore.Uptime uptime) => $"{uptime.Percent:0.0}%";
+
+    private static string PartialNote(Row row) => row.Month.Since is { } since
+        ? $"Measured from when monitoring started, {since:d MMM HH:mm} — not the full window."
+        : "";
+
+    private static string DotClass(Row row) => row.State?.IsUp switch
+    {
+        true => "status-up",
+        false => "status-down",
+        _ => "status-unknown",
+    };
+
+    private static string DayClass(double? percent) => percent switch
+    {
+        null => "is-unknown",
+        >= 99.9 => "is-good",
+        >= 95 => "is-warn",
+        _ => "is-bad",
+    };
+
+    private static string StateLine(Row row)
+    {
+        if (row.State is null)
+            return "checking…";
+        var since = row.State.ChangedAt is { } at ? $" since {at:d MMM HH:mm}" : "";
+        return row.State.IsUp switch
+        {
+            true => $"up{since}",
+            false => $"down{since} — {row.State.Message}",
+            _ => "checking…",
+        };
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

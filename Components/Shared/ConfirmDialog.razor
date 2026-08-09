@@ -1,0 +1,17 @@
+<Modal Title="@Title" Size="sm" OnClose="OnCancel">
+    <ChildContent>
+        <p class="mb-0">@Message</p>
+    </ChildContent>
+    <Footer>
+        <button class="btn btn-secondary btn-sm" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+        <button class="btn btn-danger btn-sm" @onclick="() => OnConfirm.InvokeAsync()">@ConfirmText</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Are you sure?";
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public string ConfirmText { get; set; } = "Delete";
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+}

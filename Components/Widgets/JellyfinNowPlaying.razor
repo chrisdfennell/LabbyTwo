@@ -1,0 +1,89 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject JellyfinProvider Jellyfin
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Jellyfin server.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_sessions.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing playing.</p>
+}
+else
+{
+    foreach (var session in _sessions)
+    {
+        <div class="mb-3">
+            <div class="d-flex justify-content-between gap-2">
+                <span class="text-truncate">@session.Item</span>
+                <span class="tile-meta flex-none">@($"{session.PercentDone:0}%")</span>
+            </div>
+            <div class="tile-meta text-truncate">
+                @if (session.User is { Length: > 0 })
+                {
+                    <span>@session.User</span>
+                }
+                @if (session.Device is { Length: > 0 })
+                {
+                    <span>on @session.Device</span>
+                }
+                @if (session.Transcoding)
+                {
+                    @* Worth surfacing: transcoding is what makes a media server run hot. *@
+                    <span class="text-warning">· transcoding</span>
+                }
+            </div>
+            <div class="usage-bar mt-1">
+                <span style="width:@session.PercentDone.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<JellyfinProvider.Session> _sessions = [];
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+        if (Health.State(Context.Connection.Id) is { IsUp: false } state)
+        {
+            _error = state.Message;
+            return;
+        }
+        try
+        {
+            _sessions = await Jellyfin.SessionsAsync(Context.Connection, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

@@ -1,0 +1,17 @@
+@inherits LayoutComponentBase
+
+<div class="app-shell">
+    @* Interactive on its own so the nav and the down-service badge stay live even while
+       a statically-rendered page is on screen. *@
+    <NavMenu @rendermode="InteractiveServer" />
+    <main class="app-main">
+        @Body
+    </main>
+</div>
+
+<CommandPalette @rendermode="InteractiveServer" />
+
+<div id="blazor-error-ui" class="alert alert-danger m-0 rounded-0 position-fixed bottom-0 start-0 end-0" style="display:none; z-index:1080">
+    An error has occurred. <a href="" class="alert-link">Reload</a>
+    <a class="float-end" href="" data-dismiss>✕</a>
+</div>

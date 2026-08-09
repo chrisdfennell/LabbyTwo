@@ -1,0 +1,123 @@
+@inject NotesStore Notes
+@inject Markdown Markdown
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "" : Tab.Icon + " ")@Tab.Name</h1>
+        <p class="subtitle">Markdown notes and runbooks.</p>
+    </div>
+    <button class="btn btn-sm btn-primary" @onclick="NewNote">+ New note</button>
+</div>
+
+@if (_notes.Count == 0)
+{
+    <div class="empty-state">Nothing written down yet.</div>
+}
+else
+{
+    <div class="row g-3">
+        @foreach (var note in _notes)
+        {
+            <div class="col-12 col-lg-6">
+                <div class="widget h-100">
+                    <div class="widget-head">
+                        <h2 class="widget-title text-truncate">@(note.Title is { Length: > 0 } ? note.Title : "Untitled")</h2>
+                        <div class="d-flex gap-1 flex-none">
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(note)">Edit</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = note">✕</button>
+                        </div>
+                    </div>
+                    <div class="widget-body markdown-body">@((MarkupString)Markdown.ToHtml(note.Content))</div>
+                    <div class="tile-meta mt-2">Updated @note.UpdatedAt.ToString("d MMM yyyy HH:mm")</div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@if (_editing is not null)
+{
+    <Modal Title="@(_editingId is null ? "New note" : "Edit note")" Size="xl" OnClose="() => _editing = null">
+        <ChildContent>
+        <div class="mb-3">
+            <label class="form-label" for="note-title">Title</label>
+            <input id="note-title" class="form-control" @bind="_editing.Title" @bind:event="oninput" />
+        </div>
+        <div class="row g-3">
+            <div class="col-lg-6">
+                <label class="form-label" for="note-body">Markdown</label>
+                <textarea id="note-body" class="form-control font-monospace" rows="16"
+                          @bind="_editing.Content" @bind:event="oninput"></textarea>
+            </div>
+            <div class="col-lg-6">
+                <label class="form-label">Preview</label>
+                <div class="panel p-3 markdown-body" style="min-height: 20rem">
+                    @((MarkupString)Markdown.ToHtml(_editing.Content))
+                </div>
+            </div>
+        </div>
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _editing = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveAsync">Save</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_confirmDelete is not null)
+{
+    <ConfirmDialog Title="Delete this note?"
+                   Message="@($"“{Describe(_confirmDelete)}” will be gone for good.")"
+                   OnCancel="() => _confirmDelete = null"
+                   OnConfirm="DeleteAsync" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private IReadOnlyList<NotesStore.Note> _notes = [];
+    private Draft? _editing;
+    private string? _editingId;
+    private NotesStore.Note? _confirmDelete;
+
+    private sealed class Draft
+    {
+        public string Title { get; set; } = "";
+        public string Content { get; set; } = "";
+    }
+
+    private static string Describe(NotesStore.Note note) => note.Title is { Length: > 0 } ? note.Title : "Untitled";
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync() => _notes = await Notes.ForTabAsync(Tab.Id);
+
+    private void NewNote()
+    {
+        _editingId = null;
+        _editing = new Draft();
+    }
+
+    private void Edit(NotesStore.Note note)
+    {
+        _editingId = note.Id;
+        _editing = new Draft { Title = note.Title, Content = note.Content };
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is null)
+            return;
+        await Notes.SaveAsync(_editingId, Tab.Id, _editing.Title, _editing.Content);
+        _editing = null;
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_confirmDelete is not null)
+            await Notes.DeleteAsync(_confirmDelete.Id);
+        _confirmDelete = null;
+        await LoadAsync();
+    }
+}

@@ -1,0 +1,69 @@
+@implements IDisposable
+
+@if (_url.Length == 0)
+{
+    <p class="tile-meta mb-0">
+        @(_source.IsCustom
+            ? "Edit this widget and paste the URL of your radar image or page."
+            : "Edit this widget and set a location.")
+    </p>
+}
+else if (_source.Kind == RadarKind.Image)
+{
+    @* Cache-busted on a timer: a radar loop keeps the same URL and only the bytes change,
+       so without this the browser would show the same picture all day. *@
+    <img class="radar-image" src="@($"{_url}{(_url.Contains('?') ? "&" : "?")}_={_tick}")"
+         alt="@($"Weather radar from {_source.DisplayName}")" loading="lazy"
+         style="height:@(Height)px" />
+}
+else
+{
+    <iframe class="radar-frame" src="@_url" style="height:@(Height)px"
+            title="@($"Weather radar from {_source.DisplayName}")"
+            loading="lazy" referrerpolicy="no-referrer"
+            sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+}
+
+@if (ShowAttribution && _source.Attribution is { Length: > 0 })
+{
+    <div class="tile-meta mt-1">@_source.Attribution</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private RadarSource _source = RadarSource.All[0];
+    private string _url = "";
+    private long _tick;
+    private Timer? _timer;
+
+    private int Height => Math.Clamp(Context.Widget.Settings.GetInt("height", 320), 120, 1200);
+    private bool ShowAttribution => Context.Widget.Settings.GetBool("attribution", true);
+
+    private int RefreshMinutes => Math.Clamp(Context.Widget.Settings.GetInt("refresh_minutes", 5), 1, 120);
+
+    protected override void OnParametersSet()
+    {
+        var settings = Context.Widget.Settings;
+        _source = RadarSource.Resolve(settings.Get("source"));
+        _url = _source.BuildUrl(
+            settings.GetDouble("latitude"),
+            settings.GetDouble("longitude"),
+            settings.GetInt("zoom", 7),
+            settings.Get("station"),
+            settings.Get("custom_url"));
+
+        // Only image sources need refreshing; an embedded map animates on its own, and
+        // reloading its iframe would just restart somebody else's JavaScript.
+        _timer?.Dispose();
+        _timer = _source.Kind == RadarKind.Image && _url.Length > 0
+            ? new Timer(_ => InvokeAsync(() =>
+            {
+                _tick = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                StateHasChanged();
+            }), null, TimeSpan.FromMinutes(RefreshMinutes), TimeSpan.FromMinutes(RefreshMinutes))
+            : null;
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

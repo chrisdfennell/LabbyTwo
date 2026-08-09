@@ -1,0 +1,87 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject Registry Registry
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Sonarr or Radarr.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_items.Count == 0)
+{
+    <p class="tile-meta mb-0">Queue is empty.</p>
+}
+else
+{
+    foreach (var item in _items.Take(Limit))
+    {
+        <div class="mb-2">
+            <div class="d-flex justify-content-between gap-2">
+                <span class="text-truncate">@item.Title</span>
+                <span class="tile-meta flex-none">@(item.TimeLeft is { Length: > 0 } ? item.TimeLeft : item.Status)</span>
+            </div>
+            <div class="usage-bar mt-1">
+                <span style="width:@item.PercentDone.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span>
+            </div>
+        </div>
+    }
+    @if (_items.Count > Limit)
+    {
+        <div class="tile-meta">+@(_items.Count - Limit) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<ArrProviderBase.QueueItem> _items = [];
+    private string? _error;
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 6), 1, 50);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+        if (Health.State(Context.Connection.Id) is { IsUp: false } state)
+        {
+            _error = state.Message;
+            return;
+        }
+        // Sonarr and Radarr are separate provider registrations sharing one base class, so
+        // resolve whichever this connection points at rather than injecting a specific one.
+        if (Registry.Provider(Context.Connection.Provider) is not ArrProviderBase arr)
+        {
+            _error = "This connection is not a Sonarr or Radarr.";
+            return;
+        }
+        try
+        {
+            _items = await arr.QueueAsync(Context.Connection, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

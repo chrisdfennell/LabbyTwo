@@ -1,0 +1,14 @@
+bin/
+obj/
+publish/
+data/
+.env
+.git/
+.vs/
+.vscode/
+*.tar
+README.md
+CONTRIBUTING.md
+docs/
+tests/
+*.sln

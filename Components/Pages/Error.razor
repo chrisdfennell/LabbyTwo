@@ -1,0 +1,25 @@
+@page "/error"
+@attribute [AllowAnonymous]
+@using Microsoft.AspNetCore.Diagnostics
+@using System.Diagnostics
+
+<PageTitle>Error · LabbyTwo</PageTitle>
+
+<div class="empty-state">
+    <h1 class="h4 mb-2">Something went wrong</h1>
+    <p class="mb-3">The page could not be rendered. The server log has the details.</p>
+    @if (RequestId is { Length: > 0 })
+    {
+        <p class="tile-meta">Request ID: <code>@RequestId</code></p>
+    }
+    <a class="btn btn-outline-secondary btn-sm" href="/">Back to the dashboard</a>
+</div>
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

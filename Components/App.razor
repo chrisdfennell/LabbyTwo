@@ -1,0 +1,52 @@
+@inject AppSettingsStore AppSettings
+
+<!DOCTYPE html>
+<html lang="en" data-theme="@_look.ThemeAttribute" data-bs-theme="@BootstrapTheme" style="@_look.StyleAttribute">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["LabbyTwo.styles.css"]" />
+    <link rel="icon" type="image/svg+xml" href="icon.svg" />
+    <link rel="alternate icon" type="image/png" href="icon-192.png" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="@(_look.Theme == "light" ? "#f2f5f9" : "#0a0e13")" />
+    <HeadOutlet />
+    @* Bootstrap picks its own palette from data-bs-theme, and on "system" the server has
+       no way to know which the browser wants — so the one thing that must happen before
+       first paint is copying the OS preference onto that attribute. The app's own colours
+       need no script: CSS handles "system" with prefers-color-scheme. *@
+    @if (_look.ThemeAttribute is null)
+    {
+        <script>
+            (function () {
+                var dark = window.matchMedia('(prefers-color-scheme: dark)');
+                var apply = function (m) { document.documentElement.dataset.bsTheme = m.matches ? 'dark' : 'light'; };
+                apply(dark);
+                dark.addEventListener('change', apply);
+            })();
+        </script>
+    }
+</head>
+
+<body>
+    <Routes />
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+    <script src="@Assets["palette.js"]"></script>
+</body>
+
+</html>
+
+@code {
+    private Appearance _look = Appearance.Default;
+
+    /// <summary>On "system" the script above takes over; this is the pre-script value.</summary>
+    private string BootstrapTheme => _look.Theme == "light" ? "light" : "dark";
+
+    protected override async Task OnInitializedAsync() =>
+        _look = Appearance.From(await AppSettings.AllAsync());
+}

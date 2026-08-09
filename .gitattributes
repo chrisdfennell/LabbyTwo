@@ -1,0 +1,29 @@
+# Normalise line endings in the repository, and check out whatever the platform wants.
+# Without this, a Windows contributor and a Linux one produce diffs of the whole file.
+* text=auto
+
+*.cs      text diff=csharp
+*.razor   text
+*.css     text
+*.js      text
+*.json    text
+*.yml     text
+*.yaml    text
+*.md      text
+*.csproj  text
+*.sln     text eol=crlf
+
+# Shell scripts and Dockerfiles must keep LF even when checked out on Windows, or the
+# container refuses to run them.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.py        text eol=lf
+
+*.png binary
+*.ico binary
+*.gif binary
+*.jpg binary
+
+# Bootstrap is vendored, not written here. Marking it keeps GitHub from reporting this
+# as a CSS project and keeps it out of diffs and searches.
+wwwroot/lib/** linguist-vendored

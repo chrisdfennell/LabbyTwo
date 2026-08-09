@@ -1,0 +1,182 @@
+@page "/status/{Token}"
+@attribute [AllowAnonymous]
+@layout BareLayout
+@inject AppSettingsStore AppSettings
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+@* Deliberately not the StatusTab component. This page is read by people who are not
+   signed in, so it shows names, uptime and history and nothing else — no probe messages,
+   which routinely carry internal hostnames, ports and API error text. Statically
+   rendered, so it needs no circuit and works with authentication switched on. *@
+
+<PageTitle>@_brand status</PageTitle>
+
+<HeadContent>
+    @* No Blazor circuit here, so a plain meta refresh is what keeps it current. *@
+    <meta http-equiv="refresh" content="60" />
+    <meta name="robots" content="noindex, nofollow" />
+</HeadContent>
+
+@if (!_allowed)
+{
+    <div class="empty-state" style="max-width: 30rem">
+        <h1 class="h5 mb-2">Not found</h1>
+        <p class="mb-0">This status page is not available.</p>
+    </div>
+}
+else
+{
+    <div style="width: min(56rem, 100%); padding: 2rem 1rem">
+        <div class="page-head">
+            <div>
+                <h1>@_brand</h1>
+                <p class="subtitle">Service status · updated @DateTimeOffset.Now.ToString("HH:mm")</p>
+            </div>
+            <div class="text-end">
+                <div class="tile-name @(_downCount == 0 ? "text-success" : "text-danger")">
+                    @(_downCount == 0 ? "All systems operational" : $"{_downCount} service(s) down")
+                </div>
+            </div>
+        </div>
+
+        @if (_rows.Count == 0)
+        {
+            <div class="empty-state"><p class="mb-0">Nothing is being monitored.</p></div>
+        }
+        else
+        {
+            <div class="panel p-3">
+                @foreach (var row in _rows)
+                {
+                    <div class="status-row">
+                        <div class="status-row-head">
+                            <span class="status-dot @DotClass(row)"></span>
+                            <span class="tile-name text-truncate">
+                                @(string.IsNullOrWhiteSpace(row.Connection.Icon) ? "" : row.Connection.Icon + " ")@row.Connection.Name
+                            </span>
+                            <span class="tile-meta ms-auto flex-none">
+                                @($"{row.Day.Percent:0.0}%") <span class="opacity-50">24h</span>
+                                &nbsp;·&nbsp;
+                                @($"{row.Month.Percent:0.0}%") <span class="opacity-50">30d</span>
+                                @if (row.Month.IsPartial)
+                                {
+                                    <span class="opacity-50">*</span>
+                                }
+                            </span>
+                        </div>
+
+                        <div class="uptime-strip" role="img"
+                             aria-label="@($"Daily uptime for {row.Connection.Name} over {row.Days.Count} days")">
+                            @foreach (var day in row.Days)
+                            {
+                                <span class="uptime-day @DayClass(day.Percent)"
+                                      title="@($"{day.Date:ddd d MMM} — {(day.Percent is { } p ? $"{p:0.0}% up" : "no data")}")"></span>
+                            }
+                        </div>
+
+                        <div class="tile-meta d-flex justify-content-between">
+                            <span>@(row.Days.Count) days ago</span>
+                            @* State only, never the probe message. *@
+                            <span>@StateWord(row)</span>
+                            <span>today</span>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            @if (_rows.Any(r => r.Month.IsPartial))
+            {
+                <p class="tile-meta mt-2">* Measured from when monitoring started, not the full window.</p>
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string Token { get; set; } = "";
+
+    /// <summary>Available because the page is statically rendered; used to send a real 404.</summary>
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private sealed record Row(
+        Connection Connection,
+        HealthMonitor.ProbeState? State,
+        HistoryStore.Uptime Day,
+        HistoryStore.Uptime Month,
+        IReadOnlyList<HistoryStore.Day> Days);
+
+    private bool _allowed;
+    private string _brand = Appearance.Default.BrandName;
+    private List<Row> _rows = [];
+    private int _downCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = await AppSettings.AllAsync();
+        var expected = settings.Get(PublicStatusToken);
+
+        // No token configured means the feature is off, and an empty route value must
+        // never match an empty stored value.
+        if (expected.Length == 0 || Token.Length == 0 || !FixedTimeEquals(Token, expected))
+        {
+            // A wrong token is a missing page, not an OK one with an apology in the body —
+            // otherwise a crawler or an uptime checker treats it as healthy.
+            if (HttpContext is not null)
+                HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        _allowed = true;
+        _brand = settings.Get(Appearance.BrandKey, Appearance.Default.BrandName);
+
+        var connections = (await Config.ConnectionsAsync()).Where(Health.IsMonitored).ToList();
+        var rows = new List<Row>();
+        foreach (var connection in connections)
+        {
+            rows.Add(new Row(
+                connection,
+                Health.State(connection.Id),
+                await History.UptimeAsync(connection.Id, TimeSpan.FromHours(24)),
+                await History.UptimeAsync(connection.Id, TimeSpan.FromDays(30)),
+                await History.DailyUptimeAsync(connection.Id, 30)));
+        }
+        _rows = rows;
+        _downCount = rows.Count(r => r.State?.IsUp == false);
+    }
+
+    /// <summary>The app-settings key holding the share token. Empty or missing means off.</summary>
+    public const string PublicStatusToken = "public_status_token";
+
+    /// <summary>
+    /// Compared over hashes so the check takes the same time whatever the guess, and so
+    /// two different lengths do not short-circuit.
+    /// </summary>
+    private static bool FixedTimeEquals(string presented, string expected) =>
+        System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(presented)),
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(expected)));
+
+    private static string DotClass(Row row) => row.State?.IsUp switch
+    {
+        true => "status-up",
+        false => "status-down",
+        _ => "status-unknown",
+    };
+
+    private static string DayClass(double? percent) => percent switch
+    {
+        null => "is-unknown",
+        >= 99.9 => "is-good",
+        >= 95 => "is-warn",
+        _ => "is-bad",
+    };
+
+    private static string StateWord(Row row) => row.State?.IsUp switch
+    {
+        true => "operational",
+        false => row.State.ChangedAt is { } at ? $"down since {at:d MMM HH:mm}" : "down",
+        _ => "checking…",
+    };
+}
