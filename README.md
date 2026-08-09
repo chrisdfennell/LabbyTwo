@@ -53,13 +53,17 @@ notepad install.ps1
 .\install.ps1
 ```
 
-It checks Docker is running, clones to `~/labbytwo`, writes a `.env` with your timezone,
-builds, starts, and waits until the app actually answers before telling you it worked.
-**Run it again later to update** — it pulls, rebuilds and restarts, and never touches your
-`.env` or your data.
+It **asks where to put it** (defaulting to `~/labbytwo`), checks Docker is running, writes
+a `.env` with your timezone, builds, starts, and waits until the app actually answers
+before telling you it worked. **Run it again later to update** — it pulls, rebuilds and
+restarts, and never touches your `.env` or your data.
 
-`LABBY_PORT=5151 bash install.sh` if 5150 is taken; `LABBY_DIR=/opt/labbytwo` to put it
-somewhere else.
+Only the source lives in that directory. Your dashboard, credentials and history are in a
+Docker volume, so the checkout can go on any disk and you can move it later.
+
+To skip the prompt — for a script, a cron job, or CI — set the directory up front:
+`LABBY_DIR=/opt/labbytwo bash install.sh`, or `.\install.ps1 -Dir D:\labbytwo`. Add
+`LABBY_PORT=5151` / `-Port 5151` if 5150 is taken.
 
 Or do it by hand, which is all the script does:
 

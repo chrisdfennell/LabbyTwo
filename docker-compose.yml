@@ -6,7 +6,11 @@ services:
     build: .
     # Or skip the build and pull a published image instead:
     # image: yourname/labbytwo:latest
-    container_name: labbytwo
+    # No container_name on purpose. A fixed one is global to the Docker host, so a second
+    # install in another directory would collide with the first — and Compose would adopt
+    # and restart the running one rather than refuse. Compose names it after the project
+    # (the directory) instead, which stays unique. Use "docker compose logs", not
+    # "docker logs labbytwo".
     restart: unless-stopped
     ports:
       # Change the left-hand side, or set LABBY_PORT in .env, if 5150 is taken.

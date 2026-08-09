@@ -17,13 +17,16 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Dir    = (Join-Path $HOME 'labbytwo'),
+    # Left empty so we can tell "they chose the default" from "they said nothing" and
+    # know whether to ask.
+    [string]$Dir    = '',
     [int]$Port      = 5150,
     [string]$Branch = 'main',
     [string]$Repo   = 'https://github.com/chrisdfennell/LabbyTwo.git'
 )
 
 $ErrorActionPreference = 'Stop'
+$DefaultDir = Join-Path $HOME 'labbytwo'
 
 function Say  { param($m) Write-Host "==> $m" -ForegroundColor White }
 function Note { param($m) Write-Host "    $m" -ForegroundColor DarkGray }
@@ -49,6 +52,81 @@ if ($LASTEXITCODE -ne 0) {
     Die "Docker Compose v2 is missing. It ships with current Docker Desktop — update it."
 }
 
+# ---- where should it live? ---------------------------------------------------------
+
+function Resolve-InstallDir {
+    param([string]$Path)
+    $sep = [char]0x5C   # a backslash, spelled out so no editor or tool can eat it
+    $p = $Path.Trim().Trim('"', "'").TrimEnd($sep, '/')
+    if ($p -eq '~')        { return $HOME }
+    if ($p.StartsWith('~')) { return (Join-Path $HOME $p.Substring(1).TrimStart($sep, '/')) }
+    if ([System.IO.Path]::IsPathRooted($p)) { return $p }
+    if ($p) { return (Join-Path (Get-Location) $p) }
+    return $p
+}
+
+# Returns $null when usable, otherwise the reason — so the prompt can ask again.
+function Test-InstallDir {
+    param([string]$Path)
+    if (-not $Path) { return 'Give me a path.' }
+
+    if (Test-Path (Join-Path $Path '.git')) {
+        # Identified by what is in it, not by the remote URL: a fork or a mirror is
+        # still LabbyTwo and its URL need not say so.
+        if ((Test-Path (Join-Path $Path 'LabbyTwo.csproj')) -and
+            (Test-Path (Join-Path $Path 'docker-compose.yml'))) { return $null }
+        return "$Path is a git checkout of something else, not LabbyTwo."
+    }
+
+    if (Test-Path $Path) {
+        if (-not (Test-Path $Path -PathType Container)) { return "$Path is a file, not a directory." }
+        if (Get-ChildItem -Force $Path -ErrorAction SilentlyContinue) {
+            return "$Path already exists and has things in it. Pick an empty or a new directory."
+        }
+        return $null
+    }
+
+    # Walk up to the nearest parent that exists and see whether we may create there.
+    $parent = Split-Path $Path -Parent
+    while ($parent -and -not (Test-Path $parent)) { $parent = Split-Path $parent -Parent }
+    if (-not $parent) { return "Cannot work out where $Path would go." }
+    try {
+        $probe = Join-Path $parent ([System.IO.Path]::GetRandomFileName())
+        New-Item -ItemType Directory -Path $probe -ErrorAction Stop | Out-Null
+        Remove-Item $probe -Force
+    } catch {
+        return "Cannot write to $parent. Pick somewhere under your home folder."
+    }
+    return $null
+}
+
+if ($Dir) {
+    $Dir = Resolve-InstallDir $Dir
+    $why = Test-InstallDir $Dir
+    if ($why) { Die "-Dir $Dir will not work.`n    $why" }
+}
+elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Say 'Where should LabbyTwo live?'
+    Note 'It keeps the source here. Your dashboard and credentials live in a Docker volume,'
+    Note 'not in this directory, so it is safe to put on any disk.'
+    while ($true) {
+        $answer = Read-Host "    Path [$DefaultDir]"
+        if (-not $answer) { $answer = $DefaultDir }
+        $candidate = Resolve-InstallDir $answer
+        $why = Test-InstallDir $candidate
+        if (-not $why) { $Dir = $candidate; break }
+        Note $why
+    }
+    Write-Host ''
+}
+else {
+    # Nothing to prompt on — a pipe, a scheduled task, CI. Take the default, do not hang.
+    $Dir = $DefaultDir
+    Note "Nothing to prompt on, so using $Dir. Pass -Dir to choose."
+    $why = Test-InstallDir $Dir
+    if ($why) { Die $why }
+}
+
 # ---- get the source ---------------------------------------------------------------
 
 if (Test-Path (Join-Path $Dir '.git')) {
@@ -71,9 +149,6 @@ if (Test-Path (Join-Path $Dir '.git')) {
         Die "$Dir has local commits that are not on origin/$Branch. Sort that out and re-run."
     }
     Note (git -C $Dir log --oneline -1)
-}
-elseif (Test-Path $Dir) {
-    Die "$Dir already exists and is not a git checkout. Move it, or pass -Dir somewhere else."
 }
 else {
     Say "Cloning into $Dir"

@@ -9,14 +9,15 @@
 # Run it again later and it updates in place: it pulls, rebuilds and restarts, and never
 # touches your .env or the data volume.
 #
-#   LABBY_DIR=/opt/labbytwo  where to keep the checkout   (default ~/labbytwo)
+#   LABBY_DIR=/opt/labbytwo  where to keep the checkout   (skips the prompt)
 #   LABBY_PORT=5150          port to serve on             (default 5150)
 #   LABBY_BRANCH=main        branch to track              (default main)
 
 set -euo pipefail
 
 REPO_URL="${LABBY_REPO:-https://github.com/chrisdfennell/LabbyTwo.git}"
-DIR="${LABBY_DIR:-$HOME/labbytwo}"
+DEFAULT_DIR="$HOME/labbytwo"
+DIR="${LABBY_DIR:-}"
 BRANCH="${LABBY_BRANCH:-main}"
 PORT="${LABBY_PORT:-5150}"
 
@@ -53,6 +54,109 @@ else
     die "Docker Compose is missing. Install the compose plugin: https://docs.docker.com/compose/install/"
 fi
 
+# ---- where should it live? ---------------------------------------------------------
+
+# /dev/tty can exist and still refuse to open — Git Bash under a pipe does exactly that,
+# and `read < /dev/tty` then fails mid-prompt. Test the open, not the file.
+can_prompt() { { : < /dev/tty; } 2>/dev/null; }
+
+# Accepts ~, a relative path, a Windows drive path, or something pasted with quotes.
+normalise_dir() {
+    local d="$1"
+    # Strip quotes someone pasted round the path, and any trailing slash.
+    d="${d#\"}"; d="${d%\"}"
+    d="${d#\'}"; d="${d%\'}"
+    d="${d%/}"
+
+    # A drive-letter path is absolute even though it does not start with "/". Matched
+    # with [[ =~ ]] rather than a case glob, because a backslash inside a bracket
+    # expression is an escape and [/\] silently matches neither.
+    if [[ "$d" =~ ^[A-Za-z]:[/\\] ]]; then
+        if command -v cygpath >/dev/null 2>&1; then
+            d="$(cygpath -u "$d")"
+        else
+            local drive rest
+            drive="$(printf '%s' "${d:0:1}" | tr '[:upper:]' '[:lower:]')"
+            rest="$(printf '%s' "${d:2}" | tr '\\' '/')"
+            d="/$drive$rest"
+        fi
+    else
+        case "$d" in
+            "~")   d="$HOME" ;;
+            "~/"*) d="$HOME/${d#\~/}" ;;
+            /*|"") ;;
+            *)     d="$PWD/$d" ;;
+        esac
+    fi
+
+    printf '%s' "${d%/}"
+}
+
+# Prints why not and returns 1, so the prompt can ask again instead of giving up.
+check_dir() {
+    local d="$1" origin parent
+    [ -z "$d" ] && { note "Give me a path."; return 1; }
+
+    if [ -d "$d/.git" ]; then
+        if [ -f "$d/LabbyTwo.csproj" ] && [ -f "$d/docker-compose.yml" ]; then
+            return 0        # ours, whatever the remote is called: this is an update
+        fi
+        origin="$(git -C "$d" remote get-url origin 2>/dev/null || echo "an unknown remote")"
+        note "$d is a git checkout of $origin, not LabbyTwo."
+        return 1
+    fi
+
+    if [ -e "$d" ]; then
+        [ -d "$d" ] || { note "$d is a file, not a directory."; return 1; }
+        if [ -n "$(ls -A "$d" 2>/dev/null)" ]; then
+            note "$d already exists and has things in it. Pick an empty or a new directory."
+            return 1
+        fi
+        return 0
+    fi
+
+    # Does not exist yet — walk up to the nearest parent that does and see if we may write.
+    parent="$(dirname "$d")"
+    while [ ! -e "$parent" ] && [ "$parent" != "/" ] && [ "$parent" != "." ]; do
+        parent="$(dirname "$parent")"
+    done
+    if [ ! -w "$parent" ]; then
+        note "Cannot write to $parent. Try a path under \$HOME, or re-run with sudo."
+        return 1
+    fi
+    return 0
+}
+
+if [ -n "$DIR" ]; then
+    DIR="$(normalise_dir "$DIR")"
+    check_dir "$DIR" || die "LABBY_DIR=$DIR will not work."
+elif can_prompt; then
+    # Read from the terminal, not stdin: if this script was piped into bash, stdin is
+    # the rest of the script and a bare `read` would eat it.
+    say "Where should LabbyTwo live?"
+    note "It keeps the source here. Your dashboard and credentials live in a Docker volume,"
+    note "not in this directory, so it is safe to put on any disk."
+    while true; do
+        printf '    %s[%s]%s ' "$DIM" "$DEFAULT_DIR" "$OFF" > /dev/tty
+        REPLY_DIR=""
+        if ! read -r REPLY_DIR < /dev/tty; then
+            # End of input — they pressed Ctrl-D rather than choosing. Installing to the
+            # default at that point would put it somewhere they never agreed to.
+            echo
+            die "No directory chosen. Re-run and answer the prompt, or set LABBY_DIR."
+        fi
+        [ -z "$REPLY_DIR" ] && REPLY_DIR="$DEFAULT_DIR"
+        DIR="$(normalise_dir "$REPLY_DIR")"
+        check_dir "$DIR" && break
+    done
+    echo
+else
+    # No terminal — a pipe, a cron job, CI. Take the default rather than hanging.
+    DIR="$DEFAULT_DIR"
+    note "Nothing to prompt on, so using $DIR. Set LABBY_DIR to choose."
+    check_dir "$DIR" || die "$DIR will not work as an install directory."
+fi
+
 # ---- get the source ---------------------------------------------------------------
 
 if [ -d "$DIR/.git" ]; then
@@ -69,8 +173,6 @@ if [ -d "$DIR/.git" ]; then
     git -C "$DIR" merge --quiet --ff-only "origin/$BRANCH" \
         || die "$DIR has local commits that are not on origin/$BRANCH. Sort that out and re-run."
     note "now at $(git -C "$DIR" log --oneline -1)"
-elif [ -e "$DIR" ]; then
-    die "$DIR already exists and is not a git checkout. Move it, or set LABBY_DIR to somewhere else."
 else
     say "Cloning into $DIR"
     git clone --quiet --branch "$BRANCH" "$REPO_URL" "$DIR"
