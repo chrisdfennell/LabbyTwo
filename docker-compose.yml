@@ -24,6 +24,9 @@ services:
       Labby__Auth__Password: ${LABBY_AUTH_PASSWORD:-}
       # Seconds between probes of every connection.
       Labby__ProbeSeconds: ${LABBY_PROBE_SECONDS:-30}
+      # Consecutive failures before a service is called down. Raise it for something that
+      # blips — a NAS admin UI goes unresponsive under load without actually being down.
+      Labby__FailuresBeforeDown: ${LABBY_FAILURES_BEFORE_DOWN:-2}
       # Days of metric history to keep.
       Labby__RetentionDays: ${LABBY_RETENTION_DAYS:-30}
     # Containers do not inherit the host's /etc/hosts, NetBIOS or mDNS, so a name your NAS

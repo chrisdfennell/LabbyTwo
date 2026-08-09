@@ -66,17 +66,8 @@
                 break;
 
             case FieldKind.Icon:
-                <div class="d-flex gap-2 align-items-center flex-wrap">
-                    <input type="text" class="form-control icon-input text-center" id="@FieldId(field)"
-                           maxlength="4" placeholder="🏠"
-                           value="@Values.Get(field.Key, field.Default ?? string.Empty)"
-                           @onchange="e => Set(field, e.Value)" />
-                    @foreach (var suggestion in IconSuggestions)
-                    {
-                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                                @onclick="() => SetValue(field, suggestion)">@suggestion</button>
-                    }
-                </div>
+                <EmojiPicker Value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                             ValueChanged="value => SetValue(field, value)" />
                 break;
 
             case FieldKind.LinkList:
@@ -135,9 +126,6 @@
 
     /// <summary>Keys whose stored secret existed when the form opened, for the placeholder text.</summary>
     private HashSet<string> _storedSecrets = new(StringComparer.OrdinalIgnoreCase);
-
-    private static readonly string[] IconSuggestions =
-        ["🏠", "💾", "🌐", "🎬", "📺", "⬇️", "📊", "🖥️", "🔒", "📡", "⚡", "🧰"];
 
     private readonly string _formId = Ids.New();
 

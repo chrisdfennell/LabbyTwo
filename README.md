@@ -316,6 +316,14 @@ for most national weather services. Worth knowing: the radar is loaded by **your
 not by LabbyTwo, so the source sees your IP address and — for the map sources — the
 coordinates you configured. That is the trade for not proxying somebody else's tiles.
 
+### Icons
+
+Anywhere an icon can be set — a tab, a connection, a bookmark, a widget field — the same
+picker opens: every emoji in Unicode 16, grouped and searchable by name, with a text box
+alongside for pasting one it does not know. The table is generated from Python's own
+Unicode database by `docs/make-emoji-data.py`, so it needs no network and no package, and
+regenerating it after a Unicode update picks up whatever was added.
+
 ### A status page you can share
 
 **Settings → Public status page** creates a link that works without signing in — service
@@ -435,6 +443,7 @@ There is very little, on purpose. Everything specific to *your* lab lives in the
 | Login username | `LABBY_AUTH_USERNAME` | `labby` |
 | Login password | `LABBY_AUTH_PASSWORD` | empty — **login disabled** |
 | Probe interval, seconds | `LABBY_PROBE_SECONDS` | `30` |
+| Failures before "down" | `LABBY_FAILURES_BEFORE_DOWN` | `2` |
 | History retention, days | `LABBY_RETENTION_DAYS` | `30` |
 | Plugin folder | `Labby__PluginPath` | `data/plugins` |
 | Timezone | `TZ` | UTC |

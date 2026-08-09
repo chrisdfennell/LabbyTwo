@@ -95,7 +95,7 @@ else
             </div>
             <div class="col-4">
                 <label class="form-label" for="tab-icon">Icon</label>
-                <input id="tab-icon" class="form-control text-center" maxlength="4" @bind="_icon" @bind:event="oninput" />
+                <EmojiPicker Value="@_icon" ValueChanged="value => _icon = value" />
             </div>
         </div>
 

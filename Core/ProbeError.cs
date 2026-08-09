@@ -122,8 +122,8 @@ public static class ProbeError
         if (!System.Net.IPAddress.TryParse(host?.Trim('[', ']'), out var address) || !IsPrivate(address))
             return "";
 
-        return " If that address is another container's published port, reach it by container name on a " +
-               "shared network instead — a host cannot always route back in to itself.";
+        return " If that is another container's published port, use its container name on a shared network; " +
+               "if it is a service on the host, a container cannot always reach the host's own LAN address.";
     }
 
     private static readonly Lazy<bool> InContainer = new(() =>

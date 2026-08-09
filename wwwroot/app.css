@@ -638,3 +638,54 @@ h1[tabindex]:focus { outline: none; }
     background: var(--panel-2);
 }
 .radar-image { object-fit: contain; }
+
+/* ---------- emoji picker ---------- */
+
+.emoji-trigger {
+    width: 2.4rem;
+    height: 2.4rem;
+    flex: none;
+    font-size: 1.3rem;
+    line-height: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--edge);
+    border-radius: .5rem;
+    color: var(--text);
+}
+.emoji-trigger:hover { border-color: var(--accent); }
+.emoji-trigger-empty { color: var(--muted); font-size: 1.1rem; }
+
+.emoji-groups { display: flex; flex-wrap: wrap; gap: .25rem; }
+
+.emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(2.4rem, 1fr));
+    gap: .15rem;
+    /* Bounded so the dialog never grows past the window, whatever the group's size. */
+    max-height: 22rem;
+    overflow-y: auto;
+    padding: .25rem;
+    border: 1px solid var(--edge);
+    border-radius: .5rem;
+    background: var(--ink);
+}
+.emoji-grid button {
+    aspect-ratio: 1;
+    font-size: 1.35rem;
+    line-height: 1;
+    background: transparent;
+    border: 0;
+    border-radius: .35rem;
+    padding: 0;
+    color: var(--text);
+}
+.emoji-grid button:hover { background: var(--accent-soft); }
+.emoji-grid button.is-current { background: var(--accent); }
+
+/* Inline rather than a dialog: every caller is already inside one. */
+.emoji-panel {
+    border: 1px solid var(--edge);
+    border-radius: .6rem;
+    background: var(--panel);
+    padding: .6rem;
+}

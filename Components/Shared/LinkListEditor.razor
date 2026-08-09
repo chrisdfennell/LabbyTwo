@@ -7,8 +7,8 @@
         var index = i;
         var row = _rows[index];
         <div class="d-flex gap-2 mb-2 align-items-center">
-            <input class="form-control icon-input text-center" maxlength="4" placeholder="🔗"
-                   value="@row.Icon" @onchange="e => Update(index, row with { Icon = Text(e.Value) })" />
+            <EmojiPicker Value="@row.Icon" Placeholder="🔗"
+                         ValueChanged="value => Update(index, row with { Icon = value })" />
             <input class="form-control" placeholder="Name" style="max-width: 12rem"
                    value="@row.Name" @onchange="e => Update(index, row with { Name = Text(e.Value) })" />
             <input class="form-control" placeholder="https://…"

@@ -1,0 +1,151 @@
+@* The one emoji control. Everywhere an icon can be set uses this, so the behaviour is
+   the same on a tab, a connection, a widget field and a bookmark row. *@
+
+<div class="d-flex gap-2 align-items-center">
+    <button type="button" class="emoji-trigger" title="Choose an emoji" @onclick="() => Open()">
+        @if (Value is { Length: > 0 })
+        {
+            @Value
+        }
+        else
+        {
+            <span class="emoji-trigger-empty">+</span>
+        }
+    </button>
+
+    @* Kept alongside the picker: pasting an emoji, or typing one the table does not have,
+       has to stay possible. *@
+    <input type="text" class="form-control icon-input text-center" maxlength="8"
+           placeholder="@Placeholder" value="@Value"
+           @onchange="e => Commit(e.Value?.ToString() ?? string.Empty)" />
+
+    @if (Value is { Length: > 0 })
+    {
+        <button type="button" class="btn btn-sm btn-outline-secondary" title="Clear"
+                @onclick="() => Commit(string.Empty)">✕</button>
+    }
+</div>
+
+@if (_open)
+{
+    @* An inline panel, not a dialog. Every place this is used — the tab editor, the
+       connection editor, a widget's settings — is already inside a modal, and a modal
+       inside a modal means two backdrops fighting over the same z-index. *@
+    <div class="emoji-panel mt-2">
+        <div class="d-flex gap-2 mb-2">
+            <input class="form-control" placeholder="Search @EmojiCatalog.All.Count emoji — try “disk”, “warning”, “cat”"
+                   value="@_query" @oninput="e => Filter(e.Value?.ToString())" @ref="_search" />
+            <button type="button" class="btn btn-outline-secondary flex-none" @onclick="Close">Done</button>
+        </div>
+
+            @if (_query is { Length: > 0 })
+            {
+                <div class="tile-meta mb-2">
+                    @(_results.Count == 0
+                        ? "Nothing matches that."
+                        : $"{_results.Count} match{(_results.Count == 1 ? "" : "es")}")
+                </div>
+            }
+            else
+            {
+                <div class="emoji-groups mb-2">
+                    @foreach (var group in EmojiCatalog.Groups)
+                    {
+                        var current = group;
+                        <button type="button"
+                                class="btn btn-sm @(_group == current ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="() => SelectGroup(current)">@current</button>
+                    }
+                </div>
+            }
+
+            <div class="emoji-grid">
+                @foreach (var emoji in Shown)
+                {
+                    var pick = emoji;
+                    <button type="button" title="@emoji.Name" class="@(emoji.Char == Value ? "is-current" : null)"
+                            @key="emoji.Char" @onclick="() => Commit(pick.Char)">@emoji.Char</button>
+                }
+            </div>
+
+            @if (Shown.Count == 0 && _query is { Length: > 0 })
+            {
+                <p class="tile-meta mb-0 mt-2">Try a plainer word — the names come from Unicode, so it is
+                    “automobile” as often as “car”.</p>
+            }
+    </div>
+}
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    /// <summary>Shown in the manual-entry box when nothing is set.</summary>
+    [Parameter] public string Placeholder { get; set; } = "🏠";
+
+    private bool _open;
+    private string _query = "";
+    private string _group = EmojiCatalog.Groups[0];
+    private IReadOnlyList<Emoji> _results = [];
+    private ElementReference _search;
+
+    /// <summary>
+    /// Search results when searching, otherwise the whole of one group. A group is at most
+    /// a few hundred buttons, which renders fine; the whole catalogue at once would not.
+    /// </summary>
+    private IReadOnlyList<Emoji> Shown =>
+        _query is { Length: > 0 } ? _results : EmojiCatalog.InGroup(_group);
+
+    private void Open()
+    {
+        _query = "";
+        _results = [];
+
+        // Open on the group the current icon came from, so reopening lands where you were.
+        if (Value is { Length: > 0 } &&
+            EmojiCatalog.All.FirstOrDefault(e => e.Char == Value) is { } known)
+            _group = known.Group;
+
+        _open = true;
+    }
+
+    private void Close() => _open = false;
+
+    private void SelectGroup(string group) => _group = group;
+
+    private void Filter(string? query)
+    {
+        _query = query?.Trim() ?? "";
+        _results = EmojiCatalog.Search(_query);
+    }
+
+    private async Task Commit(string value)
+    {
+        _open = false;
+        Value = value;
+        await ValueChanged.InvokeAsync(value);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Focus the search box when the dialog appears, so typing works immediately.
+        if (_open && !_focused)
+        {
+            _focused = true;
+            try
+            {
+                await _search.FocusAsync();
+            }
+            catch (InvalidOperationException)
+            {
+                // The element is gone if the dialog closed in the same cycle; harmless.
+            }
+        }
+        else if (!_open)
+        {
+            _focused = false;
+        }
+    }
+
+    private bool _focused;
+}

@@ -13,7 +13,10 @@
         </div>
         <div class="col-4">
             <label class="form-label" for="conn-icon">Icon</label>
-            <input id="conn-icon" class="form-control text-center" maxlength="4" @bind="_icon" @bind:event="oninput" />
+            @* Provider is EditorRequired and never null here; a ?. would tell the compiler
+               otherwise and make every later use of it a nullable warning. *@
+            <EmojiPicker Value="@_icon" Placeholder="@Provider.Icon"
+                         ValueChanged="value => _icon = value" />
         </div>
     </div>
 

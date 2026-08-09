@@ -610,3 +610,88 @@ public class UnitsTests
         Assert.Equal(32, Units.Display(0, "°C", "nonsense").Value, 3);
     }
 }
+
+public class EmojiCatalogTests
+{
+    [Fact]
+    public void TheEmbeddedTableLoads()
+    {
+        // If the resource name or the csproj entry drifts, every picker silently empties.
+        Assert.True(EmojiCatalog.All.Count > 2000,
+            $"Expected a few thousand emoji, got {EmojiCatalog.All.Count}. Is Core/emoji.tsv still embedded?");
+    }
+
+    [Fact]
+    public void EveryEntryIsUsableAndUniquelyKeyed()
+    {
+        Assert.All(EmojiCatalog.All, e =>
+        {
+            Assert.NotEmpty(e.Char);
+            Assert.NotEmpty(e.Name);
+            Assert.NotEmpty(e.Group);
+        });
+        Assert.Equal(EmojiCatalog.All.Count, EmojiCatalog.All.Select(e => e.Char).Distinct().Count());
+    }
+
+    [Fact]
+    public void EveryGroupInTheDataIsOneThePickerShows()
+    {
+        // A group present in the file but missing from the tab list would be unreachable.
+        foreach (var group in EmojiCatalog.All.Select(e => e.Group).Distinct())
+            Assert.Contains(group, EmojiCatalog.Groups);
+    }
+
+    [Fact]
+    public void EveryTabHasSomethingBehindIt()
+    {
+        foreach (var group in EmojiCatalog.Groups)
+            Assert.NotEmpty(EmojiCatalog.InGroup(group));
+    }
+
+    [Theory]
+    [InlineData("warning", "⚠")]
+    [InlineData("floppy", "💾")]
+    [InlineData("satellite antenna", "📡")]
+    public void SearchFindsThingsByName(string query, string expected)
+    {
+        var found = EmojiCatalog.Search(query);
+        Assert.Contains(found, e => e.Char.StartsWith(expected, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EveryTermHasToMatch()
+    {
+        // "red circle" should not return everything red plus every circle.
+        var found = EmojiCatalog.Search("red circle");
+        Assert.All(found, e =>
+        {
+            Assert.Contains("red", e.Name, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("circle", e.Name, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    [Fact]
+    public void PastingAnEmojiFindsItself()
+    {
+        var found = EmojiCatalog.Search("💾");
+        Assert.Equal("💾", Assert.Single(found).Char);
+    }
+
+    [Fact]
+    public void AnEmptySearchReturnsNothingRatherThanEverything()
+    {
+        Assert.Empty(EmojiCatalog.Search(""));
+        Assert.Empty(EmojiCatalog.Search("   "));
+        Assert.Empty(EmojiCatalog.Search(null));
+    }
+
+    [Fact]
+    public void SkinToneModifiersAreNotOffered()
+    {
+        // They are combining marks. On their own they render as a bare colour swatch,
+        // which is meaningless as an icon.
+        Assert.DoesNotContain(EmojiCatalog.All, e => e.Name.Contains("Modifier", StringComparison.OrdinalIgnoreCase));
+        foreach (var modifier in new[] { "\U0001F3FB", "\U0001F3FC", "\U0001F3FD", "\U0001F3FE", "\U0001F3FF" })
+            Assert.DoesNotContain(EmojiCatalog.All, e => e.Char == modifier);
+    }
+}
