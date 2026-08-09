@@ -146,7 +146,7 @@ monitoring works.
 | **Plex** | Server version and what is playing right now. |
 | **Tautulli** | Active Plex streams, how many are transcoding, and total bandwidth. |
 | **Bazarr** | How many episodes and movies are still missing subtitles. |
-| **Overseerr** / **Jellyseerr** | Version, and requests pending, approved or available. |
+| **Seerr** | Requests pending, approved and available. Formerly Overseerr and Jellyseerr. |
 | **NZBGet** | Download rate, queue size, free disk, and whether it is paused. |
 | **ErsatzTV** | Reachability and how many channels it is publishing. |
 | **Unmanic** | Pending tasks and how many workers are busy. |

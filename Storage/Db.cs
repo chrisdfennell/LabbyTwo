@@ -177,6 +177,11 @@ public sealed class Db
             for_minutes     INTEGER NOT NULL DEFAULT 0,
             enabled         INTEGER NOT NULL DEFAULT 1)
         """,
+
+        // 4 — Overseerr and Jellyseerr merged into Seerr, so the provider key changed.
+        // Without this an existing connection would come back as "no provider named
+        // overseerr is installed" and quietly stop being monitored.
+        "UPDATE connections SET provider = 'seerr' WHERE provider = 'overseerr'",
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

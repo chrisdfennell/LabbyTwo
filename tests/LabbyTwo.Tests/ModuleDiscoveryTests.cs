@@ -39,7 +39,7 @@ public class ModuleDiscoveryTests
             "proxmox", "truenas", "jellyfin", "qbittorrent",
             "homeassistant", "adguard", "nut", "unifi",
             "lidarr", "readarr", "prowlarr",
-            "bazarr", "tautulli", "nzbget", "overseerr", "ersatztv", "unmanic",
+            "bazarr", "tautulli", "nzbget", "seerr", "ersatztv", "unmanic",
         ];
 
         Assert.Equal(

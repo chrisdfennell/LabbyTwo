@@ -312,16 +312,18 @@ public sealed class NzbGetProvider(IHttpClientFactory httpFactory) : IConnection
 }
 
 /// <summary>
-/// Overseerr and Jellyseerr are the same application, so one provider covers both. The
-/// number worth watching is how many requests are sitting unapproved.
+/// Seerr — what Overseerr and Jellyseerr became when they merged. The API is unchanged, so
+/// this works against an older Overseerr or Jellyseerr install too. The number worth
+/// watching is how many requests are sitting unapproved.
 /// </summary>
-public sealed class OverseerrProvider(IHttpClientFactory httpFactory) : IConnectionProvider
+public sealed class SeerrProvider(IHttpClientFactory httpFactory) : IConnectionProvider
 {
-    public string Type => "overseerr";
-    public string DisplayName => "Overseerr / Jellyseerr";
+    // Renamed from "overseerr" in migration 4, which rewrites existing rows.
+    public string Type => "seerr";
+    public string DisplayName => "Seerr";
     public string Icon => "🎟️";
     public string Category => "Media";
-    public string Description => "Version, and how many requests are pending, approved or available.";
+    public string Description => "Requests pending, approved and available. Formerly Overseerr and Jellyseerr, and still works with either.";
 
     public IReadOnlyList<FieldSpec> Fields =>
     [
@@ -407,7 +409,7 @@ public sealed class OverseerrProvider(IHttpClientFactory httpFactory) : IConnect
 
         using var response = await http.SendAsync(request, ct);
         if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            throw new InvalidOperationException("Overseerr rejected the API key.");
+            throw new InvalidOperationException("Seerr rejected the API key.");
         response.EnsureSuccessStatusCode();
 
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));

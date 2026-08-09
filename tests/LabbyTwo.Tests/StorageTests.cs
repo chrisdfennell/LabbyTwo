@@ -451,6 +451,39 @@ public sealed class StorageTests : IDisposable
         Assert.Empty(await Get<HistoryStore>().LatestAsync("nobody", TimeSpan.FromHours(6)));
     }
 
+    // ---------- Migrations ----------
+
+    [Fact]
+    public async Task TheSeerrRenameRewritesAnExistingOverseerrConnection()
+    {
+        // Overseerr and Jellyseerr merged into Seerr, so the provider key changed. A row
+        // still saying "overseerr" would come back as "no such provider" and silently
+        // stop being monitored, which is the failure mode migrations exist to prevent.
+        var db = Get<Db>();
+        await db.EnsureSchemaAsync();
+
+        await using (var connection = await db.OpenAsync())
+        {
+            var insert = connection.CreateCommand();
+            insert.CommandText = """
+                INSERT INTO connections (id, provider, name, icon, enabled, sort, settings, alerts)
+                VALUES ('legacy', 'overseerr', 'Requests', '', 1, 0, '{}', 1);
+                PRAGMA user_version = 3;
+                """;
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        // Force the schema check to run again now that user_version says migration 4 is due.
+        var reopened = new Db(Options.Create(new LabbyOptions { DatabasePath = Path.Combine(_directory, "test.db") }),
+            new TestEnvironment(_directory));
+        await reopened.EnsureSchemaAsync();
+
+        await using var check = await reopened.OpenAsync();
+        var read = check.CreateCommand();
+        read.CommandText = "SELECT provider FROM connections WHERE id = 'legacy'";
+        Assert.Equal("seerr", (string)(await read.ExecuteScalarAsync())!);
+    }
+
     // ---------- App settings ----------
 
     [Fact]
