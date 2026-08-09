@@ -40,12 +40,37 @@ demo database, so they stay honest as the app changes.</sub>
 ## Install
 
 ```bash
-cp .env.example .env      # optional — set a timezone and a password
+curl -fsSL https://raw.githubusercontent.com/chrisdfennell/LabbyTwo/main/install.sh -o install.sh
+less install.sh      # it is somebody else's script and it runs Docker. Read it first.
+bash install.sh
+```
+
+Windows, with Docker Desktop:
+
+```powershell
+irm https://raw.githubusercontent.com/chrisdfennell/LabbyTwo/main/install.ps1 -OutFile install.ps1
+notepad install.ps1
+.\install.ps1
+```
+
+It checks Docker is running, clones to `~/labbytwo`, writes a `.env` with your timezone,
+builds, starts, and waits until the app actually answers before telling you it worked.
+**Run it again later to update** — it pulls, rebuilds and restarts, and never touches your
+`.env` or your data.
+
+`LABBY_PORT=5151 bash install.sh` if 5150 is taken; `LABBY_DIR=/opt/labbytwo` to put it
+somewhere else.
+
+Or do it by hand, which is all the script does:
+
+```bash
+git clone https://github.com/chrisdfennell/LabbyTwo.git && cd LabbyTwo
+cp .env.example .env      # optional — set a timezone, a port and a password
 docker compose up -d
 ```
 
-Open <http://localhost:5150>, click **Create a starter dashboard**, and start adding
-things. That's the whole setup.
+Then open <http://localhost:5150>, click **Create a starter dashboard**, and start adding
+things.
 
 Without Docker: `dotnet run`, then open the URL it prints.
 
