@@ -390,16 +390,32 @@ public class ProbeErrorTests
     }
 
     [Theory]
-    [InlineData("http://fennell-nas:8989")]
-    [InlineData("fennell-nas")]
-    [InlineData("http://sonarr.local:8989")]
-    public void ATimeoutAgainstAHostnameMentionsContainerDns(string target)
+    [InlineData("http://no-such-host.invalid:8989")]
+    [InlineData("no-such-host.invalid")]
+    public void ATimeoutAgainstAnUnresolvableNameSaysSo(string target)
     {
-        // The real report: a NAS resolves its own name via /etc/hosts, the container
-        // cannot, the lookup hangs, and it presents as a firewall problem.
+        // .invalid is reserved by RFC 2606 and never resolves, so this is deterministic
+        // rather than dependent on whoever runs the tests.
         var message = ProbeError.Describe(new TaskCanceledException(), target);
+        Assert.Contains("Timed out", message);
+        Assert.Contains("no-such-host.invalid", message);
         Assert.Contains("IP address", message);
-        Assert.Contains("container", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ATimeoutAgainstAResolvableNameReportsWhatItResolvedTo()
+    {
+        // localhost resolves everywhere, often to both 127.0.0.1 and ::1 — which is the
+        // multi-address case that made a real NAS look like it had a firewall problem.
+        var message = ProbeError.Describe(new TaskCanceledException(), "http://localhost:8989");
+
+        Assert.Contains("localhost", message);
+        Assert.Contains("resolve", message, StringComparison.OrdinalIgnoreCase);
+        // Either wording is correct; which one depends on the host's resolver.
+        Assert.True(
+            message.Contains("addresses in this container") || message.Contains("resolves to 127.0.0.1")
+            || message.Contains("resolves to ::1"),
+            $"Expected the message to name what it resolved to. Got: {message}");
     }
 
     [Theory]

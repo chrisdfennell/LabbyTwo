@@ -31,10 +31,8 @@ public static class ProbeError
             // a firewall. Containers inherit none of those, so it is worth naming here: it
             // is the single most common reason a NAS install cannot see its own services.
             if (LooksLikeHostname(target))
-                return $"Timed out — nothing answered{where}. If that name resolves on your NAS but not " +
-                       "inside a container (an /etc/hosts entry, NetBIOS or mDNS), the lookup hangs and " +
-                       "looks exactly like this. Try the IP address instead. Otherwise check the port, and " +
-                       "that a firewall is not silently dropping the connection.";
+                return $"Timed out — nothing answered{where}.{DescribeResolution(target)} Otherwise check the " +
+                       "address and port, and that a firewall is not silently dropping the connection.";
 
             return $"Timed out — nothing answered{where}. Check the address and port, and that a " +
                    "firewall is not silently dropping the connection.";
@@ -62,6 +60,57 @@ public static class ProbeError
             return $"TLS handshake failed{where}. If that port serves plain HTTP, use http:// rather than https://.";
 
         return root.Message;
+    }
+
+    /// <summary>
+    /// Looks the name up and says what came back. Worth a DNS query because this only runs
+    /// after something has already failed, and because the answer is usually the whole
+    /// story: a NAS with a Container Station bridge per stack maps its own hostname to
+    /// every one of them, the addresses are tried in order, and the real LAN address can
+    /// be twentieth. That times out looking exactly like a firewall.
+    /// </summary>
+    private static string DescribeResolution(string? target)
+    {
+        var host = HostOf(target);
+        if (host is null)
+            return "";
+
+        try
+        {
+            var lookup = System.Net.Dns.GetHostAddressesAsync(host);
+            // Bounded: this is an error path, but it must not add a second stall to one.
+            if (!lookup.Wait(TimeSpan.FromSeconds(2)))
+                return $" The name \"{host}\" did not resolve quickly, which alone can cause this — try the IP address.";
+
+            var addresses = lookup.Result;
+            if (addresses.Length == 0)
+                return $" \"{host}\" resolves to nothing here — try the IP address.";
+
+            if (addresses.Length == 1)
+                return $" \"{host}\" resolves to {addresses[0]} here, so check that something is listening there.";
+
+            // No trailing ellipsis when the sample already is every address.
+            var sample = string.Join(", ", addresses.Take(3).Select(a => a.ToString()))
+                         + (addresses.Length > 3 ? ", …" : "");
+            return $" \"{host}\" resolves to {addresses.Length} addresses in this container ({sample}) and they " +
+                   "are tried in order, so if the one that serves this is not near the front the attempt times out " +
+                   "before reaching it. Use the address directly.";
+        }
+        catch
+        {
+            return $" \"{host}\" could not be resolved in this container — containers do not inherit the host's " +
+                   "/etc/hosts, NetBIOS or mDNS. Use the IP address.";
+        }
+    }
+
+    /// <summary>The host part of a URL, or the target itself if it is already a bare name.</summary>
+    private static string? HostOf(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+            return null;
+        var host = Uri.TryCreate(target, UriKind.Absolute, out var uri) ? uri.Host : target.Trim();
+        host = host.Trim('[', ']');
+        return host.Length > 0 && !System.Net.IPAddress.TryParse(host, out _) ? host : null;
     }
 
     /// <summary>
