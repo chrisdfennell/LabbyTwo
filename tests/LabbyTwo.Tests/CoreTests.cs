@@ -539,7 +539,7 @@ public class ContainerHintTests
 public class UnitsTests
 {
     private static readonly MetricSpec Temp = new("temp_outdoor_c", "Outdoor temperature", "°C", 1);
-    private static readonly MetricSpec Wind = new("gust_mph", "Wind gust", "mph", 1);
+    private static readonly MetricSpec Wind = new("gust_mph", "Wind gust", " mph", 1);
     private static readonly MetricSpec Disk = new("disk_percent", "Disk used", "%");
 
     [Fact]
@@ -596,11 +596,21 @@ public class UnitsTests
     }
 
     [Fact]
+    public void APassThroughUnitKeepsTheSpacingTheMetricDeclared()
+    {
+        // A hardcoded literal here turned every " mph" into "0mph" on the page, whatever
+        // the provider asked for.
+        Assert.Equal(" mph", Units.Display(40, " mph", Units.Imperial).Unit);
+        Assert.Equal(" inHg", Units.Display(30, " inHg", Units.Imperial).Unit);
+        Assert.Equal("°C", Units.Display(20, "°C", Units.Metric).Unit);
+    }
+
+    [Fact]
     public void FormattingCarriesTheConvertedUnit()
     {
         Assert.Equal("32.0°F", Units.Format(Temp, 0, Units.Imperial));
         Assert.Equal("0.0°C", Units.Format(Temp, 0, Units.Metric));
-        Assert.Equal("40.0mph", Units.Format(Wind, 40, Units.Imperial));
+        Assert.Equal("40.0 mph", Units.Format(Wind, 40, Units.Imperial));
         Assert.Equal("90%", Units.Format(Disk, 90, Units.Imperial));
     }
 

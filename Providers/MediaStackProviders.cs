@@ -27,7 +27,7 @@ public sealed class BazarrProvider(IHttpClientFactory httpFactory) : IConnection
         new("subtitles_wanted_episodes", "Episodes wanting subtitles"),
         new("subtitles_wanted_movies", "Movies wanting subtitles"),
         new("providers_failing", "Subtitle providers failing"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>
@@ -130,7 +130,7 @@ public sealed class TautulliProvider(IHttpClientFactory httpFactory) : IConnecti
         new("transcode_count", "Transcoding"),
         new("direct_play_count", "Direct play"),
         new("bandwidth_mbps", "Total bandwidth", " Mbps", 1),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>
@@ -233,7 +233,7 @@ public sealed class NzbGetProvider(IHttpClientFactory httpFactory) : IConnection
         new("remaining_mb", "Queue remaining", " MB"),
         new("free_disk_gb", "Free disk", " GB", 1),
         new("download_paused", "Paused"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>
@@ -337,7 +337,7 @@ public sealed class SeerrProvider(IHttpClientFactory httpFactory) : IConnectionP
         new("requests_pending", "Requests pending"),
         new("requests_total", "Requests total"),
         new("requests_available", "Requests available"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>
@@ -443,7 +443,7 @@ public sealed class ErsatzTvProvider(IHttpClientFactory httpFactory) : IConnecti
     public IReadOnlyList<MetricSpec> Metrics =>
     [
         new("channel_count", "Channels"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
@@ -508,7 +508,7 @@ public sealed class UnmanicProvider(IHttpClientFactory httpFactory) : IConnectio
     [
         new("pending_tasks", "Pending tasks"),
         new("workers_active", "Workers busy"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

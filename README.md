@@ -237,6 +237,9 @@ The sidebar is literally a table. Add, rename, reorder, hide, delete. Four kinds
 - **Embedded page** — a full-height iframe of another app's web UI. One tab kind covers
   Portainer, code-server, a web terminal, whatever — no integration required.
 - **Notes** — markdown notes and runbooks with a live preview.
+- **Weather station** — a whole page for one Ambient Weather station: current readings,
+  radar, today's extremes with sunrise and sunset, seven charts over 24h / 48h / 7d, and
+  the raw readings. Built from the same widgets a dashboard tab can use, arranged for you.
 - **Status page** — uptime for everything monitored: 24h/7d/30d percentages, a daily bar
   strip, and a log of every time something went down or came back. Percentages are
   measured from when monitoring actually started, marked `*`, rather than crediting a
@@ -262,6 +265,8 @@ greys out the rest with the reason.
 | Embedded page | nothing — an iframe in a card |
 | Clock | nothing |
 | Weather station | Ambient Weather — current conditions |
+| Weather — today's extremes | Ambient Weather — high/low, peak gust, rain, max UV, peak solar, sunrise and sunset |
+| Readings table | any connection — the raw recorded numbers, foldable |
 | Weather — today | Ambient Weather — high, low, where now sits between them, rain, hourly trend |
 | Wind | Ambient Weather — a compass dial with speed, gust and bearing |
 | Inside vs outside | Ambient Weather — both temperatures, and whether to open the windows |
@@ -472,9 +477,22 @@ diff. Nothing is contacted until you press the button — LabbyTwo does not phon
 There is deliberately no button that performs the update. LabbyTwo runs inside the
 container an update replaces, and no process can rebuild and recreate itself; doing it from
 in there would mean mounting the Docker socket, which is root on the host. That is a poor
-trade for saving one command. If you want updates to be hands-off, publish the image from
-CI and point [Watchtower](https://containrrr.dev/watchtower/) at it — that is the job it
-exists for, and it runs as a separate container rather than giving the dashboard the keys.
+trade for saving one command. ### Hands-off updates
+
+If you would rather not run anything by hand, publish images from CI and let
+[Watchtower](https://containrrr.dev/watchtower/) do it. Three steps:
+
+1. Set `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` in the repository's Actions secrets. The
+   workflow that builds and pushes `linux/amd64` and `linux/arm64` images is already there
+   and skips publishing until those exist.
+2. In `docker-compose.yml`, comment out the `build:` block and uncomment `image:`.
+3. Copy the Watchtower service out of `docker-compose.override.yml.example`.
+
+Then a push to `main` builds an image, and Watchtower pulls it on your next interval.
+
+Watchtower holds the Docker socket, which is the whole point of doing it this way: the
+thing with root on your host is a small purpose-built tool, not the dashboard that stores
+your NAS credentials and answers to everything on your LAN.
 
 ## Backing up and sharing
 

@@ -33,7 +33,7 @@ public sealed class PiholeProvider(IHttpClientFactory httpFactory) : IConnection
         new("blocklist_size", "Domains on blocklist"),
         new("clients", "Unique clients"),
         new("blocking_enabled", "Blocking enabled"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>

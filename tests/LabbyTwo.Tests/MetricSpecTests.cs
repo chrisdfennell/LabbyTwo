@@ -8,7 +8,7 @@ namespace LabbyTwo.Tests;
 public class MetricSpecTests
 {
     [Theory]
-    [InlineData("latency_ms", "Response time", "ms")]
+    [InlineData("latency_ms", "Response time", " ms")]
     [InlineData("cpu_percent", "CPU", "%")]
     public void WellKnownNamesAreRecognised(string key, string label, string unit)
     {
@@ -18,9 +18,9 @@ public class MetricSpecTests
     }
 
     [Theory]
-    [InlineData("fan_rpm", "Fan", "rpm")]
-    [InlineData("pool_used_gb", "Pool used", "GB")]
-    [InlineData("inverter_watts", "Inverter", "W")]
+    [InlineData("fan_rpm", "Fan", " rpm")]
+    [InlineData("pool_used_gb", "Pool used", " GB")]
+    [InlineData("inverter_watts", "Inverter", " W")]
     [InlineData("printer_bed_c", "Printer bed", "°C")]
     public void ATrailingUnitInTheNameIsHonoured(string key, string label, string unit)
     {
@@ -99,7 +99,7 @@ public class MetricSpecTests
         Assert.DoesNotContain("# a comment", keys);
 
         // And the naming convention still gives them units nobody had to declare.
-        Assert.Equal("W", registry.Metric(connection, "output_watts").Unit);
+        Assert.Equal(" W", registry.Metric(connection, "output_watts").Unit);
     }
 
     [Fact]

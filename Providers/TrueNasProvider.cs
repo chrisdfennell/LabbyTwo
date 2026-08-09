@@ -30,7 +30,7 @@ public sealed class TrueNasProvider(IHttpClientFactory httpFactory) : IConnectio
         new("pool_count", "Pools"),
         new("pools_degraded", "Pools not healthy"),
         new("uptime_days", "Uptime", " days", 1),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>

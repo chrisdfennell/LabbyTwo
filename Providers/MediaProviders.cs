@@ -28,7 +28,7 @@ public sealed class JellyfinProvider(IHttpClientFactory httpFactory) : IConnecti
     [
         new("stream_count", "Active streams"),
         new("transcode_count", "Transcoding"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public sealed record Session(string User, string Item, string Device, double PercentDone, bool Transcoding);
@@ -156,7 +156,7 @@ public sealed class QBittorrentProvider(IHttpClientFactory httpFactory) : IConne
         new("upload_mbps", "Upload", " Mbps", 2),
         new("torrents_downloading", "Downloading"),
         new("torrents_seeding", "Seeding"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

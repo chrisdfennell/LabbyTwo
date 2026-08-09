@@ -1,0 +1,132 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+@inject AppSettingsStore AppSettings
+
+@* Generic on purpose: any connection, any metrics. A weather station is where you most
+   want the raw numbers, but "what did this actually record" is a fair question of a UPS
+   or a NAS too. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (_rows.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing recorded yet.</p>
+}
+else
+{
+    <details open="@StartOpen">
+        <summary class="readings-summary">
+            @_rows.Count reading@(_rows.Count == 1 ? "" : "s") · @string.Join(", ", _columns.Select(c => c.Label))
+        </summary>
+        <div class="readings-scroll mt-2">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        @foreach (var column in _columns)
+                        {
+                            <th class="text-end">@column.Label</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _rows)
+                    {
+                        <tr>
+                            <td class="tile-meta">@row.At.ToString("d MMM HH:mm")</td>
+                            @foreach (var column in _columns)
+                            {
+                                <td class="text-end">
+                                    @(row.Values.TryGetValue(column.Key, out var value)
+                                        ? Units.Format(column.Spec, value, _units, 1)
+                                        : "—")
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </details>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    /// <summary>Set by the weather tab so the whole page shares one range control.</summary>
+    [Parameter] public int? HoursOverride { get; set; }
+
+    /// <summary>Comma-separated metric names, overriding the widget's own setting.</summary>
+    [Parameter] public string? MetricsOverride { get; set; }
+
+    private sealed record Column(string Key, string Label, MetricSpec Spec);
+    private sealed record Row(DateTimeOffset At, Dictionary<string, double> Values);
+
+    private List<Column> _columns = [];
+    private List<Row> _rows = [];
+    private string _units = Appearance.Default.UnitSystem;
+
+    private bool StartOpen => Context.Widget.Settings.GetBool("open", false);
+    private int Hours => HoursOverride ?? Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 240), 10, 2000);
+
+    private IEnumerable<string> MetricNames =>
+        (MetricsOverride ?? Context.Widget.Settings.Get("metrics"))
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        var wanted = MetricNames.ToList();
+        if (wanted.Count == 0)
+        {
+            // Nothing named: show whatever the connection actually records, minus the
+            // probe's own latency, which is about LabbyTwo rather than about the thing.
+            wanted = [.. (await History.MetricsAsync(Context.Connection.Id))
+                .Where(m => m != "latency_ms")
+                .Take(8)];
+        }
+
+        _columns = [.. wanted.Select(m => new Column(m, Registry.Metric(Context.Connection, m).Label,
+                                                     Registry.Metric(Context.Connection, m)))];
+
+        // Readings arrive per metric; the table wants them per timestamp. Grouping by the
+        // instant works because one probe writes every metric with the same stamp.
+        var window = TimeSpan.FromHours(Hours);
+        var byTime = new SortedDictionary<DateTimeOffset, Dictionary<string, double>>();
+
+        foreach (var column in _columns)
+        {
+            foreach (var sample in await History.SamplesAsync(Context.Connection.Id, column.Key, window))
+            {
+                if (!byTime.TryGetValue(sample.At, out var row))
+                    byTime[sample.At] = row = [];
+                row[column.Key] = sample.Value;
+            }
+        }
+
+        _rows = [.. byTime.Reverse().Take(Limit).Select(pair => new Row(pair.Key, pair.Value))];
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

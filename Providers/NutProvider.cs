@@ -34,9 +34,9 @@ public sealed class NutProvider : IConnectionProvider
         new("battery_percent", "Battery charge", "%"),
         new("battery_runtime_minutes", "Runtime left", " min"),
         new("load_percent", "Load", "%"),
-        new("input_volts", "Input voltage", "V", 1),
+        new("input_volts", "Input voltage", " V", 1),
         new("on_battery", "Running on battery"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>

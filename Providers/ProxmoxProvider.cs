@@ -35,7 +35,7 @@ public sealed class ProxmoxProvider(IHttpClientFactory httpFactory) : IConnectio
         new("uptime_days", "Uptime", " days", 1),
         new("vms_running", "VMs running"),
         new("containers_running", "Containers running"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>

@@ -55,6 +55,28 @@ services:
     # environment:
     #   ASPNETCORE_HTTP_PORTS: 5150
 
+    # ---- hands-off updates ------------------------------------------------------------
+    #
+    # Watchtower watches a registry and replaces this container when a newer image appears.
+    # It cannot build from source, so it only works once your CI publishes images: set
+    # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the repository's Actions secrets, then
+    # switch the service from building to pulling by uncommenting the image line in
+    # docker-compose.yml and commenting out its build block.
+    #
+    # image: yourname/labbytwo:latest
+    #
+    # Then add the watcher below. It holds the Docker socket rather than LabbyTwo doing
+    # so, which is the point: the thing with the keys is a small purpose-built tool, not
+    # the dashboard that stores your NAS credentials and answers to your whole LAN.
+
+# services:
+#   watchtower:
+#     image: containrrr/watchtower
+#     restart: unless-stopped
+#     command: --cleanup --interval 3600 labbytwo-labbytwo-1
+#     volumes:
+#       - /var/run/docker.sock:/var/run/docker.sock
+
 # Every external network named above has to be declared here too. "external" means
 # Compose attaches to a network something else created, rather than making its own.
 #

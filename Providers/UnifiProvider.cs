@@ -38,7 +38,7 @@ public sealed class UnifiProvider(IHttpClientFactory httpFactory) : IConnectionP
         new("devices_offline", "Devices offline"),
         new("download_mbps", "WAN download", " Mbps", 1),
         new("upload_mbps", "WAN upload", " Mbps", 1),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

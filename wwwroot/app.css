@@ -689,3 +689,36 @@ h1[tabindex]:focus { outline: none; }
     background: var(--panel);
     padding: .6rem;
 }
+
+/* ---------- weather station page ---------- */
+
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: var(--gap);
+}
+.stat-grid .widget { padding: .75rem 1rem; }
+.stat-value { font-size: 1.5rem; font-weight: 650; line-height: 1.2; }
+
+.summary-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 1rem;
+}
+
+/* Two lines on one axis need naming, or neither can be read. */
+.series-key { font-weight: 600; margin-right: .5rem; }
+.series-key::before {
+    content: "";
+    display: inline-block;
+    width: .7rem;
+    height: .2rem;
+    border-radius: 2px;
+    margin-right: .3rem;
+    vertical-align: middle;
+}
+.series-primary::before { background: var(--accent); }
+.series-compare::before { background: var(--warn); }
+
+.readings-summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+.readings-scroll { max-height: 22rem; overflow: auto; }

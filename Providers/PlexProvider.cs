@@ -25,7 +25,7 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
     public IReadOnlyList<MetricSpec> Metrics =>
     [
         new("stream_count", "Active streams"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

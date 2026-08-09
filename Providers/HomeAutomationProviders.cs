@@ -37,7 +37,7 @@ public sealed class HomeAssistantProvider(IHttpClientFactory httpFactory) : ICon
         .. ParseEntityMap(connection.Settings.Get("entities")).Select(e => MetricSpec.Fallback(e.Name)),
     ];
 
-    public IReadOnlyList<MetricSpec> Metrics => [new("latency_ms", "Response time", "ms")];
+    public IReadOnlyList<MetricSpec> Metrics => [new("latency_ms", "Response time", " ms")];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {
@@ -174,8 +174,8 @@ public sealed class AdGuardProvider(IHttpClientFactory httpFactory) : IConnectio
         new("blocked_today", "Blocked today"),
         new("blocked_percent", "Blocked", "%", 1),
         new("blocking_enabled", "Protection enabled"),
-        new("avg_process_ms", "Average processing time", "ms", 1),
-        new("latency_ms", "Response time", "ms"),
+        new("avg_process_ms", "Average processing time", " ms", 1),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

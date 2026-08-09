@@ -48,7 +48,7 @@ public sealed class HttpEndpointProvider(IHttpClientFactory httpFactory) : IConn
             Help: "Optional, one per line as Name: value."),
     ];
 
-    public IReadOnlyList<MetricSpec> Metrics => [new("latency_ms", "Response time", "ms")];
+    public IReadOnlyList<MetricSpec> Metrics => [new("latency_ms", "Response time", " ms")];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {

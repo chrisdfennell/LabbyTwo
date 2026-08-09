@@ -1,0 +1,136 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+@inject AppSettingsStore AppSettings
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a weather station.</p>
+}
+else
+{
+    <div class="summary-strip">
+        @foreach (var cell in _cells)
+        {
+            <div>
+                <div class="tile-meta">@cell.Label</div>
+                <div class="tile-name">@cell.Value</div>
+            </div>
+        }
+
+        @if (_sun is { } sun)
+        {
+            <div>
+                <div class="tile-meta">Sun</div>
+                <div class="tile-name">
+                    @if (sun.PolarDay)
+                    {
+                        <text>up all day</text>
+                    }
+                    else if (sun.PolarNight)
+                    {
+                        <text>down all day</text>
+                    }
+                    else
+                    {
+                        <text>@sun.Sunrise?.ToString("HH:mm") · @sun.Sunset?.ToString("HH:mm")</text>
+                    }
+                </div>
+                @if (sun.Daylight is { } daylight)
+                {
+                    <div class="tile-meta">@($"{(int)daylight.TotalHours}h {daylight.Minutes}m of light")</div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    /// <summary>Set by the weather tab so the whole page shares one range control.</summary>
+    [Parameter] public int? HoursOverride { get; set; }
+
+    private sealed record Cell(string Label, string Value);
+
+    private List<Cell> _cells = [];
+    private SunTimes.Day? _sun;
+    private string _units = Appearance.Default.UnitSystem;
+
+    private int Hours => HoursOverride ?? Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
+    private double Latitude => Context.Widget.Settings.GetDouble("latitude");
+    private double Longitude => Context.Widget.Settings.GetDouble("longitude");
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        var window = TimeSpan.FromHours(Hours);
+        var cells = new List<Cell>();
+
+        // High and low from recorded history rather than from the station: Ambient reports
+        // today's extremes only for some fields, and history is true for every metric.
+        var temperatures = await History.SamplesAsync(Context.Connection.Id, "temp_outdoor_c", window);
+        if (temperatures.Count > 0)
+        {
+            var spec = Registry.Metric(Context.Connection, "temp_outdoor_c");
+            cells.Add(new Cell($"High / low ({Hours}h)",
+                $"{Units.Format(spec, temperatures.Max(s => s.Value), _units, 1)} / " +
+                $"{Units.Format(spec, temperatures.Min(s => s.Value), _units, 1)}"));
+        }
+
+        await AddPeak(cells, "gust_mph", "Peak gust", window);
+        await AddLatest(cells, "rain_in", "Rain today");
+        await AddPeak(cells, "uv_index", "Max UV", window, decimals: 0);
+        await AddPeak(cells, "solar_wm2", "Peak solar", window, decimals: 0);
+
+        _cells = cells;
+
+        // Only computable with a position, and a wrong one is worse than none.
+        _sun = Latitude is not 0 || Longitude is not 0
+            ? SunTimes.For(DateOnly.FromDateTime(DateTime.Now), Latitude, Longitude, DateTimeOffset.Now.Offset)
+            : null;
+    }
+
+    private async Task AddPeak(List<Cell> cells, string metric, string label, TimeSpan window, int? decimals = null)
+    {
+        var samples = await History.SamplesAsync(Context.Connection!.Id, metric, window);
+        if (samples.Count == 0)
+            return;
+        var spec = Registry.Metric(Context.Connection, metric);
+        cells.Add(new Cell(label, Units.Format(spec, samples.Max(s => s.Value), _units, decimals)));
+    }
+
+    private async Task AddLatest(List<Cell> cells, string metric, string label)
+    {
+        var live = Health.State(Context.Connection!.Id)?.Metrics;
+        double? value = live?.TryGetValue(metric, out var reading) == true ? reading : null;
+
+        if (value is null)
+        {
+            var recorded = await History.LatestAsync(Context.Connection.Id, TimeSpan.FromHours(6));
+            value = recorded.TryGetValue(metric, out var last) ? last : null;
+        }
+
+        if (value is { } found)
+            cells.Add(new Cell(label, Units.Format(Registry.Metric(Context.Connection, metric), found, _units)));
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

@@ -23,8 +23,8 @@ public sealed record MetricSpec(string Key, string Label, string Unit = "", int 
     /// </summary>
     public static readonly IReadOnlyList<MetricSpec> WellKnown =
     [
-        new("latency_ms", "Response time", "ms"),
-        new("rtt_ms", "Round-trip time", "ms", 1),
+        new("latency_ms", "Response time", " ms"),
+        new("rtt_ms", "Round-trip time", " ms", 1),
         new("cpu_percent", "CPU", "%"),
         new("ram_percent", "Memory", "%"),
         new("disk_percent", "Disk used", "%"),
@@ -69,21 +69,21 @@ public sealed record MetricSpec(string Key, string Label, string Unit = "", int 
     [
         ("_percent", "%", 0),
         ("_pct", "%", 0),
-        ("_ms", "ms", 0),
+        ("_ms", " ms", 0),
         ("_celsius", "°C", 1),
         ("_c", "°C", 1),
         ("_f", "°F", 1),
-        ("_mbps", "Mbps", 1),
-        ("_kbps", "kbps", 0),
-        ("_rpm", "rpm", 0),
-        ("_watts", "W", 0),
-        ("_volts", "V", 1),
-        ("_gb", "GB", 1),
-        ("_mb", "MB", 0),
-        ("_bytes", "B", 0),
-        ("_seconds", "s", 0),
+        ("_mbps", " Mbps", 1),
+        ("_kbps", " kbps", 0),
+        ("_rpm", " rpm", 0),
+        ("_watts", " W", 0),
+        ("_volts", " V", 1),
+        ("_gb", " GB", 1),
+        ("_mb", " MB", 0),
+        ("_bytes", " B", 0),
+        ("_seconds", " s", 0),
         ("_days", " days", 1),
-        ("_hours", "h", 1),
+        ("_hours", " h", 1),
         ("_count", "", 0),
     ];
 }

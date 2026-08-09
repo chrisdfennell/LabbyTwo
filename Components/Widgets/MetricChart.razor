@@ -2,13 +2,14 @@
 @inject HealthMonitor Health
 @inject HistoryStore History
 @inject Registry Registry
+@inject AppSettingsStore AppSettings
 @using System.Globalization
 
 @if (Context.Connection is null)
 {
     <p class="tile-meta mb-0">Not bound to a connection.</p>
 }
-else if (_samples.Count < 2)
+else if (_primary.Count < 2)
 {
     <p class="tile-meta mb-0">
         Nothing recorded yet for <code>@Metric</code>.
@@ -20,11 +21,24 @@ else if (_samples.Count < 2)
 }
 else
 {
-    <div class="d-flex justify-content-between tile-meta mb-1">
-        <span>@Spec.Label · last @Hours h</span>
-        <span>now @Format(_samples[^1].Value) · peak @Format(_max)</span>
+    <div class="d-flex justify-content-between tile-meta mb-1 flex-wrap gap-2">
+        <span>
+            @if (_comparePath.Length > 0)
+            {
+                @* Two lines share one axis, so the legend has to say which is which. *@
+                <span class="series-key series-primary">@Spec.Label</span>
+                <span class="series-key series-compare">@CompareSpec.Label</span>
+            }
+            else
+            {
+                @Spec.Label
+            }
+            <span class="opacity-50">· last @Hours h</span>
+        </span>
+        <span>now @Reading(_primary[^1].Value) · peak @Reading(_high)</span>
     </div>
-    <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%; height:150px" role="img"
+
+    <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%; height:@(Height)px" role="img"
          aria-label="@Spec.Label over the last @Hours hours">
         @* Three gridlines are enough to read a level off without becoming graph paper. *@
         @foreach (var fraction in new[] { 0.25, 0.5, 0.75 })
@@ -32,37 +46,59 @@ else
             var y = (40 - fraction * 36 - 2).ToString("0.##", CultureInfo.InvariantCulture);
             <line x1="0" y1="@y" x2="100" y2="@y" stroke="var(--edge)" stroke-width="0.4" vector-effect="non-scaling-stroke" />
         }
-        <polygon points="@($"0,40 {_points} 100,40")" fill="var(--accent)" opacity="0.14" />
-        <polyline points="@_points" fill="none" stroke="var(--accent)" stroke-width="1.5"
+
+        <polygon points="@($"0,40 {_primaryPath} 100,40")" fill="var(--accent)" opacity="0.14" />
+        <polyline points="@_primaryPath" fill="none" stroke="var(--accent)" stroke-width="1.5"
                   vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+
+        @if (_comparePath.Length > 0)
+        {
+            @* No fill on the second series: two translucent areas stacked read as a third
+               colour and stop either line being followable. *@
+            <polyline points="@_comparePath" fill="none" stroke="var(--warn)" stroke-width="1.5"
+                      vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+        }
     </svg>
+
     <div class="d-flex justify-content-between tile-meta">
-        <span>@_samples[0].At.ToString("HH:mm")</span>
-        <span>@_samples[^1].At.ToString("HH:mm")</span>
+        <span>@_primary[0].At.ToString("HH:mm")</span>
+        <span>@_primary[^1].At.ToString("HH:mm")</span>
     </div>
 }
 
 @code {
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
-    private IReadOnlyList<HistoryStore.Sample> _samples = [];
+    /// <summary>Set by the weather tab so every chart on that page shares one range control.</summary>
+    [Parameter] public int? HoursOverride { get; set; }
+
+    [Parameter] public int Height { get; set; } = 150;
+
+    private IReadOnlyList<HistoryStore.Sample> _primary = [];
     private IReadOnlyList<string> _available = [];
-    private string _points = "";
-    private double _max;
+    private string _primaryPath = "";
+    private string _comparePath = "";
+    private double _high;
+    private string _units = Appearance.Default.UnitSystem;
 
     private string Metric => Context.Widget.Settings.Get("metric", "latency_ms");
+    private string CompareMetric => Context.Widget.Settings.Get("compare");
     private MetricSpec Spec => Registry.Metric(Context.Connection, Metric);
-    private int Hours => Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
+    private MetricSpec CompareSpec => Registry.Metric(Context.Connection, CompareMetric);
+
+    private int Hours => HoursOverride
+        ?? Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
 
     // Keep a decimal up to three figures: a temperature of 41.5 reading as "42" looks
-    // like a rounding bug, while a latency of 250.4 ms gains nothing from the ".4".
-    private string Format(double value) =>
-        Spec.Format(value, Math.Abs(value) < 100 ? 1 : 0);
+    // like a rounding bug, while a latency of 250.4 ms gains nothing from the ".4". Never
+    // below what the metric asks for, though — 0.01 in of rain reading as 0.0 is worse.
+    private string Reading(double value) =>
+        Units.Format(Spec, value, _units, Math.Max(Spec.Decimals, Math.Abs(value) < 100 ? 1 : 0));
 
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
-        await LoadAsync();
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
     }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
@@ -71,25 +107,42 @@ else
     {
         if (Context.Connection is null)
             return;
-        _samples = await History.SamplesAsync(Context.Connection.Id, Metric, TimeSpan.FromHours(Hours));
-        if (_samples.Count < 2)
+
+        var window = TimeSpan.FromHours(Hours);
+        _primary = await History.SamplesAsync(Context.Connection.Id, Metric, window);
+        _comparePath = "";
+
+        if (_primary.Count < 2)
         {
             _available = await History.MetricsAsync(Context.Connection.Id);
             return;
         }
 
-        var values = _samples.Select(s => s.Value).ToList();
-        var min = values.Min();
-        _max = values.Max();
-        var range = _max - min;
-        var scale = range > 0 ? range : 1;
-        var offset = range > 0 ? min : min - 0.5;
+        var compare = CompareMetric is { Length: > 0 } second
+            ? await History.SamplesAsync(Context.Connection.Id, second, window)
+            : [];
 
-        var step = 100d / (_samples.Count - 1);
-        _points = string.Join(' ', values.Select((value, index) =>
+        // Both series are drawn against one scale, so the extremes must come from both —
+        // otherwise the second line runs off the top of the box.
+        var values = _primary.Select(s => s.Value).Concat(compare.Select(s => s.Value)).ToList();
+        var low = values.Min();
+        _high = values.Max();
+        var range = _high - low;
+        var scale = range > 0 ? range : 1;
+        var offset = range > 0 ? low : low - 0.5;
+
+        _primaryPath = Plot(_primary, offset, scale);
+        if (compare.Count >= 2)
+            _comparePath = Plot(compare, offset, scale);
+    }
+
+    private static string Plot(IReadOnlyList<HistoryStore.Sample> samples, double offset, double scale)
+    {
+        var step = 100d / Math.Max(1, samples.Count - 1);
+        return string.Join(' ', samples.Select((sample, index) =>
         {
             var x = index * step;
-            var y = 38 - (value - offset) / scale * 36;
+            var y = 38 - (sample.Value - offset) / scale * 36;
             return $"{x.ToString("0.##", CultureInfo.InvariantCulture)},{y.ToString("0.##", CultureInfo.InvariantCulture)}";
         }));
     }

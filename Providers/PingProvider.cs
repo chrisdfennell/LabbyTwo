@@ -18,7 +18,7 @@ public sealed class PingProvider : IConnectionProvider
         new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "4"),
     ];
 
-    public IReadOnlyList<MetricSpec> Metrics => [new("rtt_ms", "Round-trip time", "ms", 1)];
+    public IReadOnlyList<MetricSpec> Metrics => [new("rtt_ms", "Round-trip time", " ms", 1)];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {

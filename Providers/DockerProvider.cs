@@ -59,7 +59,7 @@ public sealed class DockerProvider : IConnectionProvider
     [
         new("container_count", "Containers running"),
         new("container_total", "Containers defined"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

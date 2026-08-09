@@ -44,6 +44,26 @@ public sealed class NotesTabKind : ITabKind
     public Type Component => typeof(NotesTab);
 }
 
+public sealed class WeatherStationTabKind : ITabKind
+{
+    public string Kind => "weather-station";
+    public string DisplayName => "Weather station";
+    public string Icon => "🌦️";
+    public string Description => "A whole page for one Ambient Weather station — readings, radar, today's extremes and history.";
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("connection", "Weather station", FieldKind.Text,
+            Help: "Leave blank to use the only Ambient Weather connection you have."),
+        new("latitude", "Latitude", FieldKind.Text, "39.7392",
+            Help: "Decimal degrees. Used for the radar and for sunrise and sunset, which are computed here rather than fetched."),
+        new("longitude", "Longitude", FieldKind.Text, "-104.9903"),
+        new("radar", "Show radar", FieldKind.Bool, Default: "true"),
+        new("radar_source", "Radar source", FieldKind.Select, Default: "rainviewer", Options: RadarSource.Options),
+        new("radar_zoom", "Radar zoom", FieldKind.Number, Default: "7"),
+    ];
+    public Type Component => typeof(WeatherStationTab);
+}
+
 public sealed class StatusTabKind : ITabKind
 {
     public string Kind => TabKinds.Status;

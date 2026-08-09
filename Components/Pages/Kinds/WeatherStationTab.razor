@@ -1,0 +1,276 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+@inject AppSettingsStore AppSettings
+
+@* A whole page for one weather station, rather than fifteen widgets to arrange by hand.
+   Everything on it is built from the same reusable widgets available on a dashboard tab —
+   this kind only decides the layout and owns the one range control they all share. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "🌤️" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_station is null)
+            {
+                <text>No weather station chosen — edit this tab and pick one.</text>
+            }
+            else
+            {
+                @_station.Name
+                @if (_lastReport is { } at)
+                {
+                    <text> — last report @at.ToString("HH:mm:ss")</text>
+                }
+            }
+        </p>
+    </div>
+</div>
+
+@if (_station is null)
+{
+    <div class="empty-state">
+        <p class="mb-3">This tab needs an Ambient Weather connection.</p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    </div>
+}
+else
+{
+    <div class="stat-grid mb-3">
+        @foreach (var tile in Tiles)
+        {
+            <div class="widget">
+                <div class="tile-meta">@tile.Label</div>
+                <div class="stat-value">@tile.Value</div>
+            </div>
+        }
+    </div>
+
+    @if (ShowRadar)
+    {
+        <div class="widget mb-3">
+            <div class="widget-head"><h2 class="widget-title">Radar</h2></div>
+            <div class="widget-body">
+                <DynamicComponent Type="typeof(RadarCard)" Parameters="_radarParameters" />
+            </div>
+        </div>
+    }
+
+    <div class="widget mb-4">
+        <div class="widget-body">
+            <WeatherSummary Context="_context" HoursOverride="_hours" />
+        </div>
+    </div>
+
+    <div class="page-head">
+        <h2 class="h5 mb-0">History</h2>
+        <div class="d-flex gap-1">
+            @foreach (var (label, hours) in Ranges)
+            {
+                var choice = hours;
+                <button class="btn btn-sm @(_hours == choice ? "btn-primary" : "btn-outline-secondary")"
+                        @onclick="() => _hours = choice">@label</button>
+            }
+        </div>
+    </div>
+
+    <div class="row g-3">
+        @foreach (var chart in Charts)
+        {
+            <div class="col-12 col-xl-6">
+                <div class="widget h-100">
+                    <div class="widget-head"><h2 class="widget-title">@chart.Title</h2></div>
+                    <div class="widget-body">
+                        <MetricChart Context="ChartContext(chart)" HoursOverride="_hours" Height="170" />
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="widget mt-3">
+        <div class="widget-body">
+            <ReadingsTable Context="_context" HoursOverride="_hours" MetricsOverride="@TableMetrics" />
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private Connection? _station;
+    private WidgetContext _context = default!;
+    private Dictionary<string, object> _radarParameters = [];
+    private DateTimeOffset? _lastReport;
+    private IReadOnlyDictionary<string, double> _readings = new Dictionary<string, double>();
+    private string _units = Appearance.Default.UnitSystem;
+    private int _hours = 24;
+
+    private static readonly (string Label, int Hours)[] Ranges = [("24h", 24), ("48h", 48), ("7d", 168)];
+
+    private sealed record ChartSpec(string Title, string Metric, string? Compare = null);
+
+    // Paired where two series belong on one axis: what it feels like against what it is,
+    // and a gust against the wind it gusted from.
+    private static readonly ChartSpec[] Charts =
+    [
+        new("Temperature", "temp_outdoor_c", "feels_like_c"),
+        new("Wind", "wind_mph", "gust_mph"),
+        new("Humidity", "humidity"),
+        new("Barometer", "pressure_inhg"),
+        new("Rain", "rain_in"),
+        new("Solar radiation", "solar_wm2"),
+        new("Indoor vs outdoor", "temp_indoor_c", "temp_outdoor_c"),
+    ];
+
+    private const string TableMetrics =
+        "temp_outdoor_c,feels_like_c,humidity,wind_mph,gust_mph,pressure_inhg,rain_in,solar_wm2,uv_index";
+
+    private bool ShowRadar => Tab.Settings.GetBool("radar", true);
+
+    private sealed record Tile(string Label, string Value);
+
+    private IEnumerable<Tile> Tiles
+    {
+        get
+        {
+            foreach (var (label, metric, decimals) in new (string, string, int)[]
+            {
+                ("Temperature", "temp_outdoor_c", 1),
+                ("Feels like", "feels_like_c", 1),
+                ("Dew point", "dew_point_c", 1),
+                ("Humidity", "humidity", 0),
+                ("Wind", "wind_mph", 0),
+                ("Wind gust", "gust_mph", 0),
+                ("Rain (hour)", "rain_hour_in", 2),
+                ("Rain (today)", "rain_in", 2),
+                ("Barometer", "pressure_inhg", 2),
+                ("UV index", "uv_index", 0),
+                ("Solar", "solar_wm2", 0),
+            })
+            {
+                if (!_readings.TryGetValue(metric, out var value))
+                    continue;
+
+                var text = Units.Format(Registry.Metric(_station, metric), value, _units, decimals);
+
+                // The wind reads better with the direction it is coming from attached.
+                if (metric == "wind_mph" && _readings.TryGetValue("wind_dir", out var bearing))
+                    text += $" {Compass(bearing)}";
+
+                yield return new Tile(label, text);
+            }
+
+            // Indoor is two readings that belong in one tile rather than two.
+            if (_readings.TryGetValue("temp_indoor_c", out var indoor))
+            {
+                var text = Units.Format(Registry.Metric(_station, "temp_indoor_c"), indoor, _units, 1);
+                if (_readings.TryGetValue("humidity_indoor", out var humidity))
+                    text += $" / {humidity:0}%";
+                yield return new Tile("Indoor", text);
+            }
+        }
+    }
+
+    private static readonly string[] Points =
+        ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+    private static string Compass(double degrees) =>
+        Points[(int)Math.Round(((degrees % 360) + 360) % 360 / 22.5) % 16];
+
+    /// <summary>
+    /// The charts are ordinary chart widgets, so each needs a widget to read its settings
+    /// from. They are built here rather than stored, because this page's layout is the
+    /// point of the tab kind — there is nothing for the user to arrange.
+    /// </summary>
+    private WidgetContext ChartContext(ChartSpec chart) => new(
+        new Widget
+        {
+            Id = $"{Tab.Id}-{chart.Metric}",
+            TabId = Tab.Id,
+            Type = "chart",
+            Settings = new SettingsBag
+            {
+                ["metric"] = chart.Metric,
+                ["compare"] = chart.Compare ?? "",
+            },
+        },
+        _station);
+
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        Config.Changed += OnUpdated;
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var connections = await Config.ConnectionsAsync();
+        var chosen = Tab.Settings.Get("connection");
+
+        _station = chosen.Length > 0
+            ? connections.FirstOrDefault(c => c.Id == chosen)
+            // Nothing chosen yet: the only station there is, is almost certainly the one.
+            : connections.FirstOrDefault(c => c.Provider == "ambient");
+
+        if (_station is null)
+            return;
+
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+
+        var state = Health.State(_station.Id);
+        _lastReport = state?.At;
+        _readings = state?.Metrics is { Count: > 0 } live
+            ? live
+            : await History.LatestAsync(_station.Id, TimeSpan.FromHours(6));
+
+        _context = new WidgetContext(
+            new Widget
+            {
+                Id = Tab.Id,
+                TabId = Tab.Id,
+                Settings = new SettingsBag
+                {
+                    ["latitude"] = Tab.Settings.Get("latitude"),
+                    ["longitude"] = Tab.Settings.Get("longitude"),
+                },
+            },
+            _station);
+
+        _radarParameters = new Dictionary<string, object>
+        {
+            ["Context"] = new WidgetContext(
+                new Widget
+                {
+                    Id = $"{Tab.Id}-radar",
+                    TabId = Tab.Id,
+                    Type = "radar",
+                    Settings = new SettingsBag
+                    {
+                        ["source"] = Tab.Settings.Get("radar_source", "rainviewer"),
+                        ["latitude"] = Tab.Settings.Get("latitude"),
+                        ["longitude"] = Tab.Settings.Get("longitude"),
+                        ["zoom"] = Tab.Settings.Get("radar_zoom", "7"),
+                        ["height"] = "380",
+                    },
+                },
+                null),
+        };
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Config.Changed -= OnUpdated;
+    }
+}

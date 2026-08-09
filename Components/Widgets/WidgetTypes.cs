@@ -55,6 +55,8 @@ public sealed class ChartWidget : IWidgetType
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("metric", "Metric", FieldKind.Metric, "latency_ms", Required: true),
+        new("compare", "Compare with", FieldKind.Metric,
+            Help: "Optional second line on the same axis — temperature against feels-like, wind against gust."),
         new("hours", "Window (hours)", FieldKind.Number, Default: "24"),
     ];
     public Type Component => typeof(MetricChart);
@@ -186,6 +188,43 @@ public sealed class WeatherWidget : IWidgetType
     public int DefaultWidth => 4;
     public IReadOnlyList<FieldSpec> Fields => [WeatherUnits.Field];
     public Type Component => typeof(WeatherCard);
+}
+
+public sealed class WeatherSummaryWidget : IWidgetType
+{
+    public string Type => "weather-summary";
+    public string DisplayName => "Weather — today's extremes";
+    public string Icon => "🌅";
+    public string Description => "High and low, peak gust, rain, max UV and peak solar, plus sunrise and sunset.";
+    public IReadOnlyList<string> ProviderTypes => ["ambient"];
+    public int DefaultWidth => 12;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("hours", "Window (hours)", FieldKind.Number, Default: "24"),
+        new("latitude", "Latitude", FieldKind.Text, "39.7392",
+            Help: "For sunrise and sunset, which are computed rather than fetched. Leave blank to omit them."),
+        new("longitude", "Longitude", FieldKind.Text, "-104.9903"),
+    ];
+    public Type Component => typeof(WeatherSummary);
+}
+
+public sealed class ReadingsTableWidget : IWidgetType
+{
+    public string Type => "readings-table";
+    public string DisplayName => "Readings table";
+    public string Icon => "📋";
+    public string Description => "The raw recorded numbers for any connection, as a table you can fold away.";
+    public IReadOnlyList<string> ProviderTypes => AnyProvider.Types;
+    public int DefaultWidth => 12;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("metrics", "Metrics", FieldKind.Text,
+            Help: "Comma-separated. Blank shows whatever this connection records."),
+        new("hours", "Window (hours)", FieldKind.Number, Default: "24"),
+        new("limit", "Rows", FieldKind.Number, Default: "240"),
+        new("open", "Start expanded", FieldKind.Bool, Default: "false"),
+    ];
+    public Type Component => typeof(ReadingsTable);
 }
 
 public sealed class RadarWidget : IWidgetType

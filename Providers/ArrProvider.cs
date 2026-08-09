@@ -31,7 +31,7 @@ public abstract class ArrProviderBase(IHttpClientFactory httpFactory) : IConnect
     public IReadOnlyList<MetricSpec> Metrics =>
     [
         new("queue_count", "Queued downloads"),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public sealed record QueueItem(string Title, string Status, double PercentDone, string TimeLeft);

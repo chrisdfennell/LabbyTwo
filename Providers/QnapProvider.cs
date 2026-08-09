@@ -49,7 +49,7 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
         new("temp_c", "CPU temperature", "°C", 1),
         new("disk_percent", "Fullest volume", "%", 1),
         new("uptime_days", "Uptime", " days", 1),
-        new("latency_ms", "Response time", "ms"),
+        new("latency_ms", "Response time", " ms"),
     ];
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>

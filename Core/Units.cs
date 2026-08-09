@@ -30,12 +30,16 @@ public static class Units
     public static (double Value, string Unit) Display(double value, string unit, string? system)
     {
         var metric = IsMetric(system);
+
+        // The pass-through branches return the unit they were given rather than a literal,
+        // so the spacing a metric declares survives — a hardcoded "mph" here silently
+        // turned every " mph" into "0mph" no matter what the provider asked for.
         return unit.Trim() switch
         {
-            "°C" => metric ? (value, "°C") : (value * 9 / 5 + 32, "°F"),
-            "mph" => metric ? (value * 1.60934, " km/h") : (value, "mph"),
-            "inHg" => metric ? (value * 33.8639, " hPa") : (value, "inHg"),
-            "in" => metric ? (value * 25.4, " mm") : (value, "in"),
+            "°C" => metric ? (value, unit) : (value * 9 / 5 + 32, "°F"),
+            "mph" => metric ? (value * 1.60934, " km/h") : (value, unit),
+            "inHg" => metric ? (value * 33.8639, " hPa") : (value, unit),
+            "in" => metric ? (value * 25.4, " mm") : (value, unit),
             _ => (value, unit),
         };
     }
