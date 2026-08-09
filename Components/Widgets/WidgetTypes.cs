@@ -307,10 +307,11 @@ public sealed class JellyfinNowPlayingWidget : IWidgetType
 public sealed class ArrQueueWidget : IWidgetType
 {
     public string Type => "arr-queue";
-    public string DisplayName => "Sonarr / Radarr queue";
+    public string DisplayName => "Download queue";
     public string Icon => "⬇️";
     public string Description => "What is downloading right now, with progress.";
-    public IReadOnlyList<string> ProviderTypes => ["sonarr", "radarr"];
+    // Prowlarr is deliberately absent: it manages indexers and has no queue.
+    public IReadOnlyList<string> ProviderTypes => ["sonarr", "radarr", "lidarr", "readarr"];
     public int DefaultWidth => 6;
     public IReadOnlyList<FieldSpec> Fields =>
     [

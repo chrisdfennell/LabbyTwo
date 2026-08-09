@@ -38,6 +38,7 @@ public class ModuleDiscoveryTests
             "plex", "json", "docker", "pihole", "webhook", "pushover",
             "proxmox", "truenas", "jellyfin", "qbittorrent",
             "homeassistant", "adguard", "nut", "unifi",
+            "lidarr", "readarr", "prowlarr",
         ];
 
         Assert.Equal(

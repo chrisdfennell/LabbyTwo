@@ -14,6 +14,12 @@ public abstract class ArrProviderBase(IHttpClientFactory httpFactory) : IConnect
     public abstract string DisplayName { get; }
     public abstract string Icon { get; }
     public abstract string Description { get; }
+
+    /// <summary>
+    /// Sonarr and Radarr are on v3; Lidarr, Readarr and Prowlarr are still on v1. Same
+    /// API shape either way, so the version is the only thing that varies.
+    /// </summary>
+    protected virtual string ApiVersion => "v3";
     public string Category => "Media";
 
     public IReadOnlyList<FieldSpec> Fields =>
@@ -90,7 +96,7 @@ public abstract class ArrProviderBase(IHttpClientFactory httpFactory) : IConnect
         if (baseUrl.Length == 0)
             throw new InvalidOperationException("No base URL configured.");
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v3/{path}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/{ApiVersion}/{path}");
         request.Headers.TryAddWithoutValidation("X-Api-Key", connection.Settings.Get("api_key"));
         using var response = await http.SendAsync(request, ct);
         if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
@@ -114,4 +120,35 @@ public sealed class RadarrProvider(IHttpClientFactory httpFactory) : ArrProvider
     public override string DisplayName => "Radarr";
     public override string Icon => "🎞️";
     public override string Description => "Movie automation — version, reachability, and how many movies are downloading.";
+}
+
+public sealed class LidarrProvider(IHttpClientFactory httpFactory) : ArrProviderBase(httpFactory)
+{
+    public override string Type => "lidarr";
+    public override string DisplayName => "Lidarr";
+    public override string Icon => "🎵";
+    public override string Description => "Version, reachability, and how many albums are downloading.";
+    protected override string ApiVersion => "v1";
+}
+
+public sealed class ReadarrProvider(IHttpClientFactory httpFactory) : ArrProviderBase(httpFactory)
+{
+    public override string Type => "readarr";
+    public override string DisplayName => "Readarr";
+    public override string Icon => "📚";
+    public override string Description => "Version, reachability, and how many books are downloading.";
+    protected override string ApiVersion => "v1";
+}
+
+/// <summary>
+/// Prowlarr manages indexers rather than downloads, so it has no queue. The base class
+/// already treats a missing queue as "not news", which is exactly right here.
+/// </summary>
+public sealed class ProwlarrProvider(IHttpClientFactory httpFactory) : ArrProviderBase(httpFactory)
+{
+    public override string Type => "prowlarr";
+    public override string DisplayName => "Prowlarr";
+    public override string Icon => "🔎";
+    public override string Description => "Version and reachability for your indexer manager.";
+    protected override string ApiVersion => "v1";
 }

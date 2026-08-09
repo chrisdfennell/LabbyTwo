@@ -141,7 +141,8 @@ monitoring works.
 | **Pi-hole** | Queries and blocks today, block percentage, and whether blocking is switched on. |
 | **QNAP NAS** | Model, firmware, uptime, CPU, memory, temperatures, volume usage. |
 | **Ambient Weather** | Every reading the station sends — indoor/outdoor temperature, wind, rain, pressure, UV. |
-| **Sonarr** / **Radarr** | Version, reachability, and download queue depth. |
+| **Sonarr** / **Radarr** / **Lidarr** / **Readarr** | Version, reachability, and download queue depth. |
+| **Prowlarr** | Version and reachability for your indexer manager. |
 | **Plex** | Server version and what is playing right now. |
 | **Webhook** | *Alert channel.* Discord, Slack or ntfy — the payload shape is detected from the URL. |
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
