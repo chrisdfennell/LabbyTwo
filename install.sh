@@ -35,8 +35,45 @@ die()  { printf '%s\n' "${RED}✗${OFF}   $*" >&2; exit 1; }
 
 # ---- what we need before we start -------------------------------------------------
 
-command -v git >/dev/null 2>&1 || die "git is not installed. Install it and run this again."
 command -v docker >/dev/null 2>&1 || die "docker is not installed. See https://docs.docker.com/engine/install/"
+
+# git is preferred but not required. NAS firmware — QNAP Container Station, Synology —
+# ships Docker and no git at all, and that is a large part of who runs this. Without git
+# we fetch a tarball instead; updates still work, they just replace the source outright.
+HAVE_GIT=0
+command -v git >/dev/null 2>&1 && HAVE_GIT=1
+
+# One downloader, whichever exists. BusyBox wget takes different flags from GNU wget,
+# so the calls below stick to what both understand.
+DOWNLOADER=""
+if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+elif command -v wget >/dev/null 2>&1; then
+    DOWNLOADER="wget"
+fi
+
+fetch_to() {   # fetch_to <url> <destination file>
+    case "$DOWNLOADER" in
+        curl) curl -fsSL "$1" -o "$2" ;;
+        wget) wget -q -O "$2" "$1" ;;
+        *)    return 1 ;;
+    esac
+}
+
+fetch_quiet() {   # fetch_quiet <url> — for the health check; success is all we need
+    case "$DOWNLOADER" in
+        curl) curl -fsS "$1" >/dev/null 2>&1 ;;
+        wget) wget -q -O - "$1" >/dev/null 2>&1 ;;
+        *)    return 1 ;;
+    esac
+}
+
+if [ "$HAVE_GIT" = "0" ]; then
+    [ -n "$DOWNLOADER" ] || die "Neither git nor curl nor wget is installed, so there is no way to fetch the source.
+    Install any one of them and run this again."
+    command -v tar >/dev/null 2>&1 || die "git is not installed, so the source has to come as a tarball — but tar is missing too.
+    Install git or tar and run this again."
+fi
 
 if ! docker info >/dev/null 2>&1; then
     die "Docker is installed but not responding.
@@ -97,10 +134,13 @@ check_dir() {
     local d="$1" origin parent
     [ -z "$d" ] && { note "Give me a path."; return 1; }
 
+    # An existing LabbyTwo lives here — checked by what is in it, not by the remote URL,
+    # so a fork, a mirror, or a tarball install with no .git at all is recognised.
+    if [ -f "$d/LabbyTwo.csproj" ] && [ -f "$d/docker-compose.yml" ]; then
+        return 0
+    fi
+
     if [ -d "$d/.git" ]; then
-        if [ -f "$d/LabbyTwo.csproj" ] && [ -f "$d/docker-compose.yml" ]; then
-            return 0        # ours, whatever the remote is called: this is an update
-        fi
         origin="$(git -C "$d" remote get-url origin 2>/dev/null || echo "an unknown remote")"
         note "$d is a git checkout of $origin, not LabbyTwo."
         return 1
@@ -108,7 +148,12 @@ check_dir() {
 
     if [ -e "$d" ]; then
         [ -d "$d" ] || { note "$d is a file, not a directory."; return 1; }
-        if [ -n "$(ls -A "$d" 2>/dev/null)" ]; then
+
+        # People download install.sh into the directory they mean to install into and
+        # then answer the prompt with it. Refusing that would be pedantic.
+        local leftovers
+        leftovers="$(ls -A "$d" 2>/dev/null | grep -vx -e install.sh -e install.ps1 -e .env || true)"
+        if [ -n "$leftovers" ]; then
             note "$d already exists and has things in it. Pick an empty or a new directory."
             return 1
         fi
@@ -159,7 +204,35 @@ fi
 
 # ---- get the source ---------------------------------------------------------------
 
-if [ -d "$DIR/.git" ]; then
+# Downloads and unpacks the branch tarball over $DIR, for hosts with no git. GitHub wraps
+# the archive in a single top-level directory, hence --strip-components=1.
+install_from_tarball() {
+    local url tmp
+    # Derive the archive URL from the clone URL so LABBY_REPO still works for forks.
+    url="${REPO_URL%.git}/archive/refs/heads/$BRANCH.tar.gz"
+    tmp="$(mktemp -d 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/labbytwo.$$")"
+    mkdir -p "$tmp"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" EXIT
+
+    note "no git here, so fetching the source as a tarball"
+    fetch_to "$url" "$tmp/src.tar.gz" || die "Could not download $url"
+    tar -xzf "$tmp/src.tar.gz" -C "$tmp" || die "Could not unpack the download. It may be truncated — try again."
+
+    local root
+    root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [ -n "$root" ] || die "The archive did not contain what was expected."
+    [ -f "$root/LabbyTwo.csproj" ] || die "That archive does not look like LabbyTwo."
+
+    mkdir -p "$DIR"
+    # Copy contents, not the directory. .env is not in the archive, so an existing one
+    # here is left exactly where it is.
+    cp -R "$root/." "$DIR/"
+    rm -rf "$tmp"
+    trap - EXIT
+}
+
+if [ "$HAVE_GIT" = "1" ] && [ -d "$DIR/.git" ]; then
     say "Updating the checkout in $DIR"
     git -C "$DIR" remote set-url origin "$REPO_URL"
     git -C "$DIR" fetch --quiet origin "$BRANCH"
@@ -173,9 +246,18 @@ if [ -d "$DIR/.git" ]; then
     git -C "$DIR" merge --quiet --ff-only "origin/$BRANCH" \
         || die "$DIR has local commits that are not on origin/$BRANCH. Sort that out and re-run."
     note "now at $(git -C "$DIR" log --oneline -1)"
-else
+elif [ "$HAVE_GIT" = "1" ] && [ ! -f "$DIR/LabbyTwo.csproj" ]; then
     say "Cloning into $DIR"
     git clone --quiet --branch "$BRANCH" "$REPO_URL" "$DIR"
+else
+    # Either there is no git, or there is a tarball install already here to refresh.
+    if [ -f "$DIR/LabbyTwo.csproj" ]; then
+        say "Updating the source in $DIR"
+        note "any edits you made to the source will be overwritten; .env and your data are untouched"
+    else
+        say "Downloading into $DIR"
+    fi
+    install_from_tarball
 fi
 
 cd "$DIR"
@@ -199,14 +281,20 @@ else
     elif [ -L /etc/localtime ]; then
         HOST_TZ="$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')"
     fi
+    # Not `sed -i`: BusyBox's version takes no suffix, so `sed -i.bak` silently creates a
+    # file named ".bak" on a NAS instead of editing in place.
+    set_env() {
+        sed "s|^$1=.*|$1=$2|" .env > .env.tmp && mv .env.tmp .env
+    }
+
     if [ -n "$HOST_TZ" ]; then
-        sed -i.bak "s|^TZ=.*|TZ=$HOST_TZ|" .env && rm -f .env.bak
+        set_env TZ "$HOST_TZ"
         note "timezone set to $HOST_TZ"
     else
         note "could not detect a timezone; leaving the default. Edit TZ in .env if times look wrong."
     fi
 
-    sed -i.bak "s|^LABBY_PORT=.*|LABBY_PORT=$PORT|" .env && rm -f .env.bak
+    set_env LABBY_PORT "$PORT"
 fi
 
 # ---- is the port free? ------------------------------------------------------------
@@ -252,14 +340,17 @@ say "Starting LabbyTwo"
 say "Waiting for it to come up"
 URL="http://localhost:$PORT"
 for _ in $(seq 1 60); do
-    if curl -fsS "$URL/healthz" >/dev/null 2>&1; then
+    if fetch_quiet "$URL/healthz"; then
         READY=1
         break
     fi
     sleep 2
 done
 
-if [ "${READY:-0}" != "1" ]; then
+if [ "${READY:-0}" != "1" ] && [ -z "$DOWNLOADER" ]; then
+    warn "Started, but with no curl or wget here I cannot check that it answered."
+    note "Try $URL in a browser."
+elif [ "${READY:-0}" != "1" ]; then
     warn "It did not answer on $URL within two minutes."
     note "Logs:    cd $DIR && ${COMPOSE[*]} logs --tail=50"
     note "Status:  cd $DIR && ${COMPOSE[*]} ps"

@@ -65,6 +65,10 @@ To skip the prompt — for a script, a cron job, or CI — set the directory up 
 `LABBY_DIR=/opt/labbytwo bash install.sh`, or `.\install.ps1 -Dir D:\labbytwo`. Add
 `LABBY_PORT=5151` / `-Port 5151` if 5150 is taken.
 
+**No git?** Fine — NAS firmware like QNAP Container Station and Synology ships Docker
+without it. The script falls back to downloading a tarball, and updates still work.
+It needs Docker plus either git, or curl/wget and tar.
+
 Or do it by hand, which is all the script does:
 
 ```bash
