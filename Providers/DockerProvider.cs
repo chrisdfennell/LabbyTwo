@@ -41,9 +41,14 @@ public sealed class DockerProvider : IConnectionProvider
         // A path endpoint that is not there at all: either not mounted, or the wrong path.
         if (endpoint.StartsWith('/') && !File.Exists(endpoint) && !Directory.Exists(endpoint))
         {
-            return $"{endpoint} does not exist inside LabbyTwo's container. Mount the socket by adding this " +
-                   "to the labbytwo service in docker-compose.yml, then recreate the container:\n" +
-                   "  - /var/run/docker.sock:/var/run/docker.sock:ro";
+            // Deliberately the override file, not docker-compose.yml: an update overwrites
+            // that one, and a mount that disappears on upgrade is worse than no mount.
+            return $"{endpoint} does not exist inside LabbyTwo's container — the socket is not mounted. " +
+                   "Put this in docker-compose.override.yml, beside docker-compose.yml, then run " +
+                   "`docker compose up -d`:\n" +
+                   "  services:\n    labbytwo:\n      volumes:\n" +
+                   "        - /var/run/docker.sock:/var/run/docker.sock:ro\n" +
+                   "If your host keeps its socket somewhere else, change the left half of that line only.";
         }
 
         if (ex is UnauthorizedAccessException || message.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))

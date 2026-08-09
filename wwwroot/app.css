@@ -690,6 +690,14 @@ h1[tabindex]:focus { outline: none; }
     padding: .6rem;
 }
 
+.emoji-paste {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    border-top: 1px solid var(--edge);
+    padding-top: .5rem;
+}
+
 /* ---------- weather station page ---------- */
 
 .stat-grid {

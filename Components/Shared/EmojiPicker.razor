@@ -13,12 +13,6 @@
         }
     </button>
 
-    @* Kept alongside the picker: pasting an emoji, or typing one the table does not have,
-       has to stay possible. *@
-    <input type="text" class="form-control icon-input text-center" maxlength="8"
-           placeholder="@Placeholder" value="@Value"
-           @onchange="e => Commit(e.Value?.ToString() ?? string.Empty)" />
-
     @if (Value is { Length: > 0 })
     {
         <button type="button" class="btn btn-sm btn-outline-secondary" title="Clear"
@@ -73,6 +67,16 @@
                 <p class="tile-meta mb-0 mt-2">Try a plainer word — the names come from Unicode, so it is
                     “automobile” as often as “car”.</p>
             }
+
+            @* Anything the table does not have — a newer Unicode release, a flag sequence,
+               a plain letter — still has to be settable. It lives in here rather than beside
+               the trigger, where an identical-looking second box just read as a duplicate. *@
+            <div class="emoji-paste mt-2">
+                <label for="@_pasteId" class="tile-meta mb-0">Or paste your own</label>
+                <input id="@_pasteId" type="text" class="form-control icon-input text-center" maxlength="8"
+                       placeholder="@Placeholder" value="@Value"
+                       @onchange="e => Commit(e.Value?.ToString() ?? string.Empty)" />
+            </div>
     </div>
 }
 
@@ -82,6 +86,9 @@
 
     /// <summary>Shown in the manual-entry box when nothing is set.</summary>
     [Parameter] public string Placeholder { get; set; } = "🏠";
+
+    // A label needs a target, and several of these can share a page.
+    private readonly string _pasteId = $"emoji-paste-{Guid.NewGuid():N}";
 
     private bool _open;
     private string _query = "";
