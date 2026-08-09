@@ -177,7 +177,9 @@ public sealed class QBittorrentProvider(IHttpClientFactory httpFactory) : IConne
 
             using var response = await http.SendAsync(request, ct);
             if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                throw new InvalidOperationException("qBittorrent refused the request — check the username and password.");
+                throw new InvalidOperationException(
+                    "qBittorrent refused the request. Either the credentials are wrong, or its Host header check " +
+                    "is rejecting this address — Options → Web UI → \"Enable Host header validation\".");
             response.EnsureSuccessStatusCode();
 
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
@@ -227,9 +229,15 @@ public sealed class QBittorrentProvider(IHttpClientFactory httpFactory) : IConne
         using var response = await http.PostAsync($"{baseUrl}/api/v2/auth/login", form, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
 
-        // qBittorrent answers 200 with the body "Fails." on bad credentials.
+        // qBittorrent answers 200 with the body "Fails." on bad credentials — and gives the
+        // same answer when its Host header check refuses the request, which is what happens
+        // the first time anyone addresses it by container name. Same symptom, different fix,
+        // so name both.
         if (body.Contains("Fail", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("qBittorrent rejected the username or password.");
+            throw new InvalidOperationException(
+                "qBittorrent refused the login. If the username and password are right, it is probably the " +
+                "Host header check: Options → Web UI → turn off \"Enable Host header validation\", or add " +
+                "this address to the whitelist. It rejects requests addressed by container name until you do.");
 
         if (response.Headers.TryGetValues("Set-Cookie", out var cookies))
         {
