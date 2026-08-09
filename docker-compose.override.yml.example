@@ -38,8 +38,14 @@ services:
 
     # ---- the Docker provider ---------------------------------------------------------
     #
-    # It cannot see the daemon without this. Read-only, and worth a thought first: access
-    # to that socket is effectively root on the host. Nothing else in LabbyTwo needs it.
+    # It cannot see the daemon without this, and it is worth a thought first: anything that
+    # can talk to that socket can start a privileged container, which is root on the host.
+    #
+    # The :ro below stops the socket *file* being modified. It does not make the Docker API
+    # read-only -- there is no such mode. LabbyTwo only ever issues GETs, but that is a
+    # property of this code, not a restriction the mount imposes on it.
+    #
+    # Nothing else in LabbyTwo needs the socket, so leaving this out costs you one provider.
     #
     # volumes:
     #   - /var/run/docker.sock:/var/run/docker.sock:ro
