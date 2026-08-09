@@ -212,6 +212,12 @@ if (-not $ours) {
 
 # ---- build and start --------------------------------------------------------------
 
+# Stamp the build with its commit so Settings can tell whether this install is behind.
+$version = (git -C $Dir rev-parse --short=12 HEAD 2>$null)
+if ($LASTEXITCODE -ne 0 -or -not $version) { $version = 'dev' }
+$env:LABBYTWO_VERSION = $version.Trim()
+Note "building $($env:LABBYTWO_VERSION)"
+
 Say "Building the image — the first run takes a few minutes"
 docker compose build
 if ($LASTEXITCODE -ne 0) { Die "The build failed. The output above says why." }

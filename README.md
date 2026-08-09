@@ -456,6 +456,26 @@ honours `X-Forwarded-Proto` and `X-Forwarded-For`.
 `GET /healthz` answers `200 ok` without authentication, and the image has a matching
 `HEALTHCHECK`.
 
+## Updating
+
+Re-run the installer. It pulls, rebuilds and restarts, and never touches your `.env`, your
+`docker-compose.override.yml` or the data volume.
+
+```bash
+bash install.sh
+```
+
+**Settings → Updates** compares the commit this image was built from against the tip of
+`main` and tells you whether you are behind, what the newest change was, and links to the
+diff. Nothing is contacted until you press the button — LabbyTwo does not phone home.
+
+There is deliberately no button that performs the update. LabbyTwo runs inside the
+container an update replaces, and no process can rebuild and recreate itself; doing it from
+in there would mean mounting the Docker socket, which is root on the host. That is a poor
+trade for saving one command. If you want updates to be hands-off, publish the image from
+CI and point [Watchtower](https://containrrr.dev/watchtower/) at it — that is the job it
+exists for, and it runs as a separate container rather than giving the dashboard the keys.
+
 ## Backing up and sharing
 
 Everything — connections, tabs, widgets, notes, history, appearance, plugins, and the

@@ -8,6 +8,7 @@
 @inject Db Database
 @inject AppSettingsStore AppSettings
 @inject NavigationManager Nav
+@inject UpdateChecker Updates
 @inject ModuleCatalog Catalog
 @inject DashboardImportService Imports
 @inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
@@ -28,7 +29,18 @@
             <div class="widget-head"><h2 class="widget-title">This install</h2></div>
             <div class="widget-body">
                 <dl class="row mb-0 small">
-                    <dt class="col-6 tile-meta">Version</dt><dd class="col-6">@Version</dd>
+                    <dt class="col-6 tile-meta">Version</dt>
+                    <dd class="col-6">
+                        <span class="font-monospace">@Version</span>
+                        @if (_update is { Known: true, Behind: false })
+                        {
+                            <span class="text-success"> · up to date</span>
+                        }
+                        else if (_update is { Behind: true })
+                        {
+                            <span class="text-warning"> · update available</span>
+                        }
+                    </dd>
                     <dt class="col-6 tile-meta">Probe interval</dt><dd class="col-6">@Options.Value.ProbeSeconds s</dd>
                     <dt class="col-6 tile-meta">Failures before down</dt><dd class="col-6">@Options.Value.FailuresBeforeDown</dd>
                     <dt class="col-6 tile-meta">History retention</dt><dd class="col-6">@Options.Value.RetentionDays days</dd>
@@ -77,6 +89,66 @@
                     “With secrets” writes every stored password and API key into the file in plain text.
                     Only use it for a backup you keep somewhere safe.
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head">
+                <h2 class="widget-title">Updates</h2>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="CheckForUpdatesAsync"
+                        disabled="@_checking">
+                    @(_checking ? "Checking…" : "Check GitHub")
+                </button>
+            </div>
+            <div class="widget-body">
+                @if (_update is null)
+                {
+                    <p class="tile-meta mb-0">
+                        Nothing is contacted until you press the button — LabbyTwo does not phone home on
+                        its own. The check asks GitHub for the newest commit and compares it with the one
+                        this image was built from.
+                    </p>
+                }
+                else if (_update.Error is { Length: > 0 } error)
+                {
+                    <div class="alert alert-warning py-2 mb-0">@error</div>
+                }
+                else if (_update.Behind == false)
+                {
+                    <p class="mb-0"><span class="text-success">Up to date.</span>
+                        <span class="tile-meta">Running the newest commit on main.</span></p>
+                }
+                else
+                {
+                    <p class="mb-1">
+                        <strong class="text-warning">An update is available.</strong>
+                        <span class="tile-meta">
+                            newest is <span class="font-monospace">@_update.Latest</span>
+                            @if (_update.Released is { } released)
+                            {
+                                <text>, from @released.ToLocalTime().ToString("d MMM HH:mm")</text>
+                            }
+                        </span>
+                    </p>
+                    @if (_update.Summary is { Length: > 0 } summary)
+                    {
+                        <p class="tile-meta mb-2">Latest change: @summary</p>
+                    }
+                    <p class="tile-meta mb-1">Run this where LabbyTwo is installed:</p>
+                    <pre class="mb-2"><code>bash install.sh</code></pre>
+                    <a class="btn btn-sm btn-outline-secondary" href="@_update.CompareUrl"
+                       target="_blank" rel="noreferrer">See what changed</a>
+                }
+
+                <hr class="my-3" />
+                <p class="tile-meta mb-0">
+                    There is deliberately no button that does the update. LabbyTwo runs inside the
+                    container an update replaces, and nothing can rebuild and restart itself — doing it
+                    from in here would mean mounting the Docker socket, which is root on the host. One
+                    SSH command is the cheaper trade.
+                </p>
             </div>
         </div>
     </div>
@@ -256,6 +328,21 @@
 @code {
     private int _connectionCount, _tabCount, _widgetCount, _channelCount;
     private string _statusToken = "";
+    private UpdateChecker.Result? _update;
+    private bool _checking;
+
+    private async Task CheckForUpdatesAsync()
+    {
+        _checking = true;
+        try
+        {
+            _update = await Updates.CheckAsync();
+        }
+        finally
+        {
+            _checking = false;
+        }
+    }
 
     private string StatusUrl => $"{Nav.BaseUri.TrimEnd('/')}/status/{_statusToken}";
     private string _importJson = "";
@@ -263,11 +350,7 @@
     private string? _importError;
     private ConfigTransfer.ImportResult? _importResult;
 
-    private static string Version =>
-        typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-            is { Length: > 0 } informational
-            ? informational.Split('+')[0]   // strip the source-revision suffix the SDK appends
-            : "dev";
+    private static string Version => UpdateChecker.Installed;
 
     private string Size
     {
@@ -294,6 +377,9 @@
         _widgetCount = (await Config.WidgetsAsync()).Count;
         _channelCount = (await Alerts.ChannelsAsync()).Count;
         _statusToken = await AppSettings.GetAsync(PublicStatus.PublicStatusToken);
+
+        // Show a previous result if one was fetched this session, without checking again.
+        _update ??= Updates.Last;
     }
 
     /// <summary>

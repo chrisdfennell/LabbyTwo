@@ -3,7 +3,12 @@
 # per-integration environment variables to keep in sync.
 services:
   labbytwo:
-    build: .
+    build:
+      context: .
+      args:
+        # The commit this image was built from, so the app can tell whether it is behind.
+        # install.sh sets it; a bare "docker compose build" leaves it as "dev".
+        LABBYTWO_VERSION: ${LABBYTWO_VERSION:-dev}
     # Or skip the build and pull a published image instead:
     # image: yourname/labbytwo:latest
     # No container_name on purpose. A fixed one is global to the Docker host, so a second

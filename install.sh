@@ -60,6 +60,24 @@ fetch_to() {   # fetch_to <url> <destination file>
     esac
 }
 
+# The tip of the branch on GitHub, for stamping a tarball install. Best effort: a failure
+# here only costs the update check, so it must not stop an install.
+api_commit_sha() {
+    local owner_repo json sha
+    owner_repo="$(printf '%s' "${REPO_URL%.git}" | sed 's|.*github.com[:/]||')"
+    json="$(fetch_stdout "https://api.github.com/repos/$owner_repo/commits/$BRANCH" || true)"
+    sha="$(printf '%s' "$json" | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{12\}\).*//p' | head -1)"
+    printf '%s' "${sha:-dev}"
+}
+
+fetch_stdout() {   # fetch_stdout <url>
+    case "$DOWNLOADER" in
+        curl) curl -fsSL -H "Accept: application/vnd.github+json" "$1" ;;
+        wget) wget -q -O - --header="Accept: application/vnd.github+json" "$1" ;;
+        *)    return 1 ;;
+    esac
+}
+
 fetch_quiet() {   # fetch_quiet <url> — for the health check; success is all we need
     case "$DOWNLOADER" in
         curl) curl -fsS "$1" >/dev/null 2>&1 ;;
@@ -328,6 +346,18 @@ if [ "${CANNOT_CHECK_PORT:-0}" = "1" ]; then
 fi
 
 # ---- build and start --------------------------------------------------------------
+
+# Stamp the build with the commit it came from, so Settings can say whether this install
+# is behind. Without it every build calls itself "dev" and can compare against nothing.
+if [ "$HAVE_GIT" = "1" ] && [ -d "$DIR/.git" ]; then
+    LABBYTWO_VERSION="$(git -C "$DIR" rev-parse --short=12 HEAD 2>/dev/null || echo dev)"
+else
+    # A tarball carries no history, so ask the API what the tip of the branch is. It was
+    # downloaded moments ago, so that is what this is.
+    LABBYTWO_VERSION="$(api_commit_sha)"
+fi
+export LABBYTWO_VERSION
+note "building $LABBYTWO_VERSION"
 
 say "Building the image — first run takes a few minutes, longer on a Raspberry Pi"
 "${COMPOSE[@]}" build

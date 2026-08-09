@@ -1,5 +1,6 @@
 using LabbyTwo.Core;
 using LabbyTwo.Providers;
+using LabbyTwo.Services;
 using LabbyTwo.Storage;
 
 namespace LabbyTwo.Tests;
@@ -693,5 +694,39 @@ public class EmojiCatalogTests
         Assert.DoesNotContain(EmojiCatalog.All, e => e.Name.Contains("Modifier", StringComparison.OrdinalIgnoreCase));
         foreach (var modifier in new[] { "\U0001F3FB", "\U0001F3FC", "\U0001F3FD", "\U0001F3FE", "\U0001F3FF" })
             Assert.DoesNotContain(EmojiCatalog.All, e => e.Char == modifier);
+    }
+}
+
+public class UpdateCheckerTests
+{
+    [Fact]
+    public void OnlyTheSubjectLineOfACommitIsShown()
+    {
+        // Commit bodies here run to paragraphs; the card wants one line.
+        var message = "Add an emoji picker\n\nFour places let you set an icon, and each was\na bare text box.";
+        Assert.Equal("Add an emoji picker", UpdateChecker.FirstLine(message));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("\n\n")]
+    public void AMissingCommitMessageIsNullRatherThanBlankText(string? message)
+        => Assert.Null(UpdateChecker.FirstLine(message));
+
+    [Fact]
+    public void TheCompareLinkPointsAtWhatChangedSinceThisBuild()
+    {
+        var result = new UpdateChecker.Result("abc123456789", "def987654321", true, "x", null, null);
+        Assert.Equal("https://github.com/chrisdfennell/LabbyTwo/compare/abc123456789...main", result.CompareUrl);
+    }
+
+    [Fact]
+    public void AnUnknownResultIsNotReportedAsUpToDate()
+    {
+        // A failed check must never read as "you are current" — that is the one wrong
+        // answer worse than saying nothing.
+        var failed = new UpdateChecker.Result("abc123", null, null, null, null, "no route");
+        Assert.False(failed.Known);
     }
 }
