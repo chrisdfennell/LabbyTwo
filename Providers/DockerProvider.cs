@@ -28,6 +28,33 @@ public sealed class DockerProvider : IConnectionProvider
 
     public sealed record ContainerInfo(string Name, string Image, string State, string Status);
 
+    /// <summary>
+    /// "No such file or directory" is a true but useless thing to show someone. By far the
+    /// most common cause is that LabbyTwo is in a container and nobody mounted the socket,
+    /// so say that, with the line to add.
+    /// </summary>
+    private static string Explain(Connection connection, Exception ex)
+    {
+        var endpoint = connection.Settings.Get("endpoint", "/var/run/docker.sock");
+        var message = ex.GetBaseException().Message;
+
+        // A path endpoint that is not there at all: either not mounted, or the wrong path.
+        if (endpoint.StartsWith('/') && !File.Exists(endpoint) && !Directory.Exists(endpoint))
+        {
+            return $"{endpoint} does not exist inside LabbyTwo's container. Mount the socket by adding this " +
+                   "to the labbytwo service in docker-compose.yml, then recreate the container:\n" +
+                   "  - /var/run/docker.sock:/var/run/docker.sock:ro";
+        }
+
+        if (ex is UnauthorizedAccessException || message.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Permission denied on {endpoint}. The socket is mounted but LabbyTwo's user cannot read it — " +
+                   "on most hosts it is owned by the docker group.";
+        }
+
+        return message;
+    }
+
     public IReadOnlyList<MetricSpec> Metrics =>
     [
         new("container_count", "Containers running"),
@@ -56,7 +83,7 @@ public sealed class DockerProvider : IConnectionProvider
         catch (Exception ex)
         {
             stopwatch.Stop();
-            return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
+            return ProbeResult.Down(stopwatch.Elapsed, Explain(connection, ex));
         }
     }
 

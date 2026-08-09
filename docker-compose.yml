@@ -29,5 +29,13 @@ services:
     volumes:
       - labbytwo-data:/app/data
 
+      # Uncomment for the Docker provider, which cannot see the daemon without it.
+      # Read-only, and think before you do it: access to this socket is effectively root
+      # on the host, so it hands a web app the keys to every container you run. Everything
+      # else in LabbyTwo works without it.
+      # On a QNAP or Synology the socket may live elsewhere — mount the real path onto
+      # /var/run/docker.sock and the provider's default still works.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+
 volumes:
   labbytwo-data:
