@@ -35,11 +35,29 @@ public sealed class UpdateChecker(IHttpClientFactory httpFactory, ILogger<Update
     /// The commit stamped in at build time by install.sh. "dev" means someone built it by
     /// hand without the stamp, in which case there is nothing to compare against.
     /// </summary>
-    public static string Installed =>
+    public static string Installed => Sanitise(Raw);
+
+    /// <summary>Exactly what the assembly carries, warts and all, for showing on a tooltip.</summary>
+    public static string Raw =>
         typeof(UpdateChecker).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion.Split('+')[0] is { Length: > 0 } version
-            ? version
-            : "dev";
+            ?.InformationalVersion ?? "";
+
+    /// <summary>
+    /// A build arg that did not get set can leave anything in here — an empty string, a
+    /// stray control character, an unexpanded variable — and rendering that raw put an
+    /// unprintable box on the settings page. Anything that is not a plausible version or
+    /// commit is reported as unstamped, which is what it actually is.
+    /// </summary>
+    public static string Sanitise(string? informational)
+    {
+        var value = (informational ?? "").Split('+')[0].Trim();
+        value = new string([.. value.Where(c => !char.IsControl(c))]);
+
+        var plausible = value.Length is > 0 and <= 40
+            && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_');
+
+        return plausible ? value : "dev";
+    }
 
     private Result? _cached;
     private DateTimeOffset _checkedAt;

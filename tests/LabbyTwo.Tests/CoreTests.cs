@@ -730,3 +730,110 @@ public class UpdateCheckerTests
         Assert.False(failed.Known);
     }
 }
+
+public class SunTimesTests
+{
+    // Somewhere with well-known times: New York, 40.71 N, 74.01 W.
+    private const double NyLat = 40.7128, NyLon = -74.0060;
+
+    [Fact]
+    public void SunriseAndSunsetLandOnTheRightDayAndTheRightWayRound()
+    {
+        var day = SunTimes.For(new DateOnly(2026, 6, 21), NyLat, NyLon, TimeSpan.FromHours(-4));
+
+        Assert.NotNull(day.Sunrise);
+        Assert.NotNull(day.Sunset);
+        Assert.True(day.Sunrise < day.Sunset);
+        Assert.Equal(21, day.Sunrise!.Value.Day);
+    }
+
+    [Fact]
+    public void MidsummerInNewYorkIsAboutFifteenHours()
+    {
+        // The real figure is 15h 5m. Anything in this range means the algorithm is right;
+        // pinning it to the minute would just be asserting my own arithmetic back at me.
+        var daylight = SunTimes.For(new DateOnly(2026, 6, 21), NyLat, NyLon, TimeSpan.FromHours(-4)).Daylight;
+
+        Assert.NotNull(daylight);
+        Assert.InRange(daylight!.Value.TotalHours, 14.8, 15.3);
+    }
+
+    [Fact]
+    public void MidwinterIsAboutNineHours()
+    {
+        var daylight = SunTimes.For(new DateOnly(2026, 12, 21), NyLat, NyLon, TimeSpan.FromHours(-5)).Daylight;
+
+        Assert.NotNull(daylight);
+        Assert.InRange(daylight!.Value.TotalHours, 9.0, 9.5);
+    }
+
+    [Fact]
+    public void AtTheEquinoxItIsAboutTwelveHoursEverywhere()
+    {
+        foreach (var latitude in new[] { -45.0, -20.0, 0.0, 20.0, 45.0 })
+        {
+            var daylight = SunTimes.For(new DateOnly(2026, 3, 20), latitude, 0, TimeSpan.Zero).Daylight;
+            Assert.NotNull(daylight);
+            Assert.InRange(daylight!.Value.TotalHours, 11.7, 12.5);
+        }
+    }
+
+    [Fact]
+    public void TheSeasonsAreTheOtherWayRoundInTheSouthernHemisphere()
+    {
+        var sydney = (Lat: -33.87, Lon: 151.21);
+        var june = SunTimes.For(new DateOnly(2026, 6, 21), sydney.Lat, sydney.Lon, TimeSpan.FromHours(10)).Daylight;
+        var december = SunTimes.For(new DateOnly(2026, 12, 21), sydney.Lat, sydney.Lon, TimeSpan.FromHours(11)).Daylight;
+
+        Assert.True(june < december, "June should be the short day south of the equator.");
+    }
+
+    [Fact]
+    public void InsideTheArcticCircleThereAreDaysWithNoSunriseAndDaysWithNoSunset()
+    {
+        // Tromsø. These are real answers, not failures, so they get their own flags rather
+        // than a null that reads like an error.
+        const double lat = 69.65, lon = 18.96;
+
+        var midwinter = SunTimes.For(new DateOnly(2026, 12, 21), lat, lon, TimeSpan.FromHours(1));
+        Assert.True(midwinter.PolarNight);
+        Assert.Null(midwinter.Sunrise);
+        Assert.Null(midwinter.Daylight);
+
+        var midsummer = SunTimes.For(new DateOnly(2026, 6, 21), lat, lon, TimeSpan.FromHours(2));
+        Assert.True(midsummer.PolarDay);
+        Assert.Null(midsummer.Sunset);
+    }
+
+    [Fact]
+    public void TheReturnedTimesCarryTheOffsetTheyWereAskedFor()
+    {
+        var day = SunTimes.For(new DateOnly(2026, 6, 21), NyLat, NyLon, TimeSpan.FromHours(-4));
+        Assert.Equal(TimeSpan.FromHours(-4), day.Sunrise!.Value.Offset);
+    }
+}
+
+public class InstalledVersionTests
+{
+    [Theory]
+    [InlineData("a1b2c3d4e5f6", "a1b2c3d4e5f6")]
+    [InlineData("1.4.2", "1.4.2")]
+    [InlineData("a1b2c3+abcdef", "a1b2c3")]
+    [InlineData("  a1b2c3  ", "a1b2c3")]
+    public void APlausibleStampIsKept(string raw, string expected)
+        => Assert.Equal(expected, UpdateChecker.Sanitise(raw));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\u0001")]              // a control character rendered as an unprintable box
+    [InlineData("\u200b")]              // zero-width space
+    [InlineData("${LABBYTWO_VERSION}")] // a build arg that never got expanded
+    [InlineData("some version with spaces")]
+    public void AnythingElseIsReportedAsUnstamped(string? raw)
+    {
+        // Whatever nonsense a broken build arg leaves behind, the page must not render it.
+        Assert.Equal("dev", UpdateChecker.Sanitise(raw));
+    }
+}

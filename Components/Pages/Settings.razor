@@ -31,7 +31,14 @@
                 <dl class="row mb-0 small">
                     <dt class="col-6 tile-meta">Version</dt>
                     <dd class="col-6">
-                        <span class="font-monospace">@Version</span>
+                        @if (Version == "dev")
+                        {
+                            <span title="@($"Assembly reports: “{UpdateChecker.Raw}”")">not stamped</span>
+                        }
+                        else
+                        {
+                            <span class="font-monospace">@Version</span>
+                        }
                         @if (_update is { Known: true, Behind: false })
                         {
                             <span class="text-success"> · up to date</span>

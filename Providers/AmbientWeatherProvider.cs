@@ -39,6 +39,9 @@ public sealed class AmbientWeatherProvider(IHttpClientFactory httpFactory) : ICo
         new("wind_dir", "Wind direction", "°"),
         new("pressure_inhg", "Pressure", "inHg", 2),
         new("rain_in", "Rain today", "in", 2),
+        new("rain_hour_in", "Rain this hour", "in", 2),
+        new("rain_event_in", "Rain this event", "in", 2),
+        new("gust_max_mph", "Peak gust today", "mph", 1),
         new("solar_wm2", "Solar radiation", "W/m²"),
         new("uv_index", "UV index"),
         new("latency_ms", "Response time", "ms"),
@@ -130,6 +133,9 @@ public sealed class AmbientWeatherProvider(IHttpClientFactory httpFactory) : ICo
         Copy("winddir", "wind_dir");
         Copy("baromrelin", "pressure_inhg");
         Copy("dailyrainin", "rain_in");
+        Copy("hourlyrainin", "rain_hour_in");
+        Copy("eventrainin", "rain_event_in");
+        Copy("maxdailygust", "gust_max_mph");
         Copy("solarradiation", "solar_wm2");
         Copy("uv", "uv_index");
         Copy("feelsLike", "feels_like_c", FToC);
