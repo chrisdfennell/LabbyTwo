@@ -389,6 +389,31 @@ public class ProbeErrorTests
         Assert.Contains("firewall", message);
     }
 
+    [Theory]
+    [InlineData("http://fennell-nas:8989")]
+    [InlineData("fennell-nas")]
+    [InlineData("http://sonarr.local:8989")]
+    public void ATimeoutAgainstAHostnameMentionsContainerDns(string target)
+    {
+        // The real report: a NAS resolves its own name via /etc/hosts, the container
+        // cannot, the lookup hangs, and it presents as a firewall problem.
+        var message = ProbeError.Describe(new TaskCanceledException(), target);
+        Assert.Contains("IP address", message);
+        Assert.Contains("container", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("http://192.168.1.50:8989")]
+    [InlineData("192.168.1.50")]
+    [InlineData("http://[2001:db8::1]:8989")]
+    public void ATimeoutAgainstAnAddressDoesNotBlameDns(string target)
+    {
+        // An IP literal cannot have a DNS problem, so the hint would be noise.
+        var message = ProbeError.Describe(new TaskCanceledException(), target);
+        Assert.DoesNotContain("IP address instead", message);
+        Assert.Contains("Timed out", message);
+    }
+
     [Fact]
     public void ARefusedConnectionIsDistinguishedFromATimeout()
     {

@@ -26,6 +26,13 @@ services:
       Labby__ProbeSeconds: ${LABBY_PROBE_SECONDS:-30}
       # Days of metric history to keep.
       Labby__RetentionDays: ${LABBY_RETENTION_DAYS:-30}
+    # Containers do not inherit the host's /etc/hosts, NetBIOS or mDNS, so a name your NAS
+    # resolves for itself often cannot be resolved in here — and the lookup hangs rather
+    # than failing, which presents as a timeout. Either use IP addresses in your
+    # connections, or map the names you want here:
+    # extra_hosts:
+    #   - "fennell-nas:192.168.1.50"
+
     volumes:
       - labbytwo-data:/app/data
 

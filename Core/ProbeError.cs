@@ -25,8 +25,20 @@ public static class ProbeError
         // HttpClient reports its own timeout as a cancellation, so this is the common case
         // rather than an exotic one.
         if (ex is OperationCanceledException || root is OperationCanceledException || root is TimeoutException)
+        {
+            // A name that only the host can resolve — /etc/hosts, NetBIOS, mDNS — makes the
+            // DNS query hang rather than fail, so the request times out and this looks like
+            // a firewall. Containers inherit none of those, so it is worth naming here: it
+            // is the single most common reason a NAS install cannot see its own services.
+            if (LooksLikeHostname(target))
+                return $"Timed out — nothing answered{where}. If that name resolves on your NAS but not " +
+                       "inside a container (an /etc/hosts entry, NetBIOS or mDNS), the lookup hangs and " +
+                       "looks exactly like this. Try the IP address instead. Otherwise check the port, and " +
+                       "that a firewall is not silently dropping the connection.";
+
             return $"Timed out — nothing answered{where}. Check the address and port, and that a " +
                    "firewall is not silently dropping the connection.";
+        }
 
         if (root is SocketException socket)
         {
@@ -50,5 +62,22 @@ public static class ProbeError
             return $"TLS handshake failed{where}. If that port serves plain HTTP, use http:// rather than https://.";
 
         return root.Message;
+    }
+
+    /// <summary>
+    /// True when the target is addressed by name rather than by IP. An IP literal cannot
+    /// have a DNS problem, so the hint above would only be noise for one.
+    /// </summary>
+    private static bool LooksLikeHostname(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        var host = target;
+        if (Uri.TryCreate(target, UriKind.Absolute, out var uri))
+            host = uri.Host;
+
+        host = host.Trim('[', ']');   // an IPv6 literal in a URL is bracketed
+        return host.Length > 0 && !System.Net.IPAddress.TryParse(host, out _);
     }
 }
