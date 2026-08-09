@@ -7,6 +7,7 @@
 @inject HistoryStore History
 @inject MetricAlertService Evaluator
 @inject AlertService Alerts
+@inject AppSettingsStore AppSettings
 
 <PageTitle>Alert rules · LabbyTwo</PageTitle>
 
@@ -56,7 +57,8 @@
                             <div class="tile-name">
                                 @offer.Connection.Name · @offer.Rule.Name
                                 <span class="tile-meta">
-                                    @offer.Rule.Metric @offer.Rule.ComparisonWord @offer.Rule.Threshold.ToString("0.##")
+                                    @offer.Rule.Metric @offer.Rule.ComparisonWord @Units.Format(
+                                        Registry.Metric(offer.Connection, offer.Rule.Metric), offer.Rule.Threshold, _units)
                                     @if (offer.Rule.ForMinutes > 0)
                                     {
                                         <text> for @offer.Rule.ForMinutes min</text>
@@ -120,17 +122,17 @@ else
                                 </div>
                             </td>
                             <td class="tile-meta">
-                                <code>@rule.Metric</code> @rule.ComparisonWord @spec.Format(rule.Threshold)
+                                <code>@rule.Metric</code> @rule.ComparisonWord @Units.Format(spec, rule.Threshold, _units)
                                 @if (rule.ClearThreshold is { } clear && Math.Abs(clear - rule.Threshold) > double.Epsilon)
                                 {
-                                    <div>clears past @spec.Format(clear)</div>
+                                    <div>clears past @Units.Format(spec, clear, _units)</div>
                                 }
                             </td>
                             <td>
                                 @foreach (var breach in Readings(rule))
                                 {
                                     <div class="@(breach.Firing ? "text-danger" : "tile-meta")">
-                                        @SpecFor(rule, breach.ConnectionId).Format(breach.LastValue, 1)
+                                        @Units.Format(SpecFor(rule, breach.ConnectionId), breach.LastValue, _units, 1)
                                         <span class="tile-meta">@NameOf(breach.ConnectionId)</span>
                                     </div>
                                 }
@@ -195,9 +197,10 @@ else
                     </select>
                 </div>
                 <div class="col-7">
-                    <label class="form-label" for="rule-threshold">Threshold</label>
-                    <input id="rule-threshold" type="number" step="any" class="form-control" value="@draft.Threshold"
-                           @onchange="e => _draft = draft with { Threshold = Parse(e.Value, draft.Threshold) }" />
+                    <label class="form-label" for="rule-threshold">Threshold @UnitSuffix(draft)</label>
+                    <input id="rule-threshold" type="number" step="any" class="form-control"
+                           value="@ToDisplay(draft, draft.Threshold)"
+                           @onchange="e => SetThreshold(e.Value)" />
                 </div>
             </div>
 
@@ -209,10 +212,11 @@ else
                     <div class="form-text">0 fires immediately. A few minutes ignores the nightly backup spike.</div>
                 </div>
                 <div class="col-6">
-                    <label class="form-label" for="rule-clear">Clears at</label>
+                    <label class="form-label" for="rule-clear">Clears at @UnitSuffix(draft)</label>
                     <input id="rule-clear" type="number" step="any" class="form-control"
-                           value="@(draft.ClearThreshold?.ToString() ?? "")" placeholder="@draft.Threshold.ToString()"
-                           @onchange="e => _draft = draft with { ClearThreshold = ParseOptional(e.Value) }" />
+                           value="@(draft.ClearThreshold is { } c ? ToDisplay(draft, c) : "")"
+                           placeholder="@ToDisplay(draft, draft.Threshold)"
+                           @onchange="e => SetClearThreshold(e.Value)" />
                     <div class="form-text">
                         Blank uses the threshold. Setting it slightly back stops a metric sitting on the
                         line from alerting over and over.
@@ -260,6 +264,7 @@ else
     private IReadOnlyList<SelectOption> _metricOptions = [];
     private int _channelCount;
     private List<Offer> _suggestions = [];
+    private string _units = Appearance.Default.UnitSystem;
     private bool _adding;
 
     private sealed record Offer(Connection Connection, SuggestedRule Rule);
@@ -281,6 +286,7 @@ else
         _rules = await Rules.AllAsync();
         _connections = [.. (await Config.ConnectionsAsync()).Where(c => Registry.Provider(c.Provider)?.IsMonitored != false)];
         _channelCount = (await Alerts.ChannelsAsync()).Count;
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
         LoadSuggestions();
         await LoadMetricsAsync(_draft?.ConnectionId);
     }
@@ -375,6 +381,38 @@ else
     {
         var below = string.Equals(args.Value?.ToString(), nameof(Comparison.Below), StringComparison.Ordinal);
         _draft = _draft! with { Comparison = below ? Comparison.Below : Comparison.Above };
+    }
+
+    /// <summary>
+    /// The editor works in whatever units the user reads in, but stores canonical values —
+    /// otherwise someone shown °F would type 90 and save a 90°C threshold.
+    /// </summary>
+    private string UnitSuffix(AlertRule draft)
+    {
+        var unit = Units.LabelFor(SpecFor(draft), _units);
+        return unit.Length > 0 ? $"({unit})" : "";
+    }
+
+    private string ToDisplay(AlertRule draft, double stored) =>
+        Units.Display(stored, SpecFor(draft).Unit, _units).Value.ToString("0.####");
+
+    private void SetThreshold(object? entered)
+    {
+        if (_draft is not { } draft)
+            return;
+        var typed = Parse(entered, Units.Display(draft.Threshold, SpecFor(draft).Unit, _units).Value);
+        _draft = draft with { Threshold = Units.Store(typed, SpecFor(draft).Unit, _units) };
+    }
+
+    private void SetClearThreshold(object? entered)
+    {
+        if (_draft is not { } draft)
+            return;
+        var typed = ParseOptional(entered);
+        _draft = draft with
+        {
+            ClearThreshold = typed is { } value ? Units.Store(value, SpecFor(draft).Unit, _units) : null,
+        };
     }
 
     private static double Parse(object? value, double fallback) =>

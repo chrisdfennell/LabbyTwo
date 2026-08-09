@@ -74,20 +74,22 @@ public sealed class AppSettingsStore(Db db)
 /// The look of the app, resolved once per render into the CSS custom properties the
 /// stylesheet reads. Kept as a record so a component can hold one without re-querying.
 /// </summary>
-public sealed record Appearance(string Theme, string Accent, string Density, string BrandName)
+public sealed record Appearance(string Theme, string Accent, string Density, string BrandName, string UnitSystem)
 {
     public const string ThemeKey = "theme";
     public const string AccentKey = "accent";
     public const string DensityKey = "density";
     public const string BrandKey = "brand_name";
+    public const string UnitsKey = "units";
 
-    public static Appearance Default => new("system", "#4da3ff", "comfortable", "LabbyTwo");
+    public static Appearance Default => new("system", "#4da3ff", "comfortable", "LabbyTwo", Core.Units.Imperial);
 
     public static Appearance From(SettingsBag settings) => new(
         settings.Get(ThemeKey, Default.Theme),
         settings.Get(AccentKey, Default.Accent),
         settings.Get(DensityKey, Default.Density),
-        settings.Get(BrandKey, Default.BrandName));
+        settings.Get(BrandKey, Default.BrandName),
+        settings.Get(UnitsKey, Default.UnitSystem));
 
     /// <summary>
     /// "system" is deliberately absent from the attribute: with nothing stamped, the

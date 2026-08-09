@@ -16,6 +16,7 @@ public sealed class MetricAlertService(
     Registry registry,
     HealthMonitor monitor,
     AlertService alerts,
+    AppSettingsStore appSettings,
     ILogger<MetricAlertService> log) : IHostedService
 {
     /// <summary>
@@ -147,8 +148,11 @@ public sealed class MetricAlertService(
     private async Task SendAsync(
         AlertRule rule, Connection connection, MetricSpec spec, double value, AlertLevel level, CancellationToken ct)
     {
-        var reading = spec.Format(value, spec.Decimals == 0 && Math.Abs(value) < 100 ? 1 : spec.Decimals);
-        var limit = spec.Format(level == AlertLevel.Down ? rule.Threshold : rule.ClearsAt);
+        // A notification saying "-6.0°C" to someone who thinks in Fahrenheit is a puzzle
+        // rather than a warning, so the message follows the same setting the UI does.
+        var system = (await appSettings.GetAsync(Appearance.UnitsKey, Appearance.Default.UnitSystem, ct));
+        var reading = Units.Format(spec, value, system, spec.Decimals == 0 && Math.Abs(value) < 100 ? 1 : spec.Decimals);
+        var limit = Units.Format(spec, level == AlertLevel.Down ? rule.Threshold : rule.ClearsAt, system);
 
         var alert = level == AlertLevel.Down
             ? new Alert(AlertLevel.Down,

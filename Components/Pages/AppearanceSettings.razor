@@ -41,6 +41,20 @@
                     Used for links, buttons, the active tab and every chart.
                 </div>
 
+                <label class="form-label" for="units">Units</label>
+                <select id="units" class="form-select mb-1" value="@_units"
+                        @onchange="e => SetUnitsAsync(e.Value?.ToString())">
+                    @foreach (var option in Units.Options)
+                    {
+                        <option value="@option.Value">@option.Label</option>
+                    }
+                </select>
+                <div class="form-text mb-3">
+                    Readings are always recorded in one unit so history stays comparable — this
+                    changes what you are shown, on tiles, on the alerts page and in the
+                    notifications themselves. Existing alert thresholds keep meaning the same thing.
+                </div>
+
                 <label class="form-label" for="density">Density</label>
                 <select id="density" class="form-select" value="@_density"
                         @onchange="e => SetDensityAsync(e.Value?.ToString())">
@@ -89,6 +103,7 @@
     private string _accent = Appearance.Default.Accent;
     private string _density = Appearance.Default.Density;
     private string _brand = Appearance.Default.BrandName;
+    private string _units = Appearance.Default.UnitSystem;
 
     private static readonly (string Value, string Label, string Hint)[] Themes =
     [
@@ -104,6 +119,7 @@
     {
         var look = Appearance.From(await AppSettings.AllAsync());
         (_theme, _accent, _density, _brand) = (look.Theme, look.Accent, look.Density, look.BrandName);
+        _units = look.UnitSystem;
     }
 
     // The theme is read while the page is server-rendered, so a change only shows once the
@@ -132,6 +148,12 @@
     {
         _density = value is "compact" or "roomy" ? value : "comfortable";
         await SaveAsync(Appearance.DensityKey, _density);
+    }
+
+    private async Task SetUnitsAsync(string? value)
+    {
+        _units = value == Units.Metric ? Units.Metric : Units.Imperial;
+        await SaveAsync(Appearance.UnitsKey, _units);
     }
 
     private async Task SetBrandAsync(string? value)

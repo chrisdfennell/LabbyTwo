@@ -334,6 +334,10 @@ token is a plain 404.
 - **Accent colour** — one setting, and links, buttons, the active tab, charts and focus
   rings all follow it.
 - **Density** — compact for a laptop, roomy for a tablet on a wall.
+- **Units** — °F/mph or °C/km/h, applied to tiles, the alerts page, the rule editor and
+  the notifications themselves. Readings are always *recorded* in one unit so history
+  stays comparable and a rule written today keeps meaning the same thing; only what you
+  read and type converts.
 - **Name** — call it after your house instead of after this project.
 
 It is stored in the database, not the browser, so every device that opens the dashboard

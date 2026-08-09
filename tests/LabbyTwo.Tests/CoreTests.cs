@@ -534,3 +534,79 @@ public class ContainerHintTests
         Assert.Contains("no-such-host.invalid", message);
     }
 }
+
+public class UnitsTests
+{
+    private static readonly MetricSpec Temp = new("temp_outdoor_c", "Outdoor temperature", "°C", 1);
+    private static readonly MetricSpec Wind = new("gust_mph", "Wind gust", "mph", 1);
+    private static readonly MetricSpec Disk = new("disk_percent", "Disk used", "%");
+
+    [Fact]
+    public void CelsiusBecomesFahrenheitForImperialAndStaysForMetric()
+    {
+        Assert.Equal(32, Units.Display(0, "°C", Units.Imperial).Value, 3);
+        Assert.Equal("°F", Units.Display(0, "°C", Units.Imperial).Unit);
+        Assert.Equal(0, Units.Display(0, "°C", Units.Metric).Value, 3);
+    }
+
+    [Fact]
+    public void MilesPerHourBecomesKilometresForMetric()
+    {
+        Assert.Equal(40, Units.Display(40, "mph", Units.Imperial).Value, 3);
+        Assert.Equal(64.37, Units.Display(40, "mph", Units.Metric).Value, 2);
+    }
+
+    [Theory]
+    [InlineData("%")]
+    [InlineData("ms")]
+    [InlineData(" GB")]
+    [InlineData("")]
+    public void UnitsThatMeanTheSameEverywherePassStraightThrough(string unit)
+    {
+        Assert.Equal(42, Units.Display(42, unit, Units.Metric).Value);
+        Assert.Equal(42, Units.Display(42, unit, Units.Imperial).Value);
+        Assert.False(Units.IsConvertible(unit));
+    }
+
+    [Theory]
+    [InlineData("°C", -40)]
+    [InlineData("°C", 0)]
+    [InlineData("°C", 21.5)]
+    [InlineData("mph", 12.3)]
+    [InlineData("inHg", 29.94)]
+    [InlineData("in", 0.12)]
+    public void DisplayAndStoreAreExactInverses(string unit, double stored)
+    {
+        // This is the property that matters: a threshold typed in one system and read
+        // back in the other must be the same number, or every rule quietly drifts.
+        foreach (var system in new[] { Units.Metric, Units.Imperial })
+        {
+            var shown = Units.Display(stored, unit, system).Value;
+            Assert.Equal(stored, Units.Store(shown, unit, system), 6);
+        }
+    }
+
+    [Fact]
+    public void AThresholdTypedInFahrenheitIsStoredInCelsius()
+    {
+        // The bug this exists to prevent: someone shown °F types 90 and saves 90°C.
+        Assert.Equal(32.22, Units.Store(90, "°C", Units.Imperial), 2);
+        Assert.Equal(90, Units.Store(90, "°C", Units.Metric), 6);
+    }
+
+    [Fact]
+    public void FormattingCarriesTheConvertedUnit()
+    {
+        Assert.Equal("32.0°F", Units.Format(Temp, 0, Units.Imperial));
+        Assert.Equal("0.0°C", Units.Format(Temp, 0, Units.Metric));
+        Assert.Equal("40.0mph", Units.Format(Wind, 40, Units.Imperial));
+        Assert.Equal("90%", Units.Format(Disk, 90, Units.Imperial));
+    }
+
+    [Fact]
+    public void AnUnknownOrMissingSystemIsTreatedAsImperialRatherThanThrowing()
+    {
+        Assert.Equal(32, Units.Display(0, "°C", null).Value, 3);
+        Assert.Equal(32, Units.Display(0, "°C", "nonsense").Value, 3);
+    }
+}
