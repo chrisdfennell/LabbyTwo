@@ -93,7 +93,7 @@ public sealed class UnifiProvider(IHttpClientFactory httpFactory) : IConnectionP
         catch (Exception ex)
         {
             stopwatch.Stop();
-            return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
+            return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("url")));
         }
     }
 

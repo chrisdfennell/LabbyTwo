@@ -75,7 +75,7 @@ public sealed class AmbientWeatherProvider(IHttpClientFactory httpFactory) : ICo
         catch (Exception ex)
         {
             stopwatch.Stop();
-            return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
+            return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, "ambientweather.net"));
         }
     }
 

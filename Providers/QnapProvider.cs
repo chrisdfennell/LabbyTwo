@@ -103,7 +103,7 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
         {
             stopwatch.Stop();
             _sessions.TryRemove(connection.Id, out _);
-            return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
+            return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("host")));
         }
     }
 

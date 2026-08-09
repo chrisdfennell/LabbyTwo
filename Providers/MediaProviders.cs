@@ -70,7 +70,7 @@ public sealed class JellyfinProvider(IHttpClientFactory httpFactory) : IConnecti
         catch (Exception ex)
         {
             stopwatch.Stop();
-            return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
+            return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("url")));
         }
     }
 
@@ -204,7 +204,7 @@ public sealed class QBittorrentProvider(IHttpClientFactory httpFactory) : IConne
         catch (Exception ex)
         {
             stopwatch.Stop();
-            return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
+            return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("url")));
         }
     }
 

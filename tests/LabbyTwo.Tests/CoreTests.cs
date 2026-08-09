@@ -373,3 +373,65 @@ public class SuggestedRuleTests
         Assert.False(Frost.IsCoveredBy(otherMetric, "conn-1"));
     }
 }
+
+public class ProbeErrorTests
+{
+    [Fact]
+    public void AnHttpTimeoutSaysSoInsteadOfTaskWasCanceled()
+    {
+        // HttpClient reports its own timeout as a cancellation, and every provider used
+        // to surface the raw ".NET" text, which tells the user nothing.
+        var message = ProbeError.Describe(new TaskCanceledException("A task was canceled."), "http://nas:8989");
+
+        Assert.DoesNotContain("task was canceled", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Timed out", message);
+        Assert.Contains("http://nas:8989", message);
+        Assert.Contains("firewall", message);
+    }
+
+    [Fact]
+    public void ARefusedConnectionIsDistinguishedFromATimeout()
+    {
+        // Different cause, different fix: refused means the port is closed, timed out
+        // means the packets went nowhere.
+        var refused = new HttpRequestException("boom",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused));
+
+        var message = ProbeError.Describe(refused, "http://nas:8989");
+        Assert.Contains("refused", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("nothing is listening", message);
+    }
+
+    [Fact]
+    public void AnUnresolvableHostSuggestsUsingAnAddress()
+    {
+        var dns = new HttpRequestException("boom",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostNotFound));
+
+        Assert.Contains("resolve", ProbeError.Describe(dns, "http://sonarr.lan"), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ATlsFailureMentionsTheHttpVersusHttpsMixUp()
+    {
+        var tls = new HttpRequestException("The SSL connection could not be established",
+            new System.Security.Authentication.AuthenticationException("bad"));
+
+        Assert.Contains("http://", ProbeError.Describe(tls, "https://nas:8080"));
+    }
+
+    [Fact]
+    public void AnOrdinaryFailureKeepsItsOwnMessage()
+    {
+        Assert.Equal("Sonarr rejected the API key.",
+            ProbeError.Describe(new InvalidOperationException("Sonarr rejected the API key.")));
+    }
+
+    [Fact]
+    public void NoTargetMeansNoDanglingPreposition()
+    {
+        var message = ProbeError.Describe(new TaskCanceledException(), target: null);
+        Assert.DoesNotContain(" at .", message);
+        Assert.DoesNotContain("  ", message);
+    }
+}

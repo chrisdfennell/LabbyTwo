@@ -54,7 +54,7 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
         catch (Exception ex)
         {
             stopwatch.Stop();
-            return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
+            return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("url")));
         }
     }
 

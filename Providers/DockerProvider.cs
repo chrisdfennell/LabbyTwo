@@ -52,7 +52,7 @@ public sealed class DockerProvider : IConnectionProvider
                    "on most hosts it is owned by the docker group.";
         }
 
-        return message;
+        return ProbeError.Describe(ex, endpoint);
     }
 
     public IReadOnlyList<MetricSpec> Metrics =>
