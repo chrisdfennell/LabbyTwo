@@ -76,6 +76,20 @@ bridge, and the firmware will not always forward between them — so a service t
 fine from a shell on the NAS times out from inside LabbyTwo. Join its network and use
 `http://sonarr:8989` instead of the host's IP.
 
+Confusingly, the host's IP *does* work for anything native or host-networked — Plex, the
+NAS's own admin UI — because those are not published container ports being routed back in.
+So some connections work by IP and others do not, on the same box.
+
+For a container that is not in a stack of its own, attach it to a network you share
+rather than moving it:
+
+```bash
+docker network connect media-stack ersatztv
+```
+
+That takes effect immediately, but not across a recreate — add the network to that
+container's own compose file to make it stick.
+
 **No git?** Fine — NAS firmware like QNAP Container Station and Synology ships Docker
 without it. The script falls back to downloading a tarball, and updates still work.
 It needs Docker plus either git, or curl/wget and tar.

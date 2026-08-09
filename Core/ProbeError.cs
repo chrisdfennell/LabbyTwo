@@ -34,8 +34,8 @@ public static class ProbeError
                 return $"Timed out — nothing answered{where}.{DescribeResolution(target)} Otherwise check the " +
                        "address and port, and that a firewall is not silently dropping the connection.";
 
-            return $"Timed out — nothing answered{where}. Check the address and port, and that a " +
-                   "firewall is not silently dropping the connection.";
+            return $"Timed out — nothing answered{where}.{ContainerHint(target)} Check the address and port, " +
+                   "and that a firewall is not silently dropping the connection.";
         }
 
         if (root is SocketException socket)
@@ -101,6 +101,48 @@ public static class ProbeError
             return $" \"{host}\" could not be resolved in this container — containers do not inherit the host's " +
                    "/etc/hosts, NetBIOS or mDNS. Use the IP address.";
         }
+    }
+
+    /// <summary>
+    /// Only ever true inside a container, and only for a LAN address. Reaching another
+    /// container's *published* port through the host's IP has to be forwarded back in, and
+    /// NAS firmware routinely refuses to do that between its bridge networks — so the
+    /// service answers from a shell on the host and times out from in here. Native and
+    /// host-networked services on the same box are fine, which is what makes it baffling.
+    /// </summary>
+    private static string ContainerHint(string? target)
+    {
+        if (!InContainer.Value || HostOf(target) is not null)
+            return "";
+
+        var host = target;
+        if (Uri.TryCreate(target, UriKind.Absolute, out var uri))
+            host = uri.Host;
+
+        if (!System.Net.IPAddress.TryParse(host?.Trim('[', ']'), out var address) || !IsPrivate(address))
+            return "";
+
+        return " If that address is another container's published port, reach it by container name on a " +
+               "shared network instead — a host cannot always route back in to itself.";
+    }
+
+    private static readonly Lazy<bool> InContainer = new(() =>
+        File.Exists("/.dockerenv") ||
+        string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true",
+            StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsPrivate(System.Net.IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        if (bytes.Length != 4)
+            return false;
+        return bytes[0] switch
+        {
+            10 => true,
+            172 => bytes[1] >= 16 && bytes[1] <= 31,
+            192 => bytes[1] == 168,
+            _ => false,
+        };
     }
 
     /// <summary>The host part of a URL, or the target itself if it is already a bare name.</summary>

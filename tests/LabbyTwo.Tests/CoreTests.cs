@@ -500,3 +500,37 @@ public class ErsatzTvPlaylistTests
         Assert.Equal(0, ErsatzTvProvider.CountChannels("#EXTM3U\n"));
     }
 }
+
+public class ContainerHintTests
+{
+    // These run outside a container, so the hint is suppressed — which is the behaviour
+    // worth pinning: it must never appear for someone running LabbyTwo directly, where
+    // the advice would be wrong.
+    [Theory]
+    [InlineData("http://192.168.1.50:8181")]
+    [InlineData("http://10.0.0.5:8409")]
+    [InlineData("http://172.20.0.3:9000")]
+    public void OutsideAContainerAPrivateAddressGetsNoContainerAdvice(string target)
+    {
+        var message = ProbeError.Describe(new TaskCanceledException(), target);
+        Assert.DoesNotContain("container name", message);
+        Assert.Contains("Timed out", message);
+    }
+
+    [Fact]
+    public void APublicAddressNeverGetsContainerAdviceEitherWay()
+    {
+        var message = ProbeError.Describe(new TaskCanceledException(), "https://8.8.8.8:443");
+        Assert.DoesNotContain("container name", message);
+    }
+
+    [Fact]
+    public void AHostnameStillGetsTheResolutionAdviceRatherThanTheContainerOne()
+    {
+        // The two hints are mutually exclusive: a name gets the resolution story, an
+        // address gets the routing story.
+        var message = ProbeError.Describe(new TaskCanceledException(), "http://no-such-host.invalid:8181");
+        Assert.DoesNotContain("shared network", message);
+        Assert.Contains("no-such-host.invalid", message);
+    }
+}
