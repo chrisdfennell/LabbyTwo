@@ -145,6 +145,10 @@
                     }
                     <p class="tile-meta mb-1">Run this where LabbyTwo is installed:</p>
                     <pre class="mb-2"><code>bash install.sh</code></pre>
+                    <p class="tile-meta mb-2">
+                        Or, if this install pulls a published image rather than building from source,
+                        <code>docker compose pull &amp;&amp; docker compose up -d</code>.
+                    </p>
                     <a class="btn btn-sm btn-outline-secondary" href="@_update.CompareUrl"
                        target="_blank" rel="noreferrer">See what changed</a>
                 }
@@ -152,9 +156,16 @@
                 <hr class="my-3" />
                 <p class="tile-meta mb-0">
                     There is deliberately no button that does the update. LabbyTwo runs inside the
-                    container an update replaces, and nothing can rebuild and restart itself — doing it
-                    from in here would mean mounting the Docker socket, which is root on the host. One
-                    SSH command is the cheaper trade.
+                    container an update replaces, and nothing can rebuild and restart itself — a button
+                    here would mean handing <em>this</em> app write access to the Docker socket, which is
+                    root on the host.
+                </p>
+                <p class="tile-meta mb-0 mt-2">
+                    For updates with nothing to run, give that socket to
+                    <a href="https://containrrr.dev/watchtower/" target="_blank" rel="noreferrer">Watchtower</a>
+                    instead — a small tool whose only job is replacing containers, rather than the web app
+                    that stores your credentials and answers to your whole network. It needs this install
+                    to pull a published image; the README has the three steps.
                 </p>
             </div>
         </div>
