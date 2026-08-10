@@ -1,0 +1,56 @@
+@inject Db Database
+
+@* The dashboard half: only what is due, so an empty card means nothing needs doing. *@
+
+@if (_due.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing due. 🎉</p>
+}
+else
+{
+    <div class="d-grid gap-1">
+        @foreach (var chore in _due.Take(Limit))
+        {
+            <div class="d-flex align-items-center gap-2">
+                <button class="btn btn-sm btn-outline-secondary flex-none" title="Mark done"
+                        @onclick="() => CompleteAsync(chore)">✓</button>
+                <span class="text-truncate @(chore.IsOverdue(_today) ? "text-danger" : null)">@chore.Title</span>
+                <span class="tile-meta ms-auto flex-none text-nowrap">@chore.DueLabel(_today)</span>
+            </div>
+        }
+    </div>
+
+    @if (_due.Count > Limit)
+    {
+        <div class="tile-meta mt-2">+@(_due.Count - Limit) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private ChoreStore _store = default!;
+    private IReadOnlyList<ChoreStore.Chore> _due = [];
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 5), 1, 50);
+    private int Within => Math.Clamp(Context.Widget.Settings.GetInt("within_days", 0), 0, 365);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _store = new ChoreStore(Database);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var horizon = _today.AddDays(Within);
+        _due = [.. (await _store.AllAsync()).Where(c => c.Due <= horizon)];
+    }
+
+    private async Task CompleteAsync(ChoreStore.Chore chore)
+    {
+        await _store.CompleteAsync(chore, _today);
+        await LoadAsync();
+    }
+}

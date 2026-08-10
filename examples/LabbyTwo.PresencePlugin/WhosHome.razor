@@ -1,0 +1,69 @@
+@implements IDisposable
+@inject HealthMonitor Health
+
+@* Reads the last sweep rather than pinging again. The monitor already did the work a
+   moment ago, and a widget that repeats it would ping every phone in the house once per
+   card on the page. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a presence connection.</p>
+}
+else if (_devices.Count == 0)
+{
+    <p class="tile-meta mb-0">No devices listed on this connection.</p>
+}
+else if (_readings.Count == 0)
+{
+    <p class="tile-meta mb-0">Waiting for the first check…</p>
+}
+else
+{
+    <div class="d-grid gap-1">
+        @foreach (var device in Sorted)
+        {
+            var home = _readings.TryGetValue(device.Key, out var value) && value > 0;
+            <div class="d-flex align-items-center gap-2">
+                <span class="status-dot @(home ? "status-up" : "status-unknown")"></span>
+                <span class="text-truncate">@device.Name</span>
+                <span class="tile-meta ms-auto flex-none">@(home ? "home" : "away")</span>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<PresenceProvider.Device> _devices = [];
+    private IReadOnlyDictionary<string, double> _readings = new Dictionary<string, double>();
+
+    private bool HomeFirst => Context.Widget.Settings.GetBool("home_first", true);
+
+    // Sorting the people who are in to the top makes the common question — is anyone
+    // here — answerable without reading the list.
+    private IEnumerable<PresenceProvider.Device> Sorted => HomeFirst
+        ? _devices.OrderByDescending(d => _readings.TryGetValue(d.Key, out var v) && v > 0).ThenBy(d => d.Name)
+        : _devices;
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override void OnParametersSet() => Load();
+
+    private void Load()
+    {
+        if (Context.Connection is null)
+            return;
+
+        _devices = PresenceProvider.Parse(Context.Connection.Settings.Get("devices"));
+        _readings = Health.State(Context.Connection.Id)?.Metrics ?? new Dictionary<string, double>();
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Load();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

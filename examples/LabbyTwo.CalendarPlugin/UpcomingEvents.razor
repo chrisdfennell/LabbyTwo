@@ -1,0 +1,102 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject CalendarProvider Calendar
+
+@* What is on, grouped by day. The provider caches the feed, so several of these on one
+   page cost one download between them. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a calendar.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_events is null)
+{
+    <p class="tile-meta mb-0">Loading…</p>
+}
+else if (_events.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing in the next @Days days.</p>
+}
+else
+{
+    <div class="d-grid gap-2">
+        @foreach (var day in _events.Take(Limit).GroupBy(e => e.Start.Date))
+        {
+            <div>
+                <div class="tile-meta">@DayLabel(day.Key)</div>
+                @foreach (var item in day)
+                {
+                    <div class="d-flex justify-content-between gap-2 @(item.IsNow(_now) ? "fw-semibold" : null)">
+                        <span class="text-truncate" title="@Title(item)">@item.Summary</span>
+                        <span class="tile-meta flex-none text-nowrap">@When(item)</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    @if (_events.Count > Limit)
+    {
+        <div class="tile-meta mt-2">+@(_events.Count - Limit) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<Ics.Event>? _events;
+    private string? _error;
+    private DateTimeOffset _now = DateTimeOffset.Now;
+
+    private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 365);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 100);
+
+    // "Today" and "Tomorrow" are what you actually want to read on a wall tablet; a date
+    // is only useful once it is far enough away to need one.
+    private string DayLabel(DateTime day) =>
+        day == _now.Date ? "Today"
+        : day == _now.Date.AddDays(1) ? "Tomorrow"
+        : day < _now.Date.AddDays(7) ? day.ToString("dddd")
+        : day.ToString("ddd d MMM");
+
+    private string When(Ics.Event item) =>
+        item.AllDay ? "all day" : item.Start.ToString("HH:mm");
+
+    private string Title(Ics.Event item) =>
+        item.Location is { Length: > 0 } where ? $"{item.Summary} — {where}" : item.Summary;
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        try
+        {
+            _now = DateTimeOffset.Now;
+            _events = await Calendar.UpcomingAsync(Context.Connection, Days, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    // Redrawing on the monitor's sweep is also what keeps "Today" correct over midnight,
+    // without a timer of this component's own.
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

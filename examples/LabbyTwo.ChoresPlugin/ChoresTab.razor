@@ -1,0 +1,127 @@
+@inject Db Database
+
+@* A tab kind that owns its data. Everything else in LabbyTwo watches something; this one
+   is the thing being watched, which is why it is worth having as an example. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "🧹" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_chores.Count == 0)
+            {
+                <text>Nothing on the list.</text>
+            }
+            else
+            {
+                @($"{_chores.Count(c => c.Due <= _today)} due, {_chores.Count} on the list")
+            }
+        </p>
+    </div>
+</div>
+
+<div class="widget mb-3">
+    <div class="widget-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-5">
+                <label class="form-label" for="chore-title">New chore</label>
+                <input id="chore-title" class="form-control" placeholder="Change the furnace filter"
+                       @bind="_title" @bind:event="oninput" @onkeydown="OnKeyDown" />
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="chore-due">First due</label>
+                <input id="chore-due" type="date" class="form-control" @bind="_due" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label" for="chore-every">Repeat (days)</label>
+                <input id="chore-every" type="number" min="0" class="form-control" @bind="_everyDays"
+                       title="0 for a one-off" />
+            </div>
+            <div class="col-12 col-md-2">
+                <button class="btn btn-primary w-100" disabled="@(_title.Trim().Length == 0)"
+                        @onclick="AddAsync">Add</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_chores.Count > 0)
+{
+    <div class="widget">
+        <div class="widget-body d-grid gap-2">
+            @foreach (var chore in _chores)
+            {
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-secondary flex-none" title="Mark done"
+                            @onclick="() => CompleteAsync(chore)">✓</button>
+
+                    <span class="text-truncate @(chore.IsOverdue(_today) ? "text-danger" : null)">
+                        @chore.Title
+                    </span>
+
+                    @if (chore.Recurs)
+                    {
+                        <span class="tile-meta flex-none">every @chore.EveryDays d</span>
+                    }
+
+                    <span class="tile-meta ms-auto flex-none text-nowrap">
+                        @chore.DueLabel(_today)
+                    </span>
+
+                    <button class="btn btn-sm btn-outline-danger flex-none" title="Delete"
+                            @onclick="() => DeleteAsync(chore)">✕</button>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private ChoreStore _store = default!;
+    private IReadOnlyList<ChoreStore.Chore> _chores = [];
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private string _title = "";
+    private DateTime _due = DateTime.Today;
+    private int _everyDays;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _store = new ChoreStore(Database);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _chores = await _store.AllAsync();
+
+    private async Task AddAsync()
+    {
+        if (_title.Trim().Length == 0)
+            return;
+
+        await _store.AddAsync(_title, DateOnly.FromDateTime(_due), _everyDays);
+
+        // Keep the repeat and the date: adding six chores that all repeat monthly is the
+        // normal case, and clearing the whole form each time would mean retyping them.
+        _title = "";
+        await LoadAsync();
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await AddAsync();
+    }
+
+    private async Task CompleteAsync(ChoreStore.Chore chore)
+    {
+        await _store.CompleteAsync(chore, _today);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(ChoreStore.Chore chore)
+    {
+        await _store.DeleteAsync(chore.Id);
+        await LoadAsync();
+    }
+}

@@ -1,88 +1,152 @@
 # Example plugins
 
-Four plugins that build, load and do something worth having. They exist to be read: each
-one demonstrates a different extension point, and between them they cover every rule in
+Seven plugins that build, load and do something worth having. They are meant to be
+installed as much as read: most of them fill a real gap, and between them they cover every
+extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
 
 Nothing here is compiled into LabbyTwo. They are separate projects that reference it, the
 same way yours will.
 
-| Plugin | Extension points | Read it for |
+| Plugin | Adds | What it is for |
 |---|---|---|
-| [ExamplePlugin](LabbyTwo.ExamplePlugin) | provider | The smallest complete thing. No HTTP, no auth — free space on a path. |
-| [SyncthingPlugin](LabbyTwo.SyncthingPlugin) | provider | The shape of a real HTTP provider: API key, two calls, metrics, a suggested alert rule, and errors turned into sentences. |
-| [PaperlessPlugin](LabbyTwo.PaperlessPlugin) | provider + widget | Shipping a Blazor component in a plugin, and a widget that calls its own provider for data a number cannot show. |
-| [DashyImportPlugin](LabbyTwo.DashyImportPlugin) | importer | A pure function from a file to an import plan, and how to use a library the host already ships. |
+| [GluetunPlugin](LabbyTwo.GluetunPlugin) | provider | Whether your VPN tunnel is up, which country it exits from, and the forwarded port. |
+| [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
+| [ChoresPlugin](LabbyTwo.ChoresPlugin) | tab kind + widget | Recurring household jobs with due dates. Stores its own data. |
+| [PresencePlugin](LabbyTwo.PresencePlugin) | provider + widget | Who's home — pings a list of devices and charts each one. |
+| [SyncthingPlugin](LabbyTwo.SyncthingPlugin) | provider | A Syncthing daemon: devices connected, data moved, uptime. |
+| [PaperlessPlugin](LabbyTwo.PaperlessPlugin) | provider + widget | Paperless-ngx document count, inbox backlog, and what was just filed. |
+| [DashyImportPlugin](LabbyTwo.DashyImportPlugin) | importer | Reads Dashy's `conf.yml` so you can migrate from it. |
+| [ExamplePlugin](LabbyTwo.ExamplePlugin) | provider | Free space on a path. The smallest complete thing — start here if you are writing one. |
 
 ## Build and install
 
 ```bash
-cd examples/LabbyTwo.SyncthingPlugin
+cd examples/LabbyTwo.GluetunPlugin
 dotnet build -c Release
-cp bin/Release/net10.0/LabbyTwo.SyncthingPlugin.dll /path/to/labbytwo/data/plugins/
-docker compose restart labbytwo
 ```
 
-With Docker, `data/plugins` is inside the named volume. The easiest way in:
+With Docker, `data/plugins` is inside the named volume, so copy the DLL in and restart:
 
 ```bash
-docker cp bin/Release/net10.0/LabbyTwo.SyncthingPlugin.dll labbytwo-labbytwo-1:/app/data/plugins/
+docker cp bin/Release/net10.0/LabbyTwo.GluetunPlugin.dll labbytwo-labbytwo-1:/app/data/plugins/
 docker compose restart labbytwo
 ```
 
 **Settings** then lists every provider, widget, tab kind and importer the build can see,
 plus the reason for anything that failed to load. A plugin that does not appear there did
-not load, and that page will say why.
+not load, and that page says why.
 
-## What each one is worth reading for
+Plugins are scanned once, at startup. Installing or updating one needs a restart.
 
-### ExamplePlugin — `DiskSpaceProvider`
+---
 
-One file, no dependencies. Start here. It also makes the point that "up" means *reachable*
-and nothing else: a nearly-full disk is not a failed probe, because reporting it as one to
-borrow the alerting would make every uptime figure lie.
+## Gluetun — because a VPN fails quietly
 
-### SyncthingPlugin — `SyncthingProvider`
+Point it at Gluetun's control server (`http://gluetun:8000`). It reports the tunnel state,
+the public IP and country it is exiting from, and the forwarded port.
 
-The template for anything with an HTTP API. Worth noting:
+Worth having because of *how* a VPN fails. When gluetun drops, the containers sharing its
+network namespace do not go down — they go silent. qBittorrent still answers, still says
+it is running, and simply stops moving bytes. Nothing on a dashboard shows that unless
+something is watching the tunnel itself.
 
-- `IHttpClientFactory` comes from the host by constructor injection — a `new HttpClient()`
-  per probe exhausts sockets.
-- `FieldKind.Password` is encrypted at rest and never rendered back to the browser.
-- `SuggestedRules` are *offered* on the Alerts page, never created behind anyone's back.
-- The `catch` returns a `ProbeResult.Down` with a sentence, never an exception. That text
-  is what a person reads on a tile at 2am.
+Two optional settings turn "up" into "up and correct":
 
-### PaperlessPlugin — `PaperlessProvider` + `RecentDocuments.razor`
+- **Expected country** fails the probe when the tunnel reconnects somewhere you did not
+  intend.
+- **Expect a forwarded port** makes a zero a failure rather than a fact.
 
-A provider and a widget in one DLL. Three things this shows that a provider alone cannot:
+A failed probe still records its metrics, so `vpn_up = 0` is charted rather than leaving a
+gap exactly when something went wrong.
 
-- **The project needs `Microsoft.NET.Sdk.Razor`.** The plain SDK will not compile a
-  `.razor` file into the assembly.
-- **A plugin needs its own `_Imports.razor`.** The host's does not reach into your project.
-- **The widget injects its own provider.** Every provider is registered under its concrete
-  type as well as the interface, so `@inject PaperlessProvider Paperless` just works — no
-  service registration of your own.
+## Calendar — one URL, no OAuth
 
-The widget does not poll. The host's monitor already does, and every widget redraws when
-it lands; a widget with its own timer multiplies load on the far end by the number of
-cards placed.
+An `.ics` feed is just a file over HTTP, which makes a calendar one of the easiest useful
+things to add: Google, Nextcloud, iCloud, bin collections, a fixture list.
 
-### DashyImportPlugin — `DashyImporter`
+It ships all three renderable extension points: a **provider** (events today, what's next,
+and a stale feed as a real failure worth alerting on), a **widget** grouped by day with
+"Today" and "Tomorrow" rather than dates, and an **Agenda tab kind** with a card per day.
 
-The easiest extension point to get right, because it is a pure function: a file in, an
-`ImportPlan` out, no database access. That makes it unit-testable with a string.
+[`Ics.cs`](LabbyTwo.CalendarPlugin/Ics.cs) is the interesting file. It handles the parts of
+RFC 5545 that real calendars actually contain — line folding, all-day events, `TZID` zones,
+escaped commas in titles, and recurrence with `INTERVAL`, `COUNT`, `UNTIL` and the
+Monday-and-Wednesday form of `BYDAY`. It is a pure function from text to occurrences, so
+the awkward cases can be checked with a string and no network.
 
-It also answers a question the other examples do not: **how do I use a library the host
-already has?** Reference the package with `PrivateAssets="all" ExcludeAssets="runtime"` at
-the host's exact version, so you compile against it without dropping a second copy of the
-DLL beside your plugin. A package the host does *not* ship is the opposite case — that one
-you must copy into the plugins folder yourself, because there is no NuGet restore at
-runtime.
+> The feed URL is a secret — anyone with the link can read the calendar. It is stored with
+> the same encryption as any other password field.
 
-Note also that it brings its own three-line YAML helpers rather than using LabbyTwo's,
-which is `internal`. The four interfaces and the types they mention are the contract;
-everything else in the app may change without notice.
+## Chores — a plugin that owns its data
+
+Everything else in LabbyTwo watches something. This one *is* the thing, which is why it is
+worth having as an example: a tab kind to manage the list, a widget showing only what is
+due, and one table of its own.
+
+It uses the host's database, injected as `Db`, and creates `plugin_chores` itself with
+`CREATE TABLE IF NOT EXISTS` on first use — LabbyTwo's migrations know nothing about plugin
+tables. Using the same file rather than one of its own means the chores are inside every
+backup and every "Download database" without anyone thinking about it.
+
+Ticking off a repeating chore sets the next due date **from today**, not from when it was
+supposed to be done — otherwise a chore you are three weeks late on stays three weeks late
+forever.
+
+## Presence — who's home
+
+Pings a list of devices every sweep. Each device becomes its own metric, so "was anyone in
+on Tuesday afternoon" is a chart rather than a guess, and you can alert on one particular
+phone arriving or leaving.
+
+This is the example of a provider whose metrics are decided by the *user* rather than the
+code: `MetricsFor(connection)` reads the configured list, which is what puts each device in
+the chart and alert pickers by name instead of leaving people to type `home_kitchen_tablet`
+from memory.
+
+Nobody being home is an answer, not a failure. Reporting it as one would make the uptime
+figure mean "somebody was in" and fire a down-alert every time the house is empty.
+
+## Syncthing, Paperless-ngx, Dashy, disk space
+
+The other four are smaller and more obviously templates.
+
+**Syncthing** is the shape almost every HTTP provider takes: an API key, two calls,
+metrics, a suggested alert rule, and errors turned into sentences. Copy this one.
+
+**Paperless-ngx** is a provider and a widget in one DLL. Three things it shows that a
+provider alone cannot: the project needs `Microsoft.NET.Sdk.Razor`, a plugin needs its own
+`_Imports.razor`, and a widget can `@inject` its own provider because every provider is
+registered under its concrete type as well as the interface.
+
+**Dashy** is the fourth extension point and the easiest to get right — a pure function from
+a file to an `ImportPlan`, with no database access, so it is unit-testable with a string.
+It also answers "how do I use a library the host already has?": reference the package with
+`PrivateAssets="all" ExcludeAssets="runtime"` at the host's exact version, so you compile
+against it without dropping a second copy of the DLL beside your plugin.
+
+**Disk space** is one file with no dependencies. It makes the point that "up" means
+*reachable* and nothing else: a nearly-full disk is not a failed probe, because reporting
+it as one to borrow the alerting would make every uptime figure lie.
+
+---
+
+## Things every one of these does
+
+Patterns worth copying, all of them learned the hard way:
+
+- **A probe never throws.** It returns `ProbeResult.Down` with a sentence someone can act
+  on. That text is what shows on a tile at 2am.
+- **A widget never polls.** The host's monitor already does, and every widget redraws when
+  it lands. A widget with its own timer multiplies load on the far end by the number of
+  cards on the page.
+- **A widget never throws either.** An unhandled exception in one card takes down the whole
+  Blazor circuit, and the rest of the dashboard goes with it.
+- **Expensive fetches are cached per connection.** The calendar downloads a whole file; the
+  provider caches it for five minutes so the widget, the agenda page and the probe share
+  one download.
+- **Use the injected `IHttpClientFactory`.** A `new HttpClient()` per probe exhausts
+  sockets.
 
 ## A warning worth repeating
 

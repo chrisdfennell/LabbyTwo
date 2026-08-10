@@ -320,12 +320,20 @@ docker compose restart labbytwo
 Settings → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
 
-## Four that work
+## Seven that work
 
-[`examples/`](../examples) has four plugins that build and run — a provider with no
-dependencies, an HTTP provider with an API key, a provider plus a Blazor widget, and an
-importer. Between them they cover every rule on this page. Start from whichever is closest
-to what you are writing.
+[`examples/`](../examples) has seven plugins that build and run, covering every extension
+point on this page. Start from whichever is closest to what you are writing:
+
+| If you are writing | Read |
+|---|---|
+| A provider for an HTTP API | `SyncthingPlugin` — API key, metrics, a suggested rule, errors as sentences |
+| A provider with no dependencies | `ExamplePlugin` — one file, free space on a path |
+| A provider whose metrics depend on its settings | `PresencePlugin` — `MetricsFor(connection)` |
+| A provider *and* a widget | `PaperlessPlugin` — the Razor SDK, `_Imports.razor`, injecting your own provider |
+| A tab kind | `CalendarPlugin` — a provider, a widget and an agenda page from one feed |
+| Something that stores its own data | `ChoresPlugin` — its own table in the host's database |
+| An importer | `DashyImportPlugin` — a pure function, and using a library the host ships |
 
 ### The rules
 

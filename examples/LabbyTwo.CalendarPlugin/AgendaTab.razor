@@ -1,0 +1,132 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject CalendarProvider Calendar
+
+@* A whole page for one calendar: a day per row, for as far ahead as you asked. The tab
+   kind only decides the layout — the widget above can show the same data on a dashboard. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "📅" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_calendar is null)
+            {
+                <text>No calendar chosen — edit this tab and pick one.</text>
+            }
+            else
+            {
+                @_calendar.Name<text> — the next @Days days</text>
+            }
+        </p>
+    </div>
+</div>
+
+@if (_calendar is null)
+{
+    <div class="empty-state">
+        <p class="mb-3">This tab needs a calendar connection.</p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    </div>
+}
+else if (_error is { Length: > 0 })
+{
+    <div class="empty-state"><p class="mb-0 text-danger">@_error</p></div>
+}
+else if (_events is { Count: 0 })
+{
+    <div class="empty-state">Nothing in the next @Days days.</div>
+}
+else if (_events is not null)
+{
+    <div class="row g-3">
+        @foreach (var day in _events.GroupBy(e => e.Start.Date))
+        {
+            <div class="col-12 col-lg-6">
+                <div class="widget h-100">
+                    <div class="widget-head">
+                        <h2 class="widget-title">@DayLabel(day.Key)</h2>
+                        <span class="tile-meta">@day.Count() event@(day.Count() == 1 ? "" : "s")</span>
+                    </div>
+                    <div class="widget-body d-grid gap-2">
+                        @foreach (var item in day)
+                        {
+                            <div class="d-flex justify-content-between gap-2 @(item.IsNow(_now) ? "fw-semibold" : null)">
+                                <div class="text-truncate">
+                                    @item.Summary
+                                    @if (item.Location is { Length: > 0 })
+                                    {
+                                        <div class="tile-meta text-truncate">@item.Location</div>
+                                    }
+                                </div>
+                                <span class="tile-meta flex-none text-nowrap">
+                                    @(item.AllDay ? "all day" : $"{item.Start:HH:mm}–{item.End:HH:mm}")
+                                </span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private Connection? _calendar;
+    private IReadOnlyList<Ics.Event>? _events;
+    private string? _error;
+    private DateTimeOffset _now = DateTimeOffset.Now;
+
+    private int Days => Math.Clamp(Tab.Settings.GetInt("days", 14), 1, 365);
+
+    private string DayLabel(DateTime day) =>
+        day == _now.Date ? "Today"
+        : day == _now.Date.AddDays(1) ? "Tomorrow"
+        : day.ToString("dddd d MMMM");
+
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        Config.Changed += OnUpdated;
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var connections = await Config.ConnectionsAsync();
+        var chosen = Tab.Settings.Get("connection");
+
+        _calendar = chosen.Length > 0
+            ? connections.FirstOrDefault(c => c.Id == chosen)
+            : connections.FirstOrDefault(c => c.Provider == "ics-calendar");
+
+        if (_calendar is null)
+            return;
+
+        try
+        {
+            _now = DateTimeOffset.Now;
+            _events = await Calendar.UpcomingAsync(_calendar, Days, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Config.Changed -= OnUpdated;
+    }
+}

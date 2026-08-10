@@ -445,10 +445,13 @@ of that name, which is the supported way to fix a provider you disagree with.
 Plugin code runs unsandboxed inside the LabbyTwo process, which can read the database and
 the keyring. Install plugins you would trust with your credentials.
 
-[`examples/`](examples) has four that build and run, one per extension point — a provider
-with no dependencies, an HTTP provider with an API key and an alert rule, a provider
-bundled with a Blazor widget, and an importer for Dashy's `conf.yml`. They are the fastest
-way in: copy whichever is closest to what you want and change the middle.
+[`examples/`](examples) has seven that build and run, and most of them fill a real gap
+rather than only demonstrating one: **Gluetun** (is the VPN tunnel actually up, and exiting
+where you think), **Calendar** (any `.ics` feed, as a widget and a whole agenda page),
+**Chores** (recurring jobs, storing their own data in a table of their own), **Who's home**
+(pings devices and charts each one), plus Syncthing, Paperless-ngx and a Dashy importer.
+Between them they cover every extension point — copy whichever is closest to what you
+want and change the middle.
 
 ---
 
