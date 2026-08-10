@@ -54,6 +54,19 @@ public static class ProbeError
             };
         }
 
+        // A typo in a form rather than a network fault, and the raw message — "Invalid URI:
+        // Invalid port specified." — names neither the field it came from nor the value it
+        // choked on, which leaves nothing to act on.
+        if (root is UriFormatException)
+        {
+            return string.IsNullOrWhiteSpace(target)
+                ? "That address could not be understood. It needs a scheme and a host, like " +
+                  "http://192.168.1.50:8083."
+                : $"\"{target}\" is not an address this can use. It wants http:// or https://, then the host, then " +
+                  "one colon and the port — http://192.168.1.50:8083 — with no space, second colon or stray " +
+                  "character anywhere in it.";
+        }
+
         // A TLS failure against a plain-HTTP port is a very common misconfiguration, and
         // the raw message ("The SSL connection could not be established") does not say so.
         if (root is System.Security.Authentication.AuthenticationException)

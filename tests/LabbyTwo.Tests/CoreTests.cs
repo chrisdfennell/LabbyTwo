@@ -404,6 +404,20 @@ public class ProbeErrorTests
     }
 
     [Fact]
+    public void AMalformedAddressSaysWhatAGoodOneLooksLike()
+    {
+        // The raw text is "Invalid URI: Invalid port specified.", which names neither the
+        // value nor the field and reads like a fault in the thing being probed.
+        var broken = Record.Exception(() => new HttpRequestMessage(HttpMethod.Get, "http://192.168.86.57:8083:80"));
+        var message = ProbeError.Describe(broken!, "http://192.168.86.57:8083:80");
+
+        Assert.IsType<UriFormatException>(broken);
+        Assert.DoesNotContain("Invalid URI", message);
+        Assert.Contains("http://192.168.86.57:8083:80", message);
+        Assert.Contains("port", message);
+    }
+
+    [Fact]
     public void ATimeoutAgainstAResolvableNameReportsWhatItResolvedTo()
     {
         // localhost resolves everywhere, often to both 127.0.0.1 and ::1 — which is the
