@@ -10,6 +10,12 @@ namespace LabbyTwo.Providers;
 public static class ProviderHttp
 {
     public const string ClientName = "provider";
+
+    /// <summary>
+    /// The same handler with no timeout, for downloads and uploads. Anything that streams
+    /// a file should ask for this one and pass the request's CancellationToken.
+    /// </summary>
+    public const string TransferClientName = "provider-transfer";
 }
 
 /// <summary>

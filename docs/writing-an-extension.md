@@ -1,6 +1,6 @@
 # Writing an extension
 
-LabbyTwo has four extension points. Each one is an interface, each one is found by
+LabbyTwo has five extension points. Each one is an interface, each one is found by
 scanning for classes rather than from a list, and each one works identically whether you
 are editing LabbyTwo itself or shipping a plugin DLL that somebody drops into their
 `data/plugins` folder.
@@ -11,6 +11,7 @@ are editing LabbyTwo itself or shipping a plugin DLL that somebody drops into th
 | `IWidgetType` | a card that can go on a dashboard tab | `Components/Widgets/` |
 | `ITabKind` | a whole kind of page in the nav | `Components/Pages/Kinds/` |
 | `IDashboardImporter` | a config format it can read from another dashboard | `Services/Import/` |
+| `IEndpointExtension` | routes the server answers itself, outside the Blazor circuit | anywhere |
 
 There is no registration step. `Program.cs` scans the assembly, finds every public
 non-abstract class implementing one of these, and registers it as a singleton. Add the
@@ -271,6 +272,63 @@ both are written.
 
 ---
 
+## An endpoint
+
+The other four extension points all end in HTML. This one is for the times that is not
+enough: handing the browser a file, taking an upload that should not travel through the
+Blazor circuit, or a link somebody opens on a phone without logging in. A component cannot
+do any of those, because none of them are a render.
+
+```csharp
+public sealed class SnapshotEndpoints(ConfigStore config) : IEndpointExtension
+{
+    // Also the URL segment your routes live under. Never change it after release.
+    public string Key => "camera";
+
+    public void Map(IEndpointRouteBuilder routes) =>
+        // Answers at /ext/camera/snapshot
+        routes.MapGet("/snapshot", async (string connection, HttpContext context, CancellationToken ct) =>
+        {
+            var camera = await config.ConnectionAsync(connection, ct);
+            if (camera is null)
+                return Results.NotFound();
+
+            context.Response.ContentType = "image/jpeg";
+            // …stream it…
+            return Results.Empty;
+        });
+}
+```
+
+### Things worth knowing
+
+- **Everything is mapped under `/ext/{Key}`.** That is what stops a plugin from claiming
+  `/login`, or colliding with the next plugin, and it makes a URL say which extension
+  answered it. A key that would not survive being a URL segment — a slash, a route brace —
+  is refused and reported on the Settings page rather than mapped.
+- **Login applies by default.** On an install with a password, an extension's routes
+  require it like every other page. Override `RequiresAuthorization => false` only for
+  something that genuinely has to answer without one, like a share link — and then make the
+  token in the link the thing that authorises it.
+- **Throwing takes you out, not the app.** If `Map` throws, that extension's routes are
+  skipped and the reason appears under Settings → Plugins. The dashboard still starts.
+- **Pass Range headers through.** If you are streaming a file from somewhere else, copy the
+  request's `Range` header up and the `206`, `Content-Range` and `Accept-Ranges` back down.
+  That pair is the difference between a video that seeks and a video that has to be
+  downloaded whole before it plays.
+- **Use `ProviderHttp.TransferClientName` for files.** The ordinary provider client times
+  out after 30 seconds, which is right for a probe and wrong for a four-gigabyte download.
+  The transfer client has no timeout and takes its bound from the request's
+  `CancellationToken` — the browser hanging up.
+- **A minimal API endpoint is not a Razor component.** It has no circuit, no
+  `StateHasChanged`, and no antiforgery token unless you ask for one; a `POST` that binds
+  form data needs `.DisableAntiforgery()` or a token of its own.
+
+`QnapFilesPlugin` in [`examples/`](../examples) is the worked version: a tab kind that
+lists a NAS folder, and an endpoint next to it that serves the file the listing links to.
+
+---
+
 ## Shipping it as a plugin
 
 Nothing above needs to live in the LabbyTwo repository. A plugin is an ordinary class
@@ -320,9 +378,9 @@ docker compose restart labbytwo
 Settings → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
 
-## Seven that work
+## Eight that work
 
-[`examples/`](../examples) has seven plugins that build and run, covering every extension
+[`examples/`](../examples) has eight plugins that build and run, covering every extension
 point on this page. Start from whichever is closest to what you are writing:
 
 | If you are writing | Read |
@@ -334,6 +392,7 @@ point on this page. Start from whichever is closest to what you are writing:
 | A tab kind | `CalendarPlugin` — a provider, a widget and an agenda page from one feed |
 | Something that stores its own data | `ChoresPlugin` — its own table in the host's database |
 | An importer | `DashyImportPlugin` — a pure function, and using a library the host ships |
+| Something that serves files | `QnapFilesPlugin` — a tab kind and an endpoint, downloads with Range |
 
 ### The rules
 

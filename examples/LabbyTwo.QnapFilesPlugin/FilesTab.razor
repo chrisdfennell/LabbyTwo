@@ -1,0 +1,421 @@
+@inject ConfigStore Config
+@inject QnapProvider Qnap
+@inject IHttpClientFactory HttpFactory
+
+@* Browsing lives here; the bytes come from QnapFilesEndpoints. That split is the whole
+   lesson of this plugin — a component can render a listing, but only an endpoint can hand
+   the browser a file with Range honoured, which is what makes a video seek. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "📂" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_nas is null)
+            {
+                <text>No NAS chosen.</text>
+            }
+            else
+            {
+                @_nas.Name
+                @if (ReadOnly)
+                {
+                    <text> — read only</text>
+                }
+            }
+        </p>
+    </div>
+
+    @if (_nas is not null)
+    {
+        <div class="d-flex gap-2 align-items-center">
+            @if (!ReadOnly && _path.Length > 0)
+            {
+                <InputFile OnChange="OnFilesChosenAsync" multiple disabled="@_busy" class="form-control form-control-sm"
+                           style="width:16rem" aria-label="Upload files here" />
+            }
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync" disabled="@_busy">
+                @(_busy ? "Working…" : "Refresh")
+            </button>
+        </div>
+    }
+</div>
+
+@if (_nas is null)
+{
+    <div class="empty-state">
+        <p class="mb-3">This tab needs a QNAP connection.</p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    </div>
+}
+else
+{
+    <nav class="mb-2 d-flex flex-wrap align-items-center gap-1 small" aria-label="Path">
+        <button class="btn btn-link btn-sm p-0" @onclick="@(() => OpenAsync(string.Empty))">Shares</button>
+        @foreach (var crumb in Crumbs)
+        {
+            <span class="tile-meta">/</span>
+            <button class="btn btn-link btn-sm p-0" @onclick="@(() => OpenAsync(crumb.Path))">@crumb.Name</button>
+        }
+    </nav>
+
+    @if (_error.Length > 0)
+    {
+        <div class="alert alert-warning py-2">@_error</div>
+    }
+
+    @if (!ReadOnly && _path.Length > 0)
+    {
+        <div class="widget mb-3">
+            <div class="widget-body d-flex flex-wrap gap-2 align-items-end">
+                <div>
+                    <label class="form-label" for="new-folder">New folder</label>
+                    <input id="new-folder" class="form-control form-control-sm" style="width:14rem"
+                           placeholder="Holiday photos" @bind="_newFolder" @bind:event="oninput"
+                           @onkeydown="OnNewFolderKeyDown" />
+                </div>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="CreateFolderAsync"
+                        disabled="@(_busy || _newFolder.Trim().Length == 0)">
+                    Create
+                </button>
+                @if (_uploads.Count > 0)
+                {
+                    <div class="tile-meta ms-auto">@UploadSummary</div>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="widget">
+        <div class="widget-body p-0">
+            @if (_entries.Count == 0)
+            {
+                <div class="empty-state m-0">@(_busy ? "Loading…" : "Nothing here.")</div>
+            }
+            else
+            {
+                <table class="table table-sm mb-0 align-middle">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th class="text-end" style="width:8rem">Size</th>
+                            <th style="width:11rem">Modified</th>
+                            <th style="width:14rem"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in _entries)
+                        {
+                            <tr @key="entry.Name">
+                                <td>
+                                    @if (entry.IsFolder)
+                                    {
+                                        <button class="btn btn-link btn-sm p-0 text-start"
+                                                @onclick="@(() => OpenAsync(Child(entry.Name)))">
+                                            📁 @entry.Name
+                                        </button>
+                                    }
+                                    else if (_renaming == entry.Name)
+                                    {
+                                        <input class="form-control form-control-sm" style="max-width:20rem"
+                                               @bind="_renameTo" @bind:event="oninput"
+                                               @onkeydown="@(args => OnRenameKeyDown(args, entry))" />
+                                    }
+                                    else
+                                    {
+                                        <span>@Glyph(entry.Name) @entry.Name</span>
+                                    }
+                                </td>
+                                <td class="text-end tile-meta">@(entry.IsFolder ? "" : Size(entry.SizeBytes))</td>
+                                <td class="tile-meta">@(entry.Modified?.ToString("d MMM yyyy HH:mm") ?? "")</td>
+                                <td class="text-end">
+                                    @if (!entry.IsFolder)
+                                    {
+                                        @if (Previewable(entry.Name))
+                                        {
+                                            @* Opens in a tab rather than downloading: the endpoint sends
+                                               a real content type and honours Range, so a video plays. *@
+                                            <a class="btn btn-sm btn-outline-secondary"
+                                               href="@QnapFilesEndpoints.DownloadUrl(_nas.Id, _path, entry.Name, inline: true)"
+                                               target="_blank" rel="noopener">Open</a>
+                                        }
+                                        <a class="btn btn-sm btn-outline-secondary"
+                                           href="@QnapFilesEndpoints.DownloadUrl(_nas.Id, _path, entry.Name)">Download</a>
+                                    }
+
+                                    @if (!ReadOnly && _path.Length > 0)
+                                    {
+                                        @if (_renaming == entry.Name)
+                                        {
+                                            <button class="btn btn-sm btn-primary" @onclick="@(() => RenameAsync(entry))"
+                                                    disabled="@(_renameTo.Trim().Length == 0)">Save</button>
+                                            <button class="btn btn-sm btn-outline-secondary" @onclick="CancelRename">Cancel</button>
+                                        }
+                                        else
+                                        {
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                    @onclick="@(() => BeginRename(entry))">Rename</button>
+                                            <button class="btn btn-sm btn-outline-danger"
+                                                    @onclick="@(() => _deleting = entry)">Delete</button>
+                                        }
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+}
+
+@if (_deleting is { } doomed)
+{
+    <ConfirmDialog Title="Delete this?"
+                   Message="@($"{doomed.Name} will be deleted on {_nas?.Name}. If the share has a recycle bin, QTS moves it there.")"
+                   OnCancel="() => _deleting = null"
+                   OnConfirm="DeleteAsync" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private QnapFileStation _files = default!;
+    private Connection? _nas;
+    private IReadOnlyList<QnapFileStation.Entry> _entries = [];
+
+    // Empty means the list of shares, which is a different call from a directory listing —
+    // the root of a QNAP is not a folder.
+    private string _path = "";
+    private string _error = "";
+    private bool _busy;
+    private string _loadedTab = "";
+
+    private string _newFolder = "";
+    private string _renaming = "";
+    private string _renameTo = "";
+    private QnapFileStation.Entry? _deleting;
+    private readonly List<string> _uploads = [];
+
+    private bool ReadOnly => Tab.Settings.GetBool("read_only", true);
+    private long MaxUploadBytes => Math.Max(1, Tab.Settings.GetInt("max_upload_mb", 2048)) * 1024L * 1024L;
+
+    private string UploadSummary => _uploads.Count == 1 ? _uploads[0] : $"{_uploads.Count} files uploading…";
+
+    private IReadOnlyList<(string Name, string Path)> Crumbs
+    {
+        get
+        {
+            var crumbs = new List<(string, string)>();
+            var walked = "";
+            foreach (var segment in _path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            {
+                walked += "/" + segment;
+                crumbs.Add((segment, walked));
+            }
+            return crumbs;
+        }
+    }
+
+    protected override void OnInitialized() => _files = new QnapFileStation(HttpFactory, Qnap);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Only re-resolve when the tab itself changes. Otherwise every re-render would
+        // throw the user back to the folder the settings name, mid-browse.
+        if (_loadedTab == Tab.Id)
+            return;
+
+        _loadedTab = Tab.Id;
+        _path = Tab.Settings.Get("root").TrimEnd('/');
+
+        var connections = await Config.ConnectionsAsync();
+        var chosen = Tab.Settings.Get("connection");
+        _nas = chosen.Length > 0
+            ? connections.FirstOrDefault(c => c.Id == chosen)
+            // Nothing chosen: the only QNAP there is, is almost certainly the one meant.
+            : connections.FirstOrDefault(c => c.Provider == "qnap");
+
+        await ReloadAsync();
+    }
+
+    private async Task OpenAsync(string path)
+    {
+        _path = path;
+        CancelRename();
+        await ReloadAsync();
+    }
+
+    private string Child(string name) => _path.Length == 0 ? "/" + name : $"{_path}/{name}";
+
+    private async Task ReloadAsync()
+    {
+        if (_nas is null)
+            return;
+
+        _busy = true;
+        _error = "";
+        try
+        {
+            _entries = _path.Length == 0
+                ? await _files.SharesAsync(_nas, CancellationToken.None)
+                : await _files.ListAsync(_nas, _path, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _entries = [];
+            _error = $"{_nas.Name} did not answer: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OnFilesChosenAsync(InputFileChangeEventArgs args)
+    {
+        if (_nas is not { } nas || ReadOnly)
+            return;
+
+        _busy = true;
+        _error = "";
+
+        // Twenty at a time: the guard is against a whole folder dragged in by accident,
+        // not a considered choice, and the browser holds each one open until it is sent.
+        foreach (var file in args.GetMultipleFiles(20))
+        {
+            if (file.Size > MaxUploadBytes)
+            {
+                _error = $"{file.Name} is {Size(file.Size)}, over this tab's {Size(MaxUploadBytes)} limit.";
+                continue;
+            }
+
+            _uploads.Add(file.Name);
+            StateHasChanged();
+            try
+            {
+                await using var content = file.OpenReadStream(MaxUploadBytes);
+                await _files.UploadAsync(nas, _path, file.Name, content, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _error = $"{file.Name} did not upload: {ex.GetBaseException().Message}";
+            }
+            finally
+            {
+                _uploads.Remove(file.Name);
+            }
+        }
+
+        _busy = false;
+        await ReloadAsync();
+    }
+
+    private async Task CreateFolderAsync()
+    {
+        if (_nas is not { } nas || _newFolder.Trim().Length == 0)
+            return;
+
+        var name = _newFolder.Trim();
+        _newFolder = "";
+        await GuardAsync(() => _files.CreateFolderAsync(nas, _path, name, CancellationToken.None));
+    }
+
+    private async Task OnNewFolderKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+            await CreateFolderAsync();
+    }
+
+    private void BeginRename(QnapFileStation.Entry entry)
+    {
+        _renaming = entry.Name;
+        _renameTo = entry.Name;
+    }
+
+    private void CancelRename()
+    {
+        _renaming = "";
+        _renameTo = "";
+    }
+
+    private async Task OnRenameKeyDown(KeyboardEventArgs args, QnapFileStation.Entry entry)
+    {
+        if (args.Key == "Enter")
+            await RenameAsync(entry);
+        else if (args.Key == "Escape")
+            CancelRename();
+    }
+
+    private async Task RenameAsync(QnapFileStation.Entry entry)
+    {
+        if (_nas is not { } nas || _renameTo.Trim().Length == 0 || _renameTo.Trim() == entry.Name)
+        {
+            CancelRename();
+            return;
+        }
+
+        var newName = _renameTo.Trim();
+        CancelRename();
+        await GuardAsync(() => _files.RenameAsync(nas, _path, entry.Name, newName, CancellationToken.None));
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_nas is not { } nas || _deleting is not { } doomed)
+            return;
+
+        _deleting = null;
+        await GuardAsync(() => _files.DeleteAsync(nas, _path, doomed.Name, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Every write is the same shape: do it, say what went wrong in the words File Station
+    /// used, and reload either way so the listing is never a guess about what happened.
+    /// </summary>
+    private async Task GuardAsync(Func<Task> operation)
+    {
+        _busy = true;
+        _error = "";
+        try
+        {
+            await operation();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await ReloadAsync();
+    }
+
+    private static bool Previewable(string name) => Path.GetExtension(name).ToLowerInvariant()
+        is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".svg" or ".pdf"
+        or ".txt" or ".log" or ".md" or ".mp4" or ".m4v" or ".webm" or ".mp3" or ".flac";
+
+    private static string Glyph(string name) => Path.GetExtension(name).ToLowerInvariant() switch
+    {
+        ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".heic" or ".svg" => "🖼️",
+        ".mp4" or ".m4v" or ".mkv" or ".webm" or ".avi" => "🎬",
+        ".mp3" or ".flac" or ".wav" or ".m4a" => "🎵",
+        ".pdf" => "📕",
+        ".zip" or ".7z" or ".rar" or ".gz" or ".tar" => "🗜️",
+        _ => "📄",
+    };
+
+    private static string Size(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        double size = bytes;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+        return unit == 0 ? $"{bytes} B" : $"{size:0.#} {units[unit]}";
+    }
+}

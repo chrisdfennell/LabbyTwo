@@ -1,6 +1,6 @@
 # Example plugins
 
-Seven plugins that build, load and do something worth having. They are meant to be
+Eight plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
@@ -13,6 +13,7 @@ same way yours will.
 | [GluetunPlugin](LabbyTwo.GluetunPlugin) | provider | Whether your VPN tunnel is up, which country it exits from, and the forwarded port. |
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
 | [ChoresPlugin](LabbyTwo.ChoresPlugin) | tab kind + widget | Recurring household jobs with due dates. Stores its own data. |
+| [QnapFilesPlugin](LabbyTwo.QnapFilesPlugin) | tab kind + endpoint | Browse, download and upload files on a QNAP you already monitor. |
 | [PresencePlugin](LabbyTwo.PresencePlugin) | provider + widget | Who's home — pings a list of devices and charts each one. |
 | [SyncthingPlugin](LabbyTwo.SyncthingPlugin) | provider | A Syncthing daemon: devices connected, data moved, uptime. |
 | [PaperlessPlugin](LabbyTwo.PaperlessPlugin) | provider + widget | Paperless-ngx document count, inbox backlog, and what was just filed. |
@@ -33,8 +34,8 @@ docker cp bin/Release/net10.0/LabbyTwo.GluetunPlugin.dll labbytwo-labbytwo-1:/ap
 docker compose restart labbytwo
 ```
 
-**Settings** then lists every provider, widget, tab kind and importer the build can see,
-plus the reason for anything that failed to load. A plugin that does not appear there did
+**Settings** then lists every provider, widget, tab kind, importer and endpoint the build
+can see, plus the reason for anything that failed to load. A plugin that does not appear there did
 not load, and that page says why.
 
 Plugins are scanned once, at startup. Installing or updating one needs a restart.
@@ -92,6 +93,35 @@ backup and every "Download database" without anyone thinking about it.
 Ticking off a repeating chore sets the next due date **from today**, not from when it was
 supposed to be done — otherwise a chore you are three weeks late on stays three weeks late
 forever.
+
+## NAS files — the one that needed a real URL
+
+A page for browsing the QNAP you already added as a connection: shares, folders, sizes,
+download, and — when the tab is not left read-only — upload, rename, create folder and
+delete.
+
+It is the example of the fifth extension point, and of why that point exists. The tab kind
+renders the listing; `QnapFilesEndpoints` serves the file at `/ext/qnap-files/download`,
+because a Blazor component cannot hand the browser three gigabytes of video. The endpoint
+passes the browser's `Range` header up to QTS and its `206` and `Content-Range` back down,
+which is what makes seeking in a video and resuming an interrupted download work at all.
+
+Two things it shows that are easy to get wrong:
+
+- **Borrow the provider's session, do not open your own.** File Station and QTS's
+  management CGI take the same sid. `QnapProvider.SessionIdAsync` hands it over, so the
+  plugin does not log in a second time against the same account — which is what would
+  expire the session the health monitor is using.
+- **QTS's multipart parser is fussy.** It needs a `Content-Length`, a quoted `filename`
+  with no RFC 5987 `filename*`, and `Content-Disposition` as the part's first header.
+  `MultipartFormDataContent` breaks all three, and QTS then answers *success* while writing
+  nothing. `UploadAsync` spools the whole envelope to a temp file and sends it verbatim.
+
+The tab is **read only by default**. A dashboard is a thing people leave open on a tablet
+in the kitchen, and the gap between a bad tap and a deleted share should be a setting
+somebody turned on deliberately. Beyond that the QNAP account is the boundary: the listing
+can only ever show what that account can already see, so give it one with the access you
+actually want reachable.
 
 ## Presence — who's home
 

@@ -12,6 +12,7 @@
 @inject SelfUpdater Updater
 @inject ModuleCatalog Catalog
 @inject DashboardImportService Imports
+@inject IEnumerable<IEndpointExtension> Endpoints
 @inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
 @using System.Reflection
 
@@ -338,6 +339,21 @@
                             }
                         </ul>
                     </div>
+
+                    @* Only shown when something contributed one, because the app itself
+                       ships none — an empty column would read as a missing feature. *@
+                    @if (Endpoints.Any())
+                    {
+                        <div class="col-md-3">
+                            <div class="tile-meta mb-1">Endpoints (@Endpoints.Count())</div>
+                            <ul class="small mb-0 ps-3 font-monospace">
+                                @foreach (var endpoint in Endpoints.OrderBy(e => e.Key))
+                                {
+                                    <li>@ExtensionRoutes.PathFor(endpoint.Key)</li>
+                                }
+                            </ul>
+                        </div>
+                    }
                 </div>
             </div>
         </div>
@@ -349,8 +365,8 @@
             <div class="widget-body">
                 <p class="tile-meta">
                     Any .NET assembly in this folder is scanned at startup and anything it declares —
-                    providers, widgets, tab kinds, importers — joins the lists above. Restart to pick up
-                    a change.
+                    providers, widgets, tab kinds, importers, endpoints — joins the lists above.
+                    Restart to pick up a change.
                 </p>
                 <p class="font-monospace small mb-2">@Catalog.PluginDirectory</p>
 
@@ -377,8 +393,8 @@ docker compose restart labbytwo</code></pre>
                 {
                     <p class="tile-meta mb-0">
                         @Catalog.DllsFound file(s) were scanned, and none declared a provider, widget,
-                        tab kind or importer. A plugin's classes have to be <code>public</code> and not
-                        abstract to be found.
+                        tab kind, importer or endpoint. A plugin's classes have to be <code>public</code>,
+                        top level and not abstract to be found.
                     </p>
                 }
 
