@@ -187,7 +187,13 @@ public sealed class GluetunProvider(IHttpClientFactory httpFactory) : IConnectio
         using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl + path);
 
         if (connection.Settings.Get("api_key") is { Length: > 0 } key)
+        {
+            // Both, because Gluetun's own documentation uses X-API-Key while some builds
+            // accept a bearer token, and sending the wrong one of the two looks exactly
+            // like a wrong key. Neither header does harm when it is the unused one.
+            request.Headers.TryAddWithoutValidation("X-API-Key", key);
             request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {key}");
+        }
 
         using var response = await http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
