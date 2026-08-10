@@ -152,6 +152,7 @@ monitoring works.
 | **qBittorrent** | Transfer rates and how many torrents are downloading or seeding. |
 | **UPS (NUT)** | Battery charge, runtime left, load, input voltage, and whether it is on battery. |
 | **Docker** | How many containers are running, and a live list. Needs the socket mounted. |
+| **MyPersonalGit** | A self-hosted [MyPersonalGit](https://github.com/chrisdfennell/MyPersonalGit) server — repositories, open pull requests, open issues and stars. Token auth. |
 | **Pi-hole** | Queries and blocks today, block percentage, and whether blocking is switched on. |
 | **QNAP NAS** | Model, firmware, uptime, CPU, memory, temperatures, volume usage. |
 | **Ambient Weather** | Every reading the station sends — indoor/outdoor temperature, wind, rain, pressure, UV. |
@@ -231,12 +232,16 @@ being delivered — there is no separate notification settings screen.
 
 ### Tabs — what's in the nav
 
-The sidebar is literally a table. Add, rename, reorder, hide, delete. Four kinds ship:
+The sidebar is literally a table. Add, rename, reorder, hide, delete. Six kinds ship:
 
 - **Dashboard** — a grid of widgets.
 - **Embedded page** — a full-height iframe of another app's web UI. One tab kind covers
   Portainer, code-server, a web terminal, whatever — no integration required.
-- **Notes** — markdown notes and runbooks with a live preview.
+- **Notes** — markdown notes and runbooks with a live preview. It points out headings
+  written without their space — `##Wi-Fi` is a paragraph, not a heading, and CommonMark
+  is right about that in a way that is baffling when you are staring at the preview.
+- **Git server** — a whole page for one MyPersonalGit server: counts, every repository
+  with its commit, pull request and issue tallies, and what is open across all of them.
 - **Weather station** — a whole page for one Ambient Weather station: current readings,
   radar, today's extremes with sunrise and sunset, seven charts over 24h / 48h / 7d, and
   the raw readings. Built from the same widgets a dashboard tab can use, arranged for you.
@@ -276,6 +281,9 @@ greys out the rest with the reason.
 | Jellyfin — now playing | Jellyfin |
 | Sonarr / Radarr queue | Sonarr, Radarr |
 | Containers | Docker |
+| Git — summary | MyPersonalGit — repository, PR and issue counts, and what was touched last |
+| Git — repositories | MyPersonalGit — the repository table |
+| Git — open work | MyPersonalGit — open pull requests or open issues, switchable |
 
 Rearranging works three ways, because HTML drag-and-drop does not exist on a touchscreen
 and cannot be reached from a keyboard: **drag** a card with a mouse, tap **⠿** to pick one
@@ -460,6 +468,107 @@ honours `X-Forwarded-Proto` and `X-Forwarded-For`.
 
 `GET /healthz` answers `200 ok` without authentication, and the image has a matching
 `HEALTHCHECK`.
+
+## When a connection times out
+
+Almost every "it works in my browser but LabbyTwo says it's down" comes from the same
+thing: **LabbyTwo probes from inside its container, and your browser does not.** A URL
+that works in a tab you have open proves nothing about what the container can reach.
+
+Set the addresses accordingly, and LabbyTwo will tell you which case you are in — the
+error messages name the address, look the hostname up, and say what came back.
+
+### Use the container's name, not the host's IP
+
+The published port (`0.0.0.0:8083->8080/tcp`) is a mapping on the *host*. Another
+container reaching it through the host's own LAN address has to be forwarded back in, and
+NAS firmware — QNAP's Container Station especially — routinely refuses to forward between
+its bridge networks. The service answers from a shell on the NAS and times out from inside
+the container, which looks exactly like a firewall.
+
+Find the network and the *internal* port:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Networks}}\t{{.Ports}}'
+```
+
+```
+mypersonalgit   mypersonalgit_default   2222/tcp, 8443/tcp, 0.0.0.0:8083->8080/tcp
+```
+
+Join that network in `docker-compose.override.yml` and address the container by name on
+the port on the *right* of the arrow — `http://mypersonalgit:8080`, not `8083`:
+
+```yaml
+services:
+  labbytwo:
+    networks:
+      - default
+      - mypersonalgit_default
+
+networks:
+  mypersonalgit_default:
+    external: true
+```
+
+The exception is anything **not** in a bridge network — a native NAS service, or a
+container on `network_mode: host`, like Plex on 32400. Those genuinely are on the host's
+address, and the host IP is the right answer for them.
+
+A container sharing another's network namespace (`network_mode: service:gluetun`) has no
+address of its own at all: reach it at the *gateway* container's name and port.
+
+### Hostnames a container cannot resolve
+
+Containers inherit neither `/etc/hosts` nor NetBIOS nor mDNS, so a name your NAS resolves
+may not resolve in here. Worse, a NAS with a bridge per stack often maps its own hostname
+to *every one of them*:
+
+```bash
+getent hosts my-nas      # 23 addresses, the real LAN one eighteenth
+```
+
+Those are tried in order, so the attempt times out long before reaching the one that
+serves anything. Use the address directly, or pin the name:
+
+```yaml
+    extra_hosts:
+      - "my-nas:192.168.1.50"
+```
+
+### Probed address vs. clicked address
+
+Some connections are reached by the *server* and linked to by your *browser*, and those
+are not always the same string. `http://mypersonalgit:8080` only resolves inside Docker,
+so every link built from it would fail in a browser. Providers that link out have a
+**Link opens** field for exactly this — put the browser-reachable address there and leave
+the probe pointed at the container.
+
+Embedded page tabs are the mirror image: that URL is loaded by your **browser**, so it
+must resolve from your phone and laptop, not from the container.
+
+### The Docker socket
+
+The Docker provider needs `/var/run/docker.sock` mounted, which is worth a deliberate
+decision rather than a copy-paste:
+
+```yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+Anything that can talk to that socket can start a privileged container, which is root on
+the host. The `:ro` stops the socket *file* being modified; it does **not** make the
+Docker API read-only, because there is no such mode. LabbyTwo only ever issues GETs, but
+that is a property of this code rather than a restriction the mount imposes on it. Leaving
+it out costs you one provider.
+
+Adding a `volumes:` key in the override merges with the base file rather than replacing
+it, so the data volume survives — worth confirming once after any override change:
+
+```bash
+docker compose config | grep -A 6 "^    volumes:"
+```
 
 ## Updating
 
