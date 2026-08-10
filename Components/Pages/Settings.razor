@@ -352,11 +352,34 @@
                     providers, widgets, tab kinds, importers — joins the lists above. Restart to pick up
                     a change.
                 </p>
-                <p class="font-monospace small mb-3">@Catalog.PluginDirectory</p>
+                <p class="font-monospace small mb-2">@Catalog.PluginDirectory</p>
 
-                @if (!Catalog.Plugins.Any() && Catalog.Failures.Count == 0)
+                @* The folder is inside the container. A DLL copied next to the compose file
+                   on the host is nowhere near it, which is the usual reason a plugin "does
+                   nothing" — so say which of the two situations this is. *@
+                @if (!Catalog.PluginDirectoryExists)
                 {
-                    <p class="tile-meta mb-0">No plugins installed.</p>
+                    <div class="alert alert-warning py-2">
+                        That folder does not exist, so nothing was scanned. In Docker it lives in the
+                        data volume, not beside your compose file:
+                        <pre class="mb-0 mt-2"><code>docker exec @ContainerHint mkdir -p /app/data/plugins
+docker cp YourPlugin.dll @(ContainerHint):/app/data/plugins/
+docker compose restart labbytwo</code></pre>
+                    </div>
+                }
+                else if (Catalog.DllsFound == 0)
+                {
+                    <p class="tile-meta mb-0">
+                        The folder is there and empty — no .dll files in it. Copy one in and restart.
+                    </p>
+                }
+                else if (!Catalog.Plugins.Any() && Catalog.Failures.Count == 0)
+                {
+                    <p class="tile-meta mb-0">
+                        @Catalog.DllsFound file(s) were scanned, and none declared a provider, widget,
+                        tab kind or importer. A plugin's classes have to be <code>public</code> and not
+                        abstract to be found.
+                    </p>
                 }
 
                 @foreach (var plugin in Catalog.Plugins)
@@ -396,6 +419,9 @@
     private string _statusToken = "";
     private UpdateChecker.Result? _update;
     private bool _checking;
+
+    /// <summary>This container's name if we know it, so the copy commands can be pasted as-is.</summary>
+    private string ContainerHint => _self?.Self?.Container ?? "labbytwo-labbytwo-1";
 
     private SelfUpdater.Status? _self;
     private bool _updating, _confirmUpdate;

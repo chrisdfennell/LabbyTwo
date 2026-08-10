@@ -34,6 +34,16 @@ public sealed class ModuleCatalog
     public string PluginDirectory { get; init; } = "";
 
     public IEnumerable<ModuleInfo> Plugins => Modules.Where(m => m.IsPlugin);
+
+    /// <summary>
+    /// Whether the folder was there to scan. False is the single most common reason a
+    /// plugin "does nothing": the DLL went next to the compose file, or onto the host,
+    /// rather than into the volume the container reads.
+    /// </summary>
+    public bool PluginDirectoryExists { get; init; }
+
+    /// <summary>How many .dll files were seen, whatever became of them.</summary>
+    public int DllsFound { get; set; }
 }
 
 /// <summary>
@@ -66,7 +76,11 @@ public static class Modules
         string pluginDirectory,
         ILogger? log = null)
     {
-        var catalog = new ModuleCatalog { PluginDirectory = pluginDirectory };
+        var catalog = new ModuleCatalog
+        {
+            PluginDirectory = pluginDirectory,
+            PluginDirectoryExists = Directory.Exists(pluginDirectory),
+        };
 
         foreach (var assembly in LoadAssemblies(hostAssembly, pluginDirectory, catalog, log))
             Register(services, assembly, assembly != hostAssembly, catalog, log);
@@ -83,9 +97,21 @@ public static class Modules
         yield return hostAssembly;
 
         if (!Directory.Exists(pluginDirectory))
+        {
+            // Said out loud. Silence here is indistinguishable from "your plugin is
+            // broken", and the folder not existing is the likelier of the two by far.
+            log?.LogInformation(
+                "No plugin folder at {Path}, so nothing was scanned. Create it and restart to load plugins.",
+                pluginDirectory);
             yield break;
+        }
 
-        foreach (var path in Directory.EnumerateFiles(pluginDirectory, "*.dll").OrderBy(p => p))
+        var found = Directory.EnumerateFiles(pluginDirectory, "*.dll").OrderBy(p => p).ToList();
+        catalog.DllsFound = found.Count;
+
+        log?.LogInformation("Scanning {Path}: {Count} DLL(s) found.", pluginDirectory, found.Count);
+
+        foreach (var path in found)
         {
             Assembly? assembly = null;
             try
