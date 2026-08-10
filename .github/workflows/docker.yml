@@ -11,6 +11,13 @@ on:
 jobs:
   docker:
     runs-on: ubuntu-latest
+
+    # A step's `if:` cannot read the secrets context, so mirror the one we test into env.
+    # This is what lets a fork, or a clone nobody has configured a registry for, still get
+    # the build as a compile check instead of a red X on a login it was never going to do.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -18,8 +25,19 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
+      - name: Say whether this run will publish
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ]; then
+            echo "Registry credentials found — this run will push." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No DOCKERHUB_USERNAME secret set, so this run builds but does not push." \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the repository's Actions" \
+              "secrets to publish images." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: docker/login-action@v3
-        if: github.event_name != 'pull_request'
+        if: env.DOCKERHUB_USERNAME != '' && github.event_name != 'pull_request'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -27,17 +45,17 @@ jobs:
       - name: Work out the tags
         id: meta
         run: |
-          owner="${{ secrets.DOCKERHUB_USERNAME }}"
-          # Forks and PRs get no secrets, so fall back to a placeholder — buildx rejects a
-          # tag beginning with "/" even when nothing is being pushed.
-          echo "image=${owner:-local}/labbytwo" >> "$GITHUB_OUTPUT"
+          # Forks, PRs and unconfigured clones have no secret, so fall back to a
+          # placeholder — buildx rejects a tag beginning with "/" even when nothing is
+          # being pushed.
+          echo "image=${DOCKERHUB_USERNAME:-local}/labbytwo" >> "$GITHUB_OUTPUT"
           echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ env.DOCKERHUB_USERNAME != '' && github.event_name != 'pull_request' }}
           platforms: linux/amd64,linux/arm64
           build-args: |
             LABBYTWO_VERSION=${{ steps.meta.outputs.version }}
