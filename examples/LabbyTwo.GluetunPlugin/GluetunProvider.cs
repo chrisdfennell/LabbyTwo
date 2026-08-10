@@ -147,25 +147,33 @@ public sealed class GluetunProvider(IHttpClientFactory httpFactory) : IConnectio
 
     private async Task<int> ForwardedPortAsync(Connection connection, CancellationToken ct)
     {
-        try
+        // The route is under /v1/openvpn/ even on a Wireguard tunnel, which reads like a
+        // mistake and is not one. The bare path is tried second for older builds.
+        foreach (var path in new[] { "/v1/openvpn/portforwarded", "/v1/portforwarded" })
         {
-            using var doc = await GetAsync(connection, "/v1/portforwarded", ct);
-            return doc.RootElement.TryGetProperty("port", out var port) && port.ValueKind == JsonValueKind.Number
-                ? port.GetInt32()
-                : 0;
+            try
+            {
+                using var doc = await GetAsync(connection, path, ct);
+                if (doc.RootElement.TryGetProperty("port", out var port) && port.ValueKind == JsonValueKind.Number)
+                    return port.GetInt32();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A provider without port forwarding answers with an error rather than a
+                // zero, and that is a fact about the provider rather than a failed probe.
+            }
         }
-        catch
-        {
-            // Providers without port forwarding answer with an error rather than a zero.
-            // That is a fact about the provider, not a failure of the probe.
-            return 0;
-        }
+
+        return 0;
     }
 
     private static string Explain(Exception ex, Connection connection) => ex switch
     {
         HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden } =>
-            "Gluetun rejected the request. Version 3.40 and later can require an API key on the control server.",
+            "Gluetun rejected the request, so the control server is reachable but wants authentication. " +
+            "Gluetun 3.40 and later configure this in /gluetun/auth/config.toml — give a role the routes " +
+            "GET /v1/vpn/status, GET /v1/publicip/ip and GET /v1/openvpn/portforwarded, then either set " +
+            "auth = \"none\" for them or paste the API key above.",
         _ => ProbeError.Describe(ex, connection.Settings.Get("url")),
     };
 
