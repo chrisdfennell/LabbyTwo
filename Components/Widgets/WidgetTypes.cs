@@ -40,6 +40,8 @@ public sealed class MetricWidget : IWidgetType
         new("decimals", "Decimal places", FieldKind.Number,
             Help: "Blank uses whatever the metric normally shows."),
         new("show_sparkline", "Show sparkline", FieldKind.Bool, Default: "true"),
+        new("show_connection", "Show the connection's name", FieldKind.Bool, Default: "true",
+            Help: "Turn off when several tiles on the page all read the same thing."),
     ];
     public Type Component => typeof(MetricTile);
 }
@@ -123,7 +125,7 @@ public sealed class MarkdownWidget : IWidgetType
     public int DefaultWidth => 4;
     public IReadOnlyList<FieldSpec> Fields =>
     [
-        new("content", "Content", FieldKind.Textarea, "## Notes\n\n- Anything you like"),
+        new("content", "Content", FieldKind.Markdown, "## Notes\n\n- Anything you like"),
     ];
     public Type Component => typeof(MarkdownCard);
 }
@@ -373,6 +375,52 @@ public sealed class ContainerListWidget : IWidgetType
         new("running_only", "Only show running containers", FieldKind.Bool, Default: "false"),
     ];
     public Type Component => typeof(ContainerList);
+}
+
+public sealed class GitSummaryWidget : IWidgetType
+{
+    public string Type => "git-summary";
+    public string DisplayName => "Git — summary";
+    public string Icon => "🐙";
+    public string Description => "Repository, pull request and issue counts for a Git server, and what was touched last.";
+    public IReadOnlyList<string> ProviderTypes => ["mypersonalgit"];
+    public int DefaultWidth => 3;
+    public Type Component => typeof(GitSummary);
+}
+
+public sealed class GitRepoListWidget : IWidgetType
+{
+    public string Type => "git-repos";
+    public string DisplayName => "Git — repositories";
+    public string Icon => "📚";
+    public string Description => "Repositories with their commit, pull request and issue counts, most recently updated first.";
+    public IReadOnlyList<string> ProviderTypes => ["mypersonalgit"];
+    public int DefaultWidth => 6;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("limit", "Rows", FieldKind.Number, Default: "8"),
+    ];
+    public Type Component => typeof(GitRepoList);
+}
+
+public sealed class GitActivityWidget : IWidgetType
+{
+    public string Type => "git-activity";
+    public string DisplayName => "Git — open work";
+    public string Icon => "🔀";
+    public string Description => "Open pull requests or open issues across every repository on a Git server.";
+    public IReadOnlyList<string> ProviderTypes => ["mypersonalgit"];
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show", "Show", FieldKind.Select, Default: "pulls", Options:
+        [
+            new("pulls", "Open pull requests"),
+            new("issues", "Open issues"),
+        ]),
+        new("limit", "Rows", FieldKind.Number, Default: "8"),
+    ];
+    public Type Component => typeof(GitActivity);
 }
 
 /// <summary>

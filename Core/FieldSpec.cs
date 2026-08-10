@@ -9,6 +9,8 @@ public enum FieldKind
     Url,
     Select,
     Textarea,
+    /// <summary>Free text that will be rendered as Markdown, so the form can point out mistakes in it.</summary>
+    Markdown,
     Icon,
     /// <summary>A repeating list of name/url rows, edited as one control (bookmarks, hosts…).</summary>
     LinkList,

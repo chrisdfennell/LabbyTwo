@@ -1,0 +1,129 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+
+@* A whole page for one Git server. Like the weather station kind, every part of it is a
+   widget you can also place on an ordinary dashboard — this only decides the arrangement. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "🐙" : Tab.Icon) @Tab.Name</h1>
+        @if (Tab.Settings.Get("subtitle") is { Length: > 0 } subtitle)
+        {
+            <p class="subtitle">@subtitle</p>
+        }
+    </div>
+    @if (_server is not null && MyPersonalGitProvider.LinkBase(_server) is { Length: > 0 } link)
+    {
+        <a class="btn btn-sm btn-outline-secondary" href="@link" target="_blank" rel="noreferrer">
+            Open @_server.Name ↗
+        </a>
+    }
+</div>
+
+@if (_server is null)
+{
+    <div class="empty-state">
+        <p class="mb-3">This tab needs a MyPersonalGit connection.</p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    </div>
+}
+else
+{
+    @* The four counts are ordinary metric tiles reading what the provider reports, so they
+       chart and alert like every other number in the app. *@
+    <div class="stat-grid mb-3">
+        @foreach (var metric in Counts)
+        {
+            <div class="widget">
+                @* The tile writes its own caption from the metric the provider declared,
+                   so there is nothing to label here and nothing to keep in step. *@
+                <MetricTile Context="TileContext(metric)" />
+            </div>
+        }
+    </div>
+
+    <div class="row g-3">
+        <div class="col-12 col-xl-7">
+            <div class="widget h-100">
+                <div class="widget-head"><h2 class="widget-title">📚 Repositories</h2></div>
+                <div class="widget-body">
+                    <GitRepoList Context="_context" LimitOverride="500" />
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-5">
+            <div class="widget mb-3">
+                <div class="widget-head"><h2 class="widget-title">🔀 Open pull requests</h2></div>
+                <div class="widget-body">
+                    <GitActivity Context="_context" ShowOverride="pulls" />
+                </div>
+            </div>
+            <div class="widget">
+                <div class="widget-head"><h2 class="widget-title">⚠️ Open issues</h2></div>
+                <div class="widget-body">
+                    <GitActivity Context="_context" ShowOverride="issues" />
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private Connection? _server;
+    private WidgetContext _context = default!;
+
+    private static readonly string[] Counts = ["repo_count", "open_pulls", "open_issues", "stars"];
+
+    /// <summary>
+    /// Built here rather than stored: the layout is the point of the tab kind, so there is
+    /// nothing for the user to arrange and nothing to persist.
+    /// </summary>
+    private WidgetContext TileContext(string metric) => new(
+        new Widget
+        {
+            Id = $"{Tab.Id}-{metric}",
+            TabId = Tab.Id,
+            Type = "metric",
+            // No sparkline: four of these across the top is a header, not a chart strip.
+            Settings = new SettingsBag
+            {
+                ["metric"] = metric,
+                ["show_sparkline"] = "false",
+                ["show_connection"] = "false",
+            },
+        },
+        _server);
+
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        Config.Changed += OnUpdated;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var connections = await Config.ConnectionsAsync();
+        var chosen = Tab.Settings.Get("connection");
+
+        _server = chosen.Length > 0
+            ? connections.FirstOrDefault(c => c.Id == chosen)
+            // Nothing chosen: the only Git server configured is almost certainly the one.
+            : connections.FirstOrDefault(c => c.Provider == "mypersonalgit");
+
+        if (_server is not null)
+            _context = new WidgetContext(
+                new Widget { Id = Tab.Id, TabId = Tab.Id, Settings = new SettingsBag() },
+                _server);
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Config.Changed -= OnUpdated;
+    }
+}

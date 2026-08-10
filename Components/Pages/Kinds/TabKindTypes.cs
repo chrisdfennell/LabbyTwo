@@ -64,6 +64,21 @@ public sealed class WeatherStationTabKind : ITabKind
     public Type Component => typeof(WeatherStationTab);
 }
 
+public sealed class GitTabKind : ITabKind
+{
+    public string Kind => "git";
+    public string DisplayName => "Git server";
+    public string Icon => "🐙";
+    public string Description => "A whole page for one MyPersonalGit server — counts, repositories, open pull requests and open issues.";
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("connection", "Git server", FieldKind.Text,
+            Help: "Leave blank to use the only MyPersonalGit connection you have."),
+        new("subtitle", "Subtitle", FieldKind.Text),
+    ];
+    public Type Component => typeof(GitTab);
+}
+
 public sealed class StatusTabKind : ITabKind
 {
     public string Kind => TabKinds.Status;

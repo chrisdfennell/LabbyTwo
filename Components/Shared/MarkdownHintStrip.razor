@@ -1,0 +1,49 @@
+@* Sits under a Markdown box and points at lines that will not render the way they look.
+   Shown wherever Markdown is edited, so the notes page and a Markdown widget behave the
+   same. It suggests; the button applies. Nothing is rewritten as you type. *@
+
+@if (_hints.Count > 0)
+{
+    <div class="md-hint mt-2">
+        <div>
+            <div>
+                @(_hints.Count == 1 ? "One line looks like a heading" : $"{_hints.Count} lines look like headings")
+                but will render as plain text — Markdown needs a space after the <code>#</code>.
+            </div>
+            <div class="tile-meta mt-1">
+                @foreach (var hint in _hints.Take(3))
+                {
+                    <div class="text-truncate">
+                        Line @hint.Line: <code>@hint.Text</code> → <code>@hint.Suggestion</code>
+                    </div>
+                }
+                @if (_hints.Count > 3)
+                {
+                    <div>…and @(_hints.Count - 3) more.</div>
+                }
+            </div>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary flex-none" @onclick="ApplyAsync">
+            Add the spaces
+        </button>
+    </div>
+}
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private IReadOnlyList<MarkdownHints.Hint> _hints = [];
+
+    // Recomputed when the text changes rather than in the markup, so a long note is not
+    // re-scanned on every unrelated render of the form around it.
+    protected override void OnParametersSet() => _hints = MarkdownHints.For(Value);
+
+    private async Task ApplyAsync()
+    {
+        var fixedUp = MarkdownHints.Fix(Value);
+        Value = fixedUp;
+        _hints = [];
+        await ValueChanged.InvokeAsync(fixedUp);
+    }
+}

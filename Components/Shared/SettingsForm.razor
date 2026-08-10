@@ -50,6 +50,15 @@
                           @onchange="e => Set(field, e.Value)"></textarea>
                 break;
 
+            case FieldKind.Markdown:
+                <textarea class="form-control font-monospace" id="@FieldId(field)" rows="6"
+                          placeholder="@field.Placeholder"
+                          value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                          @onchange="e => Set(field, e.Value)"></textarea>
+                <MarkdownHintStrip Value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                                   ValueChanged="value => SetValue(field, value)" />
+                break;
+
             case FieldKind.Password:
                 @* Never echo a stored secret back to the browser. An empty box means
                    "keep what is saved", which is also what makes editing safe. *@

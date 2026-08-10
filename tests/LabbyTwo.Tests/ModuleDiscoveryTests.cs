@@ -40,6 +40,7 @@ public class ModuleDiscoveryTests
             "homeassistant", "adguard", "nut", "unifi",
             "lidarr", "readarr", "prowlarr",
             "bazarr", "tautulli", "nzbget", "seerr", "ersatztv", "unmanic",
+            "mypersonalgit",
         ];
 
         Assert.Equal(

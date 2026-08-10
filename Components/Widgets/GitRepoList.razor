@@ -1,0 +1,124 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject MyPersonalGitProvider Git
+
+@* Repositories, most recently touched first — the table from the Git page, usable on any
+   dashboard on its own. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Git server.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_overview is null)
+{
+    <p class="tile-meta mb-0">Loading…</p>
+}
+else if (_overview.Repos.Count == 0)
+{
+    <p class="tile-meta mb-0">No repositories yet.</p>
+}
+else
+{
+    <div class="table-scroll">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th class="text-end">Commits</th>
+                    <th class="text-end">PRs</th>
+                    <th class="text-end">Issues</th>
+                    <th class="text-end">Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var repo in Shown)
+                {
+                    <tr>
+                        <td>
+                            @if (Link is { Length: > 0 })
+                            {
+                                <a href="@($"{Link}/{repo.Name}")" target="_blank" rel="noreferrer">@repo.Name</a>
+                            }
+                            else
+                            {
+                                @repo.Name
+                            }
+                            @if (repo.IsPrivate)
+                            {
+                                <span class="tile-meta ms-1" title="Private">🔒</span>
+                            }
+                            @if (repo.Description is { Length: > 0 })
+                            {
+                                <div class="tile-meta">@repo.Description</div>
+                            }
+                        </td>
+                        <td class="text-end">@repo.Commits</td>
+                        <td class="text-end">@repo.OpenPulls</td>
+                        <td class="text-end">@repo.OpenIssues</td>
+                        <td class="text-end text-nowrap">@Ago.Since(repo.UpdatedAt)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (_overview.Repos.Count > Shown.Count)
+    {
+        <div class="tile-meta mt-2">+@(_overview.Repos.Count - Shown.Count) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    /// <summary>Set by the Git tab, which shows the lot rather than a card's worth.</summary>
+    [Parameter] public int? LimitOverride { get; set; }
+
+    private MyPersonalGitProvider.Overview? _overview;
+    private string? _error;
+
+    private int Limit => LimitOverride ?? Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 500);
+
+    private IReadOnlyList<MyPersonalGitProvider.Repo> Shown =>
+        _overview is null ? [] : [.. _overview.Repos.Take(Limit)];
+
+    private string Link => Context.Connection is null ? "" : MyPersonalGitProvider.LinkBase(Context.Connection);
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        if (Health.State(Context.Connection.Id) is { IsUp: false } state)
+        {
+            _error = state.Message;
+            return;
+        }
+
+        try
+        {
+            _overview = await Git.OverviewAsync(Context.Connection, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

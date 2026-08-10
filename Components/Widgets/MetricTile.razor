@@ -20,7 +20,9 @@ else
             <span class="metric-unit">no data yet</span>
         }
     </div>
-    <div class="tile-meta">@Spec.Label · @Context.Connection.Name</div>
+    @* On a page where every tile is the same connection, repeating its name four times is
+       noise that also wraps the caption onto a second line. *@
+    <div class="tile-meta">@Spec.Label@(ShowConnection ? $" · {Context.Connection.Name}" : "")</div>
 
     @if (Context.Widget.Settings.GetBool("show_sparkline", true))
     {
@@ -42,6 +44,7 @@ else
     private MetricSpec Spec => Registry.Metric(Context.Connection, Metric);
     private int Decimals => Math.Clamp(Context.Widget.Settings.GetInt("decimals", Spec.Decimals), 0, 4);
     private string Unit => Context.Widget.Settings.Get("suffix", Spec.Unit);
+    private bool ShowConnection => Context.Widget.Settings.GetBool("show_connection", true);
 
     protected override async Task OnInitializedAsync()
     {

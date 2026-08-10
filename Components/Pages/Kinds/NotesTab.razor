@@ -48,6 +48,7 @@ else
                 <label class="form-label" for="note-body">Markdown</label>
                 <textarea id="note-body" class="form-control font-monospace" rows="16"
                           @bind="_editing.Content" @bind:event="oninput"></textarea>
+                <MarkdownHintStrip Value="_editing.Content" ValueChanged="v => _editing.Content = v" />
             </div>
             <div class="col-lg-6">
                 <label class="form-label">Preview</label>

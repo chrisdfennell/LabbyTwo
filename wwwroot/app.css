@@ -690,6 +690,21 @@ h1[tabindex]:focus { outline: none; }
     padding: .6rem;
 }
 
+/* A nudge, not an error: it says the preview is honest and something is off, without
+   colouring the whole form red over a missing space. */
+.md-hint {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .6rem .75rem;
+    border: 1px solid var(--warn);
+    border-radius: .5rem;
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    font-size: .875rem;
+}
+.md-hint code { font-size: .8125rem; }
+
 .emoji-paste {
     display: flex;
     align-items: center;
@@ -730,3 +745,23 @@ h1[tabindex]:focus { outline: none; }
 
 .readings-summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 .readings-scroll { max-height: 22rem; overflow: auto; }
+
+/* ---------- git ---------- */
+
+/* Wide tables scroll inside their own card rather than making the page scroll sideways. */
+.table-scroll { overflow-x: auto; }
+
+.git-summary { display: grid; gap: .35rem; }
+.git-count { font-weight: 650; font-size: 1.05rem; }
+
+.git-activity { display: grid; gap: .6rem; }
+
+.git-activity-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: .75rem;
+    /* Without this a long PR title stretches the row instead of ellipsing. */
+    min-width: 0;
+}
+.git-activity-row > div:first-child { min-width: 0; }

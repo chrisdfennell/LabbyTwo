@@ -1,0 +1,120 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject MyPersonalGitProvider Git
+
+@* Open pull requests or open issues across every repository. One widget rather than two,
+   because the two lists differ only in which field decorates the row. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Git server.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_overview is null)
+{
+    <p class="tile-meta mb-0">Loading…</p>
+}
+else if (Rows.Count == 0)
+{
+    <p class="tile-meta mb-0">@(ShowIssues ? "No open issues." : "No open pull requests.") 🎉</p>
+}
+else
+{
+    <div class="git-activity">
+        @foreach (var row in Rows.Take(Limit))
+        {
+            <div class="git-activity-row">
+                <div class="text-truncate">
+                    @if (Link is { Length: > 0 })
+                    {
+                        <a href="@($"{Link}/{row.Repo}")" target="_blank" rel="noreferrer">@row.Repo</a>
+                    }
+                    else
+                    {
+                        <span>@row.Repo</span>
+                    }
+                    <span class="tile-meta">&nbsp;#@row.Number</span>
+                    @if (row.IsDraft)
+                    {
+                        <span class="tile-meta">&nbsp;· draft</span>
+                    }
+                    <div class="text-truncate" title="@row.Title">@row.Title</div>
+                </div>
+                <div class="tile-meta flex-none text-nowrap">
+                    @if (row.Author is { Length: > 0 })
+                    {
+                        <span>@row.Author · </span>
+                    }
+                    @Ago.Since(row.CreatedAt)
+                </div>
+            </div>
+        }
+    </div>
+
+    @if (Rows.Count > Limit)
+    {
+        <div class="tile-meta mt-2">+@(Rows.Count - Limit) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    /// <summary>"issues" or "pulls". A parameter so the Git tab can show both without two widget types.</summary>
+    [Parameter] public string? ShowOverride { get; set; }
+
+    private MyPersonalGitProvider.Overview? _overview;
+    private string? _error;
+
+    private sealed record Row(string Repo, int Number, string Title, string Author, bool IsDraft, DateTimeOffset CreatedAt);
+
+    private bool ShowIssues =>
+        (ShowOverride ?? Context.Widget.Settings.Get("show", "pulls")) == "issues";
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 200);
+
+    private IReadOnlyList<Row> Rows => _overview is null
+        ? []
+        : ShowIssues
+            ? [.. _overview.OpenIssues.Select(i => new Row(i.Repo, i.Number, i.Title, i.Author, false, i.CreatedAt))]
+            : [.. _overview.OpenPulls.Select(p => new Row(p.Repo, p.Number, p.Title, p.Author, p.IsDraft, p.CreatedAt))];
+
+    private string Link => Context.Connection is null ? "" : MyPersonalGitProvider.LinkBase(Context.Connection);
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        if (Health.State(Context.Connection.Id) is { IsUp: false } state)
+        {
+            _error = state.Message;
+            return;
+        }
+
+        try
+        {
+            _overview = await Git.OverviewAsync(Context.Connection, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

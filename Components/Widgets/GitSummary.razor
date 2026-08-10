@@ -1,0 +1,82 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject MyPersonalGitProvider Git
+
+@* The small card: three counts and what was touched last. Enough to know whether anything
+   needs you, without the whole page. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Git server.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_overview is null)
+{
+    <p class="tile-meta mb-0">Loading…</p>
+}
+else
+{
+    <div class="git-summary">
+        <div><span class="git-count">@_overview.Repos.Count</span> @(_overview.Repos.Count == 1 ? "repository" : "repositories")</div>
+        <div><span class="git-count">@_overview.OpenPulls.Count</span> open @(_overview.OpenPulls.Count == 1 ? "PR" : "PRs")</div>
+        <div><span class="git-count">@_overview.OpenIssues.Count</span> open @(_overview.OpenIssues.Count == 1 ? "issue" : "issues")</div>
+    </div>
+
+    @if (_overview.MostRecent is { } recent)
+    {
+        <div class="tile-meta mt-2">last: @recent.Name · @Ago.Since(recent.UpdatedAt)</div>
+    }
+
+    @if (Link is { Length: > 0 })
+    {
+        <a class="tile-meta d-inline-block mt-1" href="@Link" target="_blank" rel="noreferrer">open @Context.Connection.Name →</a>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private MyPersonalGitProvider.Overview? _overview;
+    private string? _error;
+
+    private string Link => Context.Connection is null ? "" : MyPersonalGitProvider.LinkBase(Context.Connection);
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        // The monitor already knows it is unreachable; repeating the call would only make
+        // the page wait for the same timeout again.
+        if (Health.State(Context.Connection.Id) is { IsUp: false } state)
+        {
+            _error = state.Message;
+            return;
+        }
+
+        try
+        {
+            _overview = await Git.OverviewAsync(Context.Connection, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}
