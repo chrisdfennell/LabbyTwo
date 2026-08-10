@@ -9,6 +9,7 @@
 @inject AppSettingsStore AppSettings
 @inject NavigationManager Nav
 @inject UpdateChecker Updates
+@inject SelfUpdater Updater
 @inject ModuleCatalog Catalog
 @inject DashboardImportService Imports
 @inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
@@ -154,19 +155,58 @@
                 }
 
                 <hr class="my-3" />
-                <p class="tile-meta mb-0">
-                    There is deliberately no button that does the update. LabbyTwo runs inside the
-                    container an update replaces, and nothing can rebuild and restart itself — a button
-                    here would mean handing <em>this</em> app write access to the Docker socket, which is
-                    root on the host.
-                </p>
-                <p class="tile-meta mb-0 mt-2">
-                    For updates with nothing to run, give that socket to
-                    <a href="https://containrrr.dev/watchtower/" target="_blank" rel="noreferrer">Watchtower</a>
-                    instead — a small tool whose only job is replacing containers, rather than the web app
-                    that stores your credentials and answers to your whole network. It needs this install
-                    to pull a published image; the README has the three steps.
-                </p>
+
+                @if (_self is { Ready: true, Self: not null } ready)
+                {
+                    <p class="mb-1">
+                        <strong>Update from here.</strong>
+                        <span class="tile-meta">
+                            @ready.Self.Container, running <span class="font-monospace">@ready.Self.Image</span>
+                        </span>
+                    </p>
+                    <p class="tile-meta mb-2">
+                        A container cannot replace itself, so this starts a throwaway
+                        <span class="font-monospace">watchtower --run-once</span> over the Docker socket and
+                        lets it pull the new image and recreate this one. LabbyTwo goes away mid-click and
+                        comes back a few seconds later — reload the page then.
+                    </p>
+
+                    @if (!Options.Value.Auth.Enabled)
+                    {
+                        <div class="alert alert-warning py-2 mb-2">
+                            Login is off, so anyone who can reach this page can press this button — and
+                            through it, start a container as root on the host. Set a password before
+                            leaving this switched on.
+                        </div>
+                    }
+
+                    @if (_updateError is { Length: > 0 } failed)
+                    {
+                        <div class="alert alert-danger py-2 mb-2">@failed</div>
+                    }
+
+                    <button class="btn btn-sm btn-warning" disabled="@_updating" @onclick="() => _confirmUpdate = true">
+                        @(_updating ? "Starting…" : "Update now")
+                    </button>
+                    @if (ready.Reason is { Length: > 0 } caveat)
+                    {
+                        <p class="tile-meta mb-0 mt-2">@caveat</p>
+                    }
+                }
+                else
+                {
+                    <p class="tile-meta mb-0">
+                        There is no button that does the update here.
+                        @(_self?.Reason ?? "Checking what this container can do…")
+                    </p>
+                    <p class="tile-meta mb-0 mt-2">
+                        LabbyTwo runs inside the container an update replaces, and nothing can rebuild and
+                        restart itself — so updating from in here means handing this app the Docker socket,
+                        which is root on the host. Mount it and the button appears. Leave it out and
+                        <a href="https://containrrr.dev/watchtower/" target="_blank" rel="noreferrer">Watchtower</a>
+                        does the same job without the dashboard holding the keys.
+                    </p>
+                }
             </div>
         </div>
     </div>
@@ -343,11 +383,23 @@
     </div>
 </div>
 
+@if (_confirmUpdate)
+{
+    <ConfirmDialog Title="Update LabbyTwo now?"
+                   Message="@($"A one-off Watchtower container will pull the newest image and recreate {_self?.Self?.Container}. LabbyTwo will disappear for a few seconds. Nothing in the database is touched.")"
+                   OnCancel="() => _confirmUpdate = false"
+                   OnConfirm="StartUpdateAsync" />
+}
+
 @code {
     private int _connectionCount, _tabCount, _widgetCount, _channelCount;
     private string _statusToken = "";
     private UpdateChecker.Result? _update;
     private bool _checking;
+
+    private SelfUpdater.Status? _self;
+    private bool _updating, _confirmUpdate;
+    private string? _updateError;
 
     private async Task CheckForUpdatesAsync()
     {
@@ -355,6 +407,10 @@
         try
         {
             _update = await Updates.CheckAsync();
+
+            // Only now is contacting a registry in scope, so the digest comparison happens
+            // on the same press rather than on page load.
+            _self = await Updater.StatusAsync(checkRegistry: true);
         }
         finally
         {
@@ -386,7 +442,34 @@
         }
     }
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        // Local only: which container this is and whether the socket is there. Nothing
+        // leaves the machine until the user asks for a check.
+        _self = await Updater.StatusAsync();
+    }
+
+    private async Task StartUpdateAsync()
+    {
+        _confirmUpdate = false;
+        _updating = true;
+        _updateError = null;
+
+        try
+        {
+            await Updater.StartUpdateAsync();
+
+            // No success path to render: if that worked, this process is killed within
+            // seconds. Leaving _updating set keeps the button disabled until it happens.
+        }
+        catch (Exception ex)
+        {
+            _updateError = ex.GetBaseException().Message;
+            _updating = false;
+        }
+    }
 
     private async Task LoadAsync()
     {

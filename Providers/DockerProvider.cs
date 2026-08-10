@@ -1,8 +1,7 @@
 using System.Diagnostics;
-using System.IO.Pipes;
-using System.Net.Sockets;
 using System.Text.Json;
 using LabbyTwo.Core;
+using LabbyTwo.Services;
 
 namespace LabbyTwo.Providers;
 
@@ -116,60 +115,9 @@ public sealed class DockerProvider : IConnectionProvider
         return [.. containers.OrderByDescending(c => c.State == "running").ThenBy(c => c.Name)];
     }
 
-    /// <summary>
-    /// Speaks HTTP to whichever transport the endpoint names. A dedicated HttpClient per
-    /// call is deliberate — these are cheap local connections and pooling one client per
-    /// endpoint would mean tracking connection lifetimes for no real gain.
-    /// </summary>
-    private static async Task<string> GetAsync(Connection connection, string path, CancellationToken ct)
-    {
-        var endpoint = connection.Settings.Get("endpoint", "/var/run/docker.sock");
-        var timeout = TimeSpan.FromSeconds(Math.Clamp(connection.Settings.GetInt("timeout", 10), 1, 120));
-
-        var handler = new SocketsHttpHandler { ConnectTimeout = timeout };
-        string baseAddress;
-
-        if (endpoint.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase))
-        {
-            baseAddress = "http://" + endpoint["tcp://".Length..].TrimEnd('/');
-        }
-        else if (endpoint.StartsWith("npipe://", StringComparison.OrdinalIgnoreCase) ||
-                 endpoint.StartsWith(@"\\.\pipe\", StringComparison.OrdinalIgnoreCase))
-        {
-            var pipeName = endpoint
-                .Replace("npipe://./pipe/", "", StringComparison.OrdinalIgnoreCase)
-                .Replace(@"\\.\pipe\", "", StringComparison.OrdinalIgnoreCase);
-            handler.ConnectCallback = async (_, token) =>
-            {
-                var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                await pipe.ConnectAsync((int)timeout.TotalMilliseconds, token);
-                return pipe;
-            };
-            // The host is ignored once ConnectCallback takes over, but HttpClient still
-            // needs a syntactically valid absolute URI to build the request line.
-            baseAddress = "http://localhost";
-        }
-        else
-        {
-            handler.ConnectCallback = async (_, token) =>
-            {
-                var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                await socket.ConnectAsync(new UnixDomainSocketEndPoint(endpoint), token);
-                return new NetworkStream(socket, ownsSocket: true);
-            };
-            baseAddress = "http://localhost";
-        }
-
-        using var http = new HttpClient(handler, disposeHandler: true)
-        {
-            BaseAddress = new Uri(baseAddress),
-            Timeout = timeout,
-        };
-
-        // v1.41 is old enough for anything still running and new enough for everything used here.
-        using var response = await http.GetAsync("/v1.41" + path, ct);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Docker answered HTTP {(int)response.StatusCode}.");
-        return await response.Content.ReadAsStringAsync(ct);
-    }
+    private static Task<string> GetAsync(Connection connection, string path, CancellationToken ct) =>
+        DockerSocket.GetAsync(
+            connection.Settings.Get("endpoint", DockerSocket.DefaultEndpoint),
+            TimeSpan.FromSeconds(Math.Clamp(connection.Settings.GetInt("timeout", 10), 1, 120)),
+            path, ct);
 }

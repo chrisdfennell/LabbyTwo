@@ -580,36 +580,145 @@ docker compose config | grep -A 6 "^    volumes:"
 
 ## Updating
 
-Re-run the installer. It pulls, rebuilds and restarts, and never touches your `.env`, your
-`docker-compose.override.yml` or the data volume.
+Four ways, in order of how much you want to be involved.
 
-```bash
-bash install.sh
-```
+| | How | You have to |
+|---|---|---|
+| **Rebuild from source** | `bash install.sh` | run one command |
+| **Pull a published image** | `docker compose pull && docker compose up -d` | run one command |
+| **The button in Settings** | press it | be there |
+| **Watchtower** | nothing | nothing |
 
 **Settings → Updates** compares the commit this image was built from against the tip of
 `main` and tells you whether you are behind, what the newest change was, and links to the
-diff. Nothing is contacted until you press the button — LabbyTwo does not phone home.
+diff. Nothing is contacted until you press the button — LabbyTwo does not phone home, and
+that includes not quietly checking on page load to decide what to render.
 
-There is deliberately no button that performs the update. LabbyTwo runs inside the
-container an update replaces, and no process can rebuild and recreate itself; doing it from
-in there would mean mounting the Docker socket, which is root on the host. That is a poor
-trade for saving one command. ### Hands-off updates
+### Publishing images from CI
 
-If you would rather not run anything by hand, publish images from CI and let
-[Watchtower](https://containrrr.dev/watchtower/) do it. Three steps:
+The last three all need a published image, so start here. The workflow that builds and
+pushes `linux/amd64` and `linux/arm64` is already in the repository; it builds on every
+push and skips the publish step until you give it somewhere to push to.
 
-1. Set `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` in the repository's Actions secrets. The
-   workflow that builds and pushes `linux/amd64` and `linux/arm64` images is already there
-   and skips publishing until those exist.
-2. In `docker-compose.yml`, comment out the `build:` block and uncomment `image:`.
-3. Copy the Watchtower service out of `docker-compose.override.yml.example`.
+1. **Docker Hub → Account settings → Personal access tokens**, create one with write
+   access.
+2. **GitHub → Settings → Secrets and variables → Actions**, add `DOCKERHUB_USERNAME` (your
+   Docker Hub username, not your email) and `DOCKERHUB_TOKEN`.
+3. Push to `main`. The run's summary says whether it published; a fork or an unconfigured
+   clone still builds, it just does not push.
 
-Then a push to `main` builds an image, and Watchtower pulls it on your next interval.
+You get `you/labbytwo:latest` and a tag per commit. Make the repository **public** on
+Docker Hub unless you want to configure registry credentials in Watchtower as well — a
+private image that nothing can pull fails silently, once a day, forever.
 
-Watchtower holds the Docker socket, which is the whole point of doing it this way: the
-thing with root on your host is a small purpose-built tool, not the dashboard that stores
-your NAS credentials and answers to everything on your LAN.
+Then point your install at it. Put this in `docker-compose.override.yml`, **not** in
+`docker-compose.yml`:
+
+```yaml
+services:
+  labbytwo:
+    image: you/labbytwo:latest
+```
+
+The override is the right place because `install.sh` rewrites `docker-compose.yml` on
+every update. An `image:` line there works until the next time you run the installer and
+then silently reverts to building from source — and building also works, so nothing looks
+broken and updates just stop arriving.
+
+```bash
+docker compose pull && docker compose up -d
+docker inspect labbytwo-labbytwo-1 --format '{{.Config.Image}}'
+```
+
+That last line should print your image. If it prints something like `labbytwo-labbytwo`,
+the container is still the locally built one and no amount of Watchtower will change it.
+
+### Watchtower
+
+[Watchtower](https://containrrr.dev/watchtower/) is a small container that periodically
+checks whether a newer image has been published for the containers it watches, and if so
+pulls it and recreates them with the same configuration, volumes and networks.
+
+It exists because **a container cannot replace itself.** The moment it stops, whatever was
+doing the replacing stops too. Something outside has to do it, and Watchtower is that
+something.
+
+Add it to `docker-compose.override.yml`:
+
+```yaml
+services:
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    # Name what it watches. With no names it watches everything on the host.
+    command: --cleanup --interval 3600 labbytwo-labbytwo-1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+```
+
+```bash
+docker compose up -d
+docker compose logs watchtower
+```
+
+The log names what it is watching, which is the confirmation you want — a typo in the
+container name is not an error, it is just a Watchtower that updates nothing.
+
+**Check the container name first**, because Compose derives it from the directory:
+
+```bash
+docker ps --format '{{.Names}}' | grep labby
+```
+
+Things worth knowing before you leave it running:
+
+- **`--cleanup` deletes the old image** after a successful update. Without it you collect
+  every version you have ever run.
+- **`--interval 3600`** is seconds. The default is 24 hours.
+- **Naming containers is the safe default.** A Watchtower with no names watches everything
+  on the host — including databases and download clients that do not enjoy being recreated
+  mid-write.
+- **To exempt a container** from a host-wide Watchtower, label it:
+  `com.centurylinklabs.watchtower.enable=false`.
+- **Do not run two.** If you already have a host-wide Watchtower, it will pick LabbyTwo up
+  on its own once the image is a registry one; adding a second scoped to LabbyTwo means two
+  schedulers racing on the same container.
+- **It needs credentials for a private image**, via `REPO_USER` and `REPO_PASS` or a
+  mounted `config.json`. Without them it fails quietly every cycle.
+- **Watchtower holds the Docker socket, and that is the point.** The thing with root on
+  your host is a small purpose-built tool rather than the dashboard that stores your NAS
+  credentials and answers to everything on your LAN.
+
+### The update button
+
+If the Docker socket is mounted into LabbyTwo, **Settings → Updates** grows an **Update
+now** button. It does exactly what Watchtower does, at a moment you choose: it starts a
+throwaway `watchtower --run-once --cleanup <this container>` and lets that pull the new
+image and recreate LabbyTwo. The page goes away for a few seconds and comes back on the new
+version. The database is untouched — it is a volume, and the container is the only thing
+replaced.
+
+It appears only when all three are true, and Settings says which one is missing:
+
+- the socket is mounted,
+- LabbyTwo can identify its own container (it asks Docker about its own hostname),
+- and the running image came from a registry — a locally built one has no published
+  digest to compare against and nothing to pull.
+
+```yaml
+services:
+  labbytwo:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+**Be deliberate about this one.** Anything that can reach that socket can start a
+privileged container, which is root on the host — and `:ro` does not prevent it, because it
+protects the socket *file* rather than the API behind it. That means a button on a page
+which, by default, has no login. If you enable this, set `LABBY_AUTH_PASSWORD` too;
+Settings warns you when you have not. Watchtower on a timer gets you the same updates
+without the dashboard ever holding the keys, and is the better choice if you do not
+specifically want the button.
 
 ## Backing up and sharing
 

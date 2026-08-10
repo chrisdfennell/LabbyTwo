@@ -67,6 +67,7 @@ builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
 builder.Services.AddSingleton<FaviconService>();
 builder.Services.AddSingleton<UpdateChecker>();
+builder.Services.AddSingleton<SelfUpdater>();
 builder.Services.AddSingleton<DashboardImportService>();
 builder.Services.AddSingleton<HealthMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthMonitor>());
