@@ -4,7 +4,7 @@
 
 @if (_due.Count == 0)
 {
-    <p class="tile-meta mb-0">Nothing due. 🎉</p>
+    <p class="tile-meta mb-0">Nothing due@(Person.Length > 0 ? $" for {Person}" : ""). 🎉</p>
 }
 else
 {
@@ -15,6 +15,13 @@ else
                 <button class="btn btn-sm btn-outline-secondary flex-none" title="Mark done"
                         @onclick="() => CompleteAsync(chore)">✓</button>
                 <span class="text-truncate @(chore.IsOverdue(_today) ? "text-danger" : null)">@chore.Title</span>
+
+                @* Only worth the space when the card is not already about one person. *@
+                @if (Person.Length == 0 && chore.IsAssigned)
+                {
+                    <span class="tile-meta flex-none">@chore.Assignee</span>
+                }
+
                 <span class="tile-meta ms-auto flex-none text-nowrap">@chore.DueLabel(_today)</span>
             </div>
         }
@@ -36,6 +43,9 @@ else
     private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 5), 1, 50);
     private int Within => Math.Clamp(Context.Widget.Settings.GetInt("within_days", 0), 0, 365);
 
+    /// <summary>Whose card this is. Blank shows everyone's.</summary>
+    private string Person => Context.Widget.Settings.Get("person").Trim();
+
     protected override async Task OnInitializedAsync()
     {
         _store = new ChoreStore(Database);
@@ -45,7 +55,10 @@ else
     private async Task LoadAsync()
     {
         var horizon = _today.AddDays(Within);
-        _due = [.. (await _store.AllAsync()).Where(c => c.Due <= horizon)];
+
+        // BelongsTo keeps unclaimed chores on everyone's card. One nobody has picked up is
+        // exactly the one that needs to be visible.
+        _due = [.. (await _store.AllAsync()).Where(c => c.Due <= horizon && c.BelongsTo(Person))];
     }
 
     private async Task CompleteAsync(ChoreStore.Chore chore)

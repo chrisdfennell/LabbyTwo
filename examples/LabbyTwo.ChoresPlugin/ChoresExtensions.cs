@@ -7,7 +7,9 @@ public sealed class ChoresTabKind : ITabKind
     public string Kind => "chores";
     public string DisplayName => "Chores";
     public string Icon => "🧹";
-    public string Description => "A list of recurring jobs with due dates — filters, gutters, backups you do by hand.";
+    public string Description =>
+        "A list of recurring jobs with due dates, each assignable to somebody — filters, gutters, " +
+        "backups you do by hand.";
 
     // No fields: the tab holds nothing configurable, because the data is the point.
     public Type Component => typeof(ChoresTab);
@@ -26,6 +28,9 @@ public sealed class ChoresDueWidget : IWidgetType
 
     public IReadOnlyList<FieldSpec> Fields =>
     [
+        new("person", "Only this person's", FieldKind.Text,
+            Help: "Blank shows everyone's. Chores nobody is assigned always show, because an " +
+                  "unclaimed one is the one that gets forgotten."),
         new("within_days", "Also show ones due within (days)", FieldKind.Number, Default: "0",
             Help: "0 shows only what is due today or overdue."),
         new("limit", "Most to list", FieldKind.Number, Default: "5"),

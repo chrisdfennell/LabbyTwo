@@ -13,21 +13,54 @@
             }
             else
             {
-                @($"{_chores.Count(c => c.Due <= _today)} due, {_chores.Count} on the list")
+                @($"{Shown.Count(c => c.Due <= _today)} due, {Shown.Count} on the list")
+                @if (_filter.Length > 0)
+                {
+                    <text> for @_filter</text>
+                }
             }
         </p>
     </div>
+
+    @if (_people.Count > 0)
+    {
+        <div class="d-flex align-items-center gap-2">
+            <label class="tile-meta mb-0" for="chore-filter">Showing</label>
+            <select id="chore-filter" class="form-select form-select-sm" style="width:auto"
+                    value="@_filter" @onchange="OnFilterChanged">
+                <option value="">Everyone</option>
+                @foreach (var person in _people)
+                {
+                    <option value="@person">@person</option>
+                }
+            </select>
+
+            @* Renaming is only meaningful once a single person is picked. It doubles as the
+               merge and the tidy-up: rename "bob" to "Bob" and the two collapse; rename to
+               nothing and their chores go back to being everyone's. *@
+            @if (_filter.Length > 0)
+            {
+                <input class="form-control form-control-sm" style="width:9rem" aria-label="Rename to"
+                       placeholder="Rename to…" @bind="_renameTo" @bind:event="oninput"
+                       @onkeydown="OnRenameKeyDown" />
+                <button class="btn btn-sm btn-outline-secondary" @onclick="RenamePersonAsync"
+                        disabled="@(_renameTo.Trim().Equals(_filter, StringComparison.OrdinalIgnoreCase))">
+                    Rename
+                </button>
+            }
+        </div>
+    }
 </div>
 
 <div class="widget mb-3">
     <div class="widget-body">
         <div class="row g-2 align-items-end">
-            <div class="col-12 col-md-5">
+            <div class="col-12 col-md-4">
                 <label class="form-label" for="chore-title">New chore</label>
                 <input id="chore-title" class="form-control" placeholder="Change the furnace filter"
                        @bind="_title" @bind:event="oninput" @onkeydown="OnKeyDown" />
             </div>
-            <div class="col-6 col-md-3">
+            <div class="col-6 col-md-2">
                 <label class="form-label" for="chore-due">First due</label>
                 <input id="chore-due" type="date" class="form-control" @bind="_due" />
             </div>
@@ -36,7 +69,20 @@
                 <input id="chore-every" type="number" min="0" class="form-control" @bind="_everyDays"
                        title="0 for a one-off" />
             </div>
-            <div class="col-12 col-md-2">
+            <div class="col-8 col-md-2">
+                <label class="form-label" for="chore-who">Who</label>
+                @* A free-text box with suggestions rather than a dropdown: the first time
+                   somebody is given a chore, their name does not exist yet. *@
+                <input id="chore-who" class="form-control" list="chore-people" placeholder="Anyone"
+                       @bind="_assignee" @bind:event="oninput" @onkeydown="OnKeyDown" />
+                <datalist id="chore-people">
+                    @foreach (var person in _people)
+                    {
+                        <option value="@person"></option>
+                    }
+                </datalist>
+            </div>
+            <div class="col-4 col-md-2">
                 <button class="btn btn-primary w-100" disabled="@(_title.Trim().Length == 0)"
                         @onclick="AddAsync">Add</button>
             </div>
@@ -44,35 +90,72 @@
     </div>
 </div>
 
-@if (_chores.Count > 0)
+@if (Shown.Count > 0)
 {
     <div class="widget">
         <div class="widget-body d-grid gap-2">
-            @foreach (var chore in _chores)
+            @foreach (var chore in Shown)
             {
-                <div class="d-flex align-items-center gap-2">
-                    <button class="btn btn-sm btn-outline-secondary flex-none" title="Mark done"
-                            @onclick="() => CompleteAsync(chore)">✓</button>
+                @if (_editId == chore.Id)
+                {
+                    @* The row turns into its own little form. Same three fields as adding,
+                       minus the person — that keeps its dropdown, which the edit does not touch. *@
+                    <div class="d-flex align-items-center gap-2">
+                        <input class="form-control form-control-sm" aria-label="Title"
+                               @bind="_editTitle" @bind:event="oninput"
+                               @onkeydown="OnEditKeyDown" />
+                        <input type="date" class="form-control form-control-sm flex-none" style="width:auto"
+                               aria-label="Due" @bind="_editDue" />
+                        <input type="number" min="0" class="form-control form-control-sm flex-none"
+                               style="width:5rem" aria-label="Repeat days" title="0 for a one-off"
+                               @bind="_editEvery" />
+                        <button class="btn btn-sm btn-primary flex-none" title="Save"
+                                disabled="@(_editTitle.Trim().Length == 0)"
+                                @onclick="SaveEditAsync">✓</button>
+                        <button class="btn btn-sm btn-outline-secondary flex-none" title="Cancel"
+                                @onclick="CancelEdit">✕</button>
+                    </div>
+                }
+                else
+                {
+                    <div class="d-flex align-items-center gap-2">
+                        <button class="btn btn-sm btn-outline-secondary flex-none" title="Mark done"
+                                @onclick="() => CompleteAsync(chore)">✓</button>
 
-                    <span class="text-truncate @(chore.IsOverdue(_today) ? "text-danger" : null)">
-                        @chore.Title
-                    </span>
+                        <span class="text-truncate @(chore.IsOverdue(_today) ? "text-danger" : null)">
+                            @chore.Title
+                        </span>
 
-                    @if (chore.Recurs)
-                    {
-                        <span class="tile-meta flex-none">every @chore.EveryDays d</span>
-                    }
+                        @if (chore.Recurs)
+                        {
+                            <span class="tile-meta flex-none">every @chore.EveryDays d</span>
+                        }
 
-                    <span class="tile-meta ms-auto flex-none text-nowrap">
-                        @chore.DueLabel(_today)
-                    </span>
+                        <select class="form-select form-select-sm ms-auto flex-none" style="width:auto"
+                                value="@chore.Assignee"
+                                @onchange="e => AssignAsync(chore, e.Value?.ToString() ?? string.Empty)">
+                            <option value="">Anyone</option>
+                            @foreach (var person in _people)
+                            {
+                                <option value="@person">@person</option>
+                            }
+                        </select>
 
-                    <button class="btn btn-sm btn-outline-danger flex-none" title="Delete"
-                            @onclick="() => DeleteAsync(chore)">✕</button>
-                </div>
+                        <span class="tile-meta flex-none text-nowrap">@chore.DueLabel(_today)</span>
+
+                        <button class="btn btn-sm btn-outline-secondary flex-none" title="Edit"
+                                @onclick="() => BeginEdit(chore)">✎</button>
+                        <button class="btn btn-sm btn-outline-danger flex-none" title="Delete"
+                                @onclick="() => DeleteAsync(chore)">✕</button>
+                    </div>
+                }
             }
         </div>
     </div>
+}
+else if (_chores.Count > 0)
+{
+    <div class="empty-state">Nothing assigned to @_filter.</div>
 }
 
 @code {
@@ -80,11 +163,26 @@
 
     private ChoreStore _store = default!;
     private IReadOnlyList<ChoreStore.Chore> _chores = [];
+    private IReadOnlyList<string> _people = [];
     private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
 
     private string _title = "";
+    private string _assignee = "";
+    private string _filter = "";
+    private string _renameTo = "";
     private DateTime _due = DateTime.Today;
     private int _everyDays;
+
+    // Which row is open for editing, and the working copy of its fields. Empty means none.
+    private string _editId = "";
+    private string _editTitle = "";
+    private DateTime _editDue = DateTime.Today;
+    private int _editEvery;
+
+    // Filtering to a person still shows unclaimed chores: an unassigned job is everyone's,
+    // and hiding it is how it never gets done.
+    private IReadOnlyList<ChoreStore.Chore> Shown =>
+        [.. _chores.Where(c => c.BelongsTo(_filter))];
 
     protected override async Task OnInitializedAsync()
     {
@@ -92,17 +190,21 @@
         await LoadAsync();
     }
 
-    private async Task LoadAsync() => _chores = await _store.AllAsync();
+    private async Task LoadAsync()
+    {
+        _chores = await _store.AllAsync();
+        _people = await _store.PeopleAsync();
+    }
 
     private async Task AddAsync()
     {
         if (_title.Trim().Length == 0)
             return;
 
-        await _store.AddAsync(_title, DateOnly.FromDateTime(_due), _everyDays);
+        await _store.AddAsync(_title, DateOnly.FromDateTime(_due), _everyDays, _assignee);
 
-        // Keep the repeat and the date: adding six chores that all repeat monthly is the
-        // normal case, and clearing the whole form each time would mean retyping them.
+        // Keep the repeat, the date and the person: adding four chores for the same
+        // someone is the normal case, and clearing it each time means retyping the name.
         _title = "";
         await LoadAsync();
     }
@@ -111,6 +213,71 @@
     {
         if (e.Key == "Enter")
             await AddAsync();
+    }
+
+    private void OnFilterChanged(ChangeEventArgs e)
+    {
+        _filter = e.Value?.ToString() ?? "";
+        _renameTo = _filter;   // Start the rename box from the current name, not blank.
+        CancelEdit();          // An open editor from the old view has nowhere to go.
+    }
+
+    private async Task AssignAsync(ChoreStore.Chore chore, string person)
+    {
+        await _store.AssignAsync(chore.Id, person);
+        await LoadAsync();
+    }
+
+    private void BeginEdit(ChoreStore.Chore chore)
+    {
+        _editId = chore.Id;
+        _editTitle = chore.Title;
+        _editDue = chore.Due.ToDateTime(TimeOnly.MinValue);
+        _editEvery = chore.EveryDays;
+    }
+
+    private void CancelEdit()
+    {
+        _editId = "";
+        _editTitle = "";
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_editId.Length == 0 || _editTitle.Trim().Length == 0)
+            return;
+
+        await _store.EditAsync(_editId, _editTitle, DateOnly.FromDateTime(_editDue), _editEvery);
+        CancelEdit();
+        await LoadAsync();
+    }
+
+    private async Task OnEditKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SaveEditAsync();
+        else if (e.Key == "Escape")
+            CancelEdit();
+    }
+
+    private async Task RenamePersonAsync()
+    {
+        var to = _renameTo.Trim();
+        if (_filter.Length == 0 || to.Equals(_filter, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        await _store.RenamePersonAsync(_filter, to);
+
+        // Follow the rename: land on the new name, or back on Everyone if they were cleared.
+        _filter = to;
+        _renameTo = to;
+        await LoadAsync();
+    }
+
+    private async Task OnRenameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await RenamePersonAsync();
     }
 
     private async Task CompleteAsync(ChoreStore.Chore chore)
