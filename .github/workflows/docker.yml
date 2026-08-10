@@ -20,6 +20,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # git describe below needs the tags, and the default shallow clone has none —
+          # so without this a tagged release would still be stamped as a bare commit sha,
+          # both in the image tag and in the version Settings shows.
+          fetch-depth: 0
 
       # arm64 matters here: a good share of home labs run on a Raspberry Pi or an ARM NAS.
       - uses: docker/setup-qemu-action@v3
