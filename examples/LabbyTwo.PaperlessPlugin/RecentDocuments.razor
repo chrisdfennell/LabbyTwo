@@ -1,0 +1,70 @@
+@inject PaperlessProvider Paperless
+
+@* A widget is an ordinary Blazor component that takes one parameter. The host renders it
+   with DynamicComponent and knows nothing about it beyond the WidgetContext it hands over.
+
+   Note what this does NOT do: it never re-probes on a timer of its own. The host's monitor
+   already polls, and every widget on the page redraws when it does — a widget with its own
+   loop would multiply the load on the far end by the number of cards you placed. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Paperless connection.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0 text-danger">@_error</p>
+}
+else if (_documents is null)
+{
+    <p class="tile-meta mb-0">Loading…</p>
+}
+else if (_documents.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing filed yet.</p>
+}
+else
+{
+    <div class="d-grid gap-2">
+        @foreach (var document in _documents)
+        {
+            <div class="d-flex justify-content-between gap-2">
+                @* Deliberately opens in a new tab: a dashboard is a jumping-off point, and
+                   navigating away from it loses whatever else you were watching. *@
+                <a class="text-truncate" title="@document.Title" target="_blank" rel="noreferrer"
+                   href="@($"{PaperlessProvider.LinkBase(Context.Connection)}/documents/{document.Id}/details")">
+                    @document.Title
+                </a>
+                <span class="tile-meta flex-none text-nowrap">@Ago.Since(document.Added)</span>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    // EditorRequired, and named exactly "Context": that is the parameter the host passes.
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<PaperlessProvider.Document>? _documents;
+    private string? _error;
+
+    private int Count => Math.Clamp(Context.Widget.Settings.GetInt("count", 5), 1, 50);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        try
+        {
+            _documents = await Paperless.RecentAsync(Context.Connection, Count, CancellationToken.None);
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            // Never let a widget throw: an unhandled exception in one card takes down the
+            // whole Blazor circuit, so the rest of the dashboard would go with it.
+            _error = ex.GetBaseException().Message;
+        }
+    }
+}

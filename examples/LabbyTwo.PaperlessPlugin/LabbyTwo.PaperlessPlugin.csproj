@@ -1,11 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<!-- The Razor SDK, not the plain one: this plugin ships a .razor component, and only this
+     SDK compiles one into the assembly. A provider-only plugin does not need it. -->
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- The plain SDK is enough for a provider. A plugin shipping a .razor widget needs
-         Microsoft.NET.Sdk.Razor instead — see LabbyTwo.PaperlessPlugin. -->
   </PropertyGroup>
 
   <ItemGroup>

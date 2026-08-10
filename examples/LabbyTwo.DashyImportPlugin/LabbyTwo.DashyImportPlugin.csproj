@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+
+    <!-- A library the host already ships. Reference it to compile against, with the same
+         Private="false" ExcludeAssets="runtime" as above so the build does not drop a
+         second YamlDotNet.dll next to the plugin: two copies of a type is exactly the
+         load failure the plugin rules warn about.
+
+         Match the host's version. A package the host does NOT have is different — that
+         one you do have to copy into the plugins folder yourself, because there is no
+         NuGet restore at runtime. -->
+    <PackageReference Include="YamlDotNet" Version="18.1.0" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

@@ -22,3 +22,13 @@ jobs:
       - run: dotnet build --no-restore --configuration Release -warnaserror
 
       - run: dotnet test --no-build --configuration Release --verbosity normal
+
+      # The example plugins are not part of the app's build, so nothing else would notice
+      # if a change to an interface broke them — and a broken example is worse than none.
+      - name: Build the example plugins
+        run: |
+          for plugin in examples/*/; do
+            echo "::group::$plugin"
+            dotnet build "$plugin" --configuration Release -warnaserror
+            echo "::endgroup::"
+          done

@@ -4,8 +4,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- The plain SDK is enough for a provider. A plugin shipping a .razor widget needs
-         Microsoft.NET.Sdk.Razor instead — see LabbyTwo.PaperlessPlugin. -->
   </PropertyGroup>
 
   <ItemGroup>

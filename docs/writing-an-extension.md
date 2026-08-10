@@ -291,6 +291,26 @@ library that references LabbyTwo and is copied into the plugins folder.
 </Project>
 ```
 
+**If your plugin ships a widget**, swap the SDK for `Microsoft.NET.Sdk.Razor` — the plain
+one will not compile a `.razor` file into the assembly — and add an `_Imports.razor` of
+your own, because the host's does not reach into your project:
+
+```razor
+@using Microsoft.AspNetCore.Components
+@using LabbyTwo.Core
+```
+
+**To use a library the host already ships** — YamlDotNet, Markdig — reference the package
+at the host's exact version with `PrivateAssets="all" ExcludeAssets="runtime"`, so you
+compile against it without dropping a second copy of the DLL beside your plugin:
+
+```xml
+<PackageReference Include="YamlDotNet" Version="18.1.0" PrivateAssets="all" ExcludeAssets="runtime" />
+```
+
+A package the host does *not* ship is the opposite case: copy it into the plugins folder
+yourself, because there is no NuGet restore at runtime.
+
 ```bash
 dotnet build -c Release
 cp bin/Release/net10.0/MyLabbyPlugin.dll /path/to/labbytwo-data/plugins/
@@ -299,6 +319,13 @@ docker compose restart labbytwo
 
 Settings → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
+
+## Four that work
+
+[`examples/`](../examples) has four plugins that build and run — a provider with no
+dependencies, an HTTP provider with an API key, a provider plus a Blazor widget, and an
+importer. Between them they cover every rule on this page. Start from whichever is closest
+to what you are writing.
 
 ### The rules
 
