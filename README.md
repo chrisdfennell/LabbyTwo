@@ -152,6 +152,10 @@ monitoring works.
 | **qBittorrent** | Transfer rates and how many torrents are downloading or seeding. |
 | **UPS (NUT)** | Battery charge, runtime left, load, input voltage, and whether it is on battery. |
 | **Docker** | How many containers are running, and a live list. Needs the socket mounted. |
+| **Uptime Kuma** | Monitors up, down and paused, each one by name, and the nearest certificate expiry. Reads Kuma's `/metrics`. |
+| **Speedtest Tracker** | Latest download, upload, ping and jitter — plus how old that result is, which is what catches a scheduler that has stopped. |
+| **Immich** | Photos and videos in the library, what it takes on disk, and how full that disk is. |
+| **Nextcloud** | Users, files, shares, free space and load, from the Server info app. |
 | **MyPersonalGit** | A self-hosted [MyPersonalGit](https://github.com/chrisdfennell/MyPersonalGit) server — repositories, open pull requests, open issues and stars. Token auth. |
 | **Pi-hole** | Queries and blocks today, block percentage, and whether blocking is switched on. |
 | **QNAP NAS** | Model, firmware, uptime, CPU, memory, temperatures, volume usage. |

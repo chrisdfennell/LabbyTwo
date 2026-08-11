@@ -41,6 +41,7 @@ public class ModuleDiscoveryTests
             "lidarr", "readarr", "prowlarr",
             "bazarr", "tautulli", "nzbget", "seerr", "ersatztv", "unmanic",
             "mypersonalgit",
+            "uptime-kuma", "speedtest-tracker", "immich", "nextcloud",
         ];
 
         Assert.Equal(

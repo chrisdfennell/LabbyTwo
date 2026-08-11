@@ -29,6 +29,11 @@ changes.
 Here is a complete, working provider for [Uptime Kuma](https://github.com/louislam/uptime-kuma)'s
 metrics endpoint.
 
+> LabbyTwo now ships a fuller version of this one — see `Providers/UptimeKumaProvider.cs`,
+> which adds a metric per monitor and parses the Prometheus format properly. The version
+> below stays because it is the shortest thing that is genuinely useful; copy it, change
+> the `Type`, and point it at something else.
+
 ```csharp
 using System.Diagnostics;
 using LabbyTwo.Core;
