@@ -22,7 +22,7 @@ public sealed class DockerProvider : IConnectionProvider
         new("endpoint", "Endpoint", FieldKind.Text, "/var/run/docker.sock", Default: "/var/run/docker.sock", Required: true,
             Help: "A unix socket path, a Windows named pipe (npipe://./pipe/docker_engine), or a TCP address (tcp://192.168.1.50:2375). " +
                   "In Docker, mount the socket: -v /var/run/docker.sock:/var/run/docker.sock"),
-        new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10"),
+        new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10") { Advanced = true },
     ];
 
     public sealed record ContainerInfo(string Name, string Image, string State, string Status);

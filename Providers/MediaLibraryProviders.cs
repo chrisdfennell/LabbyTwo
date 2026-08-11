@@ -125,6 +125,97 @@ public sealed class AudiobookshelfProvider(IHttpClientFactory httpFactory) : ICo
 }
 
 /// <summary>
+/// Komga, for comics and manga. Plain basic auth and a REST API that answers the only
+/// question worth putting on a wall: how much is in there, and how much is unread.
+/// </summary>
+public sealed class KomgaProvider(IHttpClientFactory httpFactory) : IConnectionProvider
+{
+    public string Type => "komga";
+    public string DisplayName => "Komga";
+    public string Icon => "📖";
+    public string Category => "Media";
+    public string Description => "Series, books and how many are still unread.";
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("url", "Base URL", FieldKind.Url, "http://192.168.1.82:25600", Required: true),
+        new("username", "Username", FieldKind.Text, Required: true, Help: "The email address you log in with."),
+        new("password", "Password", FieldKind.Password, Required: true,
+            Help: "An API key works here too, in place of the password."),
+    ];
+
+    public IReadOnlyList<MetricSpec> Metrics =>
+    [
+        new("series", "Series"),
+        new("books", "Books"),
+        new("unread", "Unread"),
+        new("latency_ms", "Response time", " ms"),
+    ];
+
+    public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
+    {
+        var baseUrl = connection.Settings.Get("url").TrimEnd('/');
+        if (baseUrl.Length == 0)
+            return ProbeResult.Down(TimeSpan.Zero, "No base URL configured.");
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var http = httpFactory.CreateClient(ProviderHttp.ClientName);
+            var metrics = new Dictionary<string, double>();
+
+            // size=1 because only the total is wanted; Komga returns it beside the page.
+            metrics["series"] = await CountAsync(http, connection, $"{baseUrl}/api/v1/series?size=1", ct);
+            metrics["books"] = await CountAsync(http, connection, $"{baseUrl}/api/v1/books?size=1", ct);
+
+            try
+            {
+                metrics["unread"] = await CountAsync(http, connection,
+                    $"{baseUrl}/api/v1/books?size=1&read_status=UNREAD", ct);
+            }
+            catch (Exception)
+            {
+                // Optional: older versions spell the filter differently.
+            }
+
+            stopwatch.Stop();
+            metrics["latency_ms"] = stopwatch.Elapsed.TotalMilliseconds;
+
+            return ProbeResult.Up(stopwatch.Elapsed,
+                $"{metrics.GetValueOrDefault("books"):N0} books in {metrics.GetValueOrDefault("series"):N0} series",
+                metrics);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("url")));
+        }
+    }
+
+    private static async Task<double> CountAsync(
+        HttpClient http, Connection connection, string url, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
+            Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+                $"{connection.Settings.Get("username")}:{connection.Settings.Get("password")}")));
+
+        using var response = await http.SendAsync(request, ct);
+
+        if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized)
+            throw new InvalidOperationException("Komga refused the login. The username is the email address you sign in with.");
+
+        response.EnsureSuccessStatusCode();
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        return document.RootElement.TryGetProperty("totalElements", out var total)
+            && total.ValueKind == JsonValueKind.Number
+                ? total.GetDouble()
+                : 0;
+    }
+}
+
+/// <summary>
 /// Navidrome. Subsonic's API underneath, which means the interesting thing on a dashboard
 /// is who is listening right now — a music server is either playing or it is furniture.
 /// </summary>

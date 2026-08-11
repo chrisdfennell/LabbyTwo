@@ -442,6 +442,17 @@ public sealed class MetricsTableWidget : IWidgetType
     public Type Component => typeof(MetricsTableCard);
 }
 
+public sealed class ForecastWidget : IWidgetType
+{
+    public string Type => "forecast";
+    public string DisplayName => "Forecast";
+    public string Icon => "🌦️";
+    public string Description => "Today's high and low, rain expected and the chance of it — what the station cannot tell you.";
+    public IReadOnlyList<string> ProviderTypes => ["forecast"];
+    public int DefaultWidth => 3;
+    public Type Component => typeof(ForecastCard);
+}
+
 public sealed class CompareChartWidget : IWidgetType
 {
     public string Type => "compare-chart";

@@ -49,9 +49,9 @@ public sealed class HttpEndpointProvider(IHttpClientFactory httpFactory) : IConn
             new SelectOption("any", "Any response at all, even a 500"),
         ]),
         new("expect_text", "Body must contain", FieldKind.Text, Help: "Optional. Fails the probe when the response body lacks this text."),
-        new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10"),
+        new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10") { Advanced = true },
         new("headers", "Extra headers", FieldKind.Textarea, "X-Api-Key: abc123",
-            Help: "Optional, one per line as Name: value."),
+            Help: "Optional, one per line as Name: value.") { Advanced = true },
     ];
 
     public IReadOnlyList<MetricSpec> Metrics => [new("latency_ms", "Response time", " ms")];

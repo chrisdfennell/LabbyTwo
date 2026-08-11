@@ -183,6 +183,12 @@ monitoring works.
 | **OPNsense** | Gateway packet loss and latency, WAN addresses, memory. The router is never "down"; it just starts dropping things. |
 | **Shelly** | Power draw, energy used and temperature, straight off the plug. No cloud, no broker. Gen1 and Gen2 both. |
 | **Weather forecast** | Today's high, low and chance of rain from Open-Meteo — no API key, and the half a weather station cannot tell you. |
+| **SABnzbd** | Queue size, speed, what is left, free disk, and whether it is paused. |
+| **Transmission** | Torrents active and transfer rates. Handles the session-id handshake for you. |
+| **Tdarr** | Transcode and health-check queues, workers busy, space saved. Falling behind looks exactly like working. |
+| **Mylar3** | Comic series tracked and issues still wanted. |
+| **Whisparr** | Version, reachability and queue depth, like the other *arrs. |
+| **Komga** | Series, books and how many are unread. |
 | **Audiobookshelf** | Libraries, items, and how many are part-listened. |
 | **Navidrome** | Albums, songs, and who is playing something right now. |
 | **Email (SMTP)** | *Alert channel.* Any SMTP server. The one that needs nothing else installed. |

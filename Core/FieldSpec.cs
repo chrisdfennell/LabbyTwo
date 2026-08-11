@@ -64,6 +64,17 @@ public sealed record FieldSpec(
     /// </summary>
     public string? ProviderFilter { get; init; }
 
+    /// <summary>
+    /// Tucked behind "More settings" rather than removed. The balance a home-lab app has
+    /// to strike is that the form must be short enough to fill in and deep enough to be
+    /// worth having — a timeout override, a custom path, a units choice — so the rare
+    /// fields stay available and stop being the first thing anybody sees.
+    ///
+    /// Never mark a required field advanced: a form that cannot be completed without
+    /// opening a disclosure is worse than a long one.
+    /// </summary>
+    public bool Advanced { get; init; }
+
     /// <summary>Password fields are encrypted at rest and never rendered back to the browser.</summary>
     public bool IsSecret => Kind == FieldKind.Password;
 }

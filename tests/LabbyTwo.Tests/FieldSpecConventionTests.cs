@@ -72,6 +72,20 @@ public class FieldSpecConventionTests
     }
 
     [Fact]
+    public void NothingRequiredIsHiddenBehindTheDisclosure()
+    {
+        // Advanced fields render inside a collapsed "More settings". A required one there
+        // means a form that cannot be completed without discovering a disclosure, which is
+        // worse than the long form it was meant to fix.
+        var hidden = EveryField(Build())
+            .Where(entry => entry.Field.Advanced && entry.Field.Required)
+            .Select(entry => $"{entry.Owner} · {entry.Field.Key}")
+            .ToList();
+
+        Assert.Empty(hidden);
+    }
+
+    [Fact]
     public void SelectFieldsOfferSomethingToSelect()
     {
         var empty = EveryField(Build())

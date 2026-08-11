@@ -1,0 +1,112 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject AppSettingsStore AppSettings
+@inject Registry Registry
+
+@* What is about to happen, next to the station that says what is happening. The two
+   belong together: observations tell you it is 4°C now, and only a forecast tells you it
+   is going below zero tonight — which is the half you can act on. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a forecast connection.</p>
+}
+else if (_readings.Count == 0)
+{
+    <p class="tile-meta mb-0">No forecast yet.</p>
+}
+else
+{
+    <div class="d-flex align-items-baseline gap-2">
+        <span class="metric-value">@Show("temp_high_c")</span>
+        <span class="tile-meta">high</span>
+        <span class="metric-value">@Show("temp_low_c")</span>
+        <span class="tile-meta">low</span>
+    </div>
+
+    <div class="d-flex flex-wrap gap-3 mt-2">
+        @if (_readings.ContainsKey("rain_chance_percent"))
+        {
+            <div>
+                <div class="tile-meta">Chance of rain</div>
+                <div>@Show("rain_chance_percent")</div>
+            </div>
+        }
+        @if (_readings.ContainsKey("rain_today_mm"))
+        {
+            <div>
+                <div class="tile-meta">Rain expected</div>
+                <div>@Show("rain_today_mm")</div>
+            </div>
+        }
+        @if (_readings.ContainsKey("temp_now_c"))
+        {
+            <div>
+                <div class="tile-meta">Forecast now</div>
+                <div>@Show("temp_now_c")</div>
+            </div>
+        }
+        @if (_readings.ContainsKey("wind_kph"))
+        {
+            <div>
+                <div class="tile-meta">Wind</div>
+                <div>@Show("wind_kph")</div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private Dictionary<string, double> _readings = [];
+    private string _units = Appearance.Default.UnitSystem;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is not { } connection)
+            return;
+
+        // Live probe first, falling back to the last recorded values — the same order every
+        // other card uses, so a restart does not blank this until the next sweep.
+        var readings = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (key, value) in await History.LatestAsync(connection.Id, TimeSpan.FromHours(12)))
+            readings[key] = value;
+
+        if (Health.State(connection.Id)?.Metrics is { } live)
+        {
+            foreach (var (key, value) in live)
+                readings[key] = value;
+        }
+
+        readings.Remove("latency_ms");
+        _readings = readings;
+    }
+
+    /// <summary>
+    /// Everything is stored in metric and converted here, so the same history reads
+    /// correctly whichever units the app is set to — including after somebody changes it.
+    /// </summary>
+    private string Show(string metric) =>
+        _readings.TryGetValue(metric, out var value)
+            ? Units.Format(Registry.Metric(Context.Connection, metric), value, _units)
+            : "—";
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

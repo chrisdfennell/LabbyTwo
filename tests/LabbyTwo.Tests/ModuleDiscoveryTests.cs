@@ -45,6 +45,7 @@ public class ModuleDiscoveryTests
             "prometheus", "pbs", "duplicati", "scrutiny", "frigate", "tailscale", "synology",
             "healthchecks", "email", "ifttt",
             "cloudflare", "opnsense", "shelly", "forecast", "audiobookshelf", "navidrome",
+            "sabnzbd", "transmission", "tdarr", "mylar3", "whisparr", "komga",
         ];
 
         Assert.Equal(

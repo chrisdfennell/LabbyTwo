@@ -55,6 +55,11 @@ public sealed class WeatherStationTabKind : ITabKind
         new("connection", "Weather station", FieldKind.Connection,
             Help: "Leave blank to use the only Ambient Weather connection you have.")
             { ProviderFilter = "ambient" },
+
+        new("forecast", "Forecast", FieldKind.Connection,
+            Help: "Optional. Blank uses the only forecast connection you have, and shows nothing if " +
+                  "you have none — the station reports what is happening, this what is about to.")
+            { ProviderFilter = "forecast" },
         new("latitude", "Latitude", FieldKind.Text, "39.7392",
             Help: "Decimal degrees. Used for the radar and for sunrise and sunset, which are computed here rather than fetched."),
         new("longitude", "Longitude", FieldKind.Text, "-104.9903"),

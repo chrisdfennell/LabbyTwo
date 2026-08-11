@@ -33,7 +33,7 @@ public sealed class JsonApiProvider(IHttpClientFactory httpFactory) : IConnectio
             Help: "Optional. A field to show as the tile's message, e.g. version or state."),
         new("headers", "Extra headers", FieldKind.Textarea, "Authorization: Bearer …",
             Help: "Optional, one per line as Name: value."),
-        new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10"),
+        new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10") { Advanced = true },
     ];
 
     /// <summary>

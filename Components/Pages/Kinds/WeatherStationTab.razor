@@ -48,6 +48,22 @@ else
         }
     </div>
 
+    @* The station says what is happening; this says what is about to. Shown only when a
+       forecast connection exists, so the page is unchanged for anyone who has not added
+       one — and it finds the connection itself rather than asking for it twice. *@
+    @if (_forecast is { } forecast)
+    {
+        <div class="widget mb-3">
+            <div class="widget-head">
+                <h2 class="widget-title">Forecast</h2>
+                <span class="tile-meta">@forecast.Name</span>
+            </div>
+            <div class="widget-body">
+                <DynamicComponent Type="typeof(ForecastCard)" Parameters="_forecastParameters" />
+            </div>
+        </div>
+    }
+
     @if (ShowRadar)
     {
         <div class="widget mb-3">
@@ -103,6 +119,8 @@ else
     private Connection? _station;
     private WidgetContext _context = default!;
     private Dictionary<string, object> _radarParameters = [];
+    private Connection? _forecast;
+    private Dictionary<string, object> _forecastParameters = [];
     private DateTimeOffset? _lastReport;
     private IReadOnlyDictionary<string, double> _readings = new Dictionary<string, double>();
     private string _units = Appearance.Default.UnitSystem;
@@ -216,6 +234,22 @@ else
             ? connections.FirstOrDefault(c => c.Id == chosen)
             // Nothing chosen yet: the only station there is, is almost certainly the one.
             : connections.FirstOrDefault(c => c.Provider == "ambient");
+
+        // The forecast is optional and found rather than configured: somebody who has added
+        // one wants it here, and somebody who has not should see the page they had before.
+        _forecast = Tab.Settings.Get("forecast") is { Length: > 0 } picked
+            ? connections.FirstOrDefault(c => c.Id == picked)
+            : connections.FirstOrDefault(c => c.Provider == "forecast" && c.Enabled);
+
+        if (_forecast is { } forecast)
+        {
+            _forecastParameters = new Dictionary<string, object>
+            {
+                ["Context"] = new WidgetContext(
+                    new Widget { TabId = Tab.Id, Type = "forecast" },
+                    forecast),
+            };
+        }
 
         if (_station is null)
             return;

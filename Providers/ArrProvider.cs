@@ -203,6 +203,18 @@ public sealed class RadarrProvider(IHttpClientFactory httpFactory) : ArrProvider
     public override string Description => "Movie automation — version, reachability, and how many movies are downloading.";
 }
 
+/// <summary>
+/// Whisparr. Same API as Sonarr down to the version, so this is the whole integration —
+/// which is the argument for the shared base class rather than a fourth copy of the code.
+/// </summary>
+public sealed class WhisparrProvider(IHttpClientFactory httpFactory) : ArrProviderBase(httpFactory)
+{
+    public override string Type => "whisparr";
+    public override string DisplayName => "Whisparr";
+    public override string Icon => "🔞";
+    public override string Description => "Version, reachability, and how many items are downloading.";
+}
+
 public sealed class LidarrProvider(IHttpClientFactory httpFactory) : ArrProviderBase(httpFactory)
 {
     public override string Type => "lidarr";

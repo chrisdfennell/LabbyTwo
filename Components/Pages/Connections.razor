@@ -132,7 +132,12 @@ else
 @if (_picking)
 {
     <Modal Title="What are you connecting?" Size="xl" OnClose="() => _picking = false">
-        @foreach (var category in Registry.Providers.GroupBy(p => p.Category))
+        @* Fifty-odd integrations is a wall to scroll rather than a list to read. Search
+           first, categories underneath — the same shape the widget picker got. *@
+        <input class="form-control mb-3" placeholder="Search — sonarr, nas, weather…" autofocus
+               @bind="_providerSearch" @bind:event="oninput" />
+
+        @foreach (var category in MatchingProviders.GroupBy(p => p.Category))
         {
             <h6 class="text-uppercase tile-meta mt-3 mb-2">@category.Key</h6>
             <div class="card-picker">
@@ -165,6 +170,19 @@ else
     private IReadOnlyList<Connection> _connections = [];
     private DateTimeOffset _now = DateTimeOffset.Now;
     private string _silencing = "";
+    private string _providerSearch = "";
+
+    /// <summary>
+    /// Matched on the description as well as the name, so "torrent" finds qBittorrent,
+    /// Transmission and Deluge without anybody knowing which of them you own.
+    /// </summary>
+    private IEnumerable<IConnectionProvider> MatchingProviders =>
+        _providerSearch.Trim() is not { Length: > 0 } needle
+            ? Registry.Providers
+            : Registry.Providers.Where(provider =>
+                provider.DisplayName.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || provider.Description.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || provider.Category.Contains(needle, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Deliberately short. A silence you forget to lift is worse than no silence at all,

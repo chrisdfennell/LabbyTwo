@@ -10,9 +10,34 @@
     <p class="text-secondary small mb-0">@EmptyMessage</p>
 }
 
-@foreach (var field in Fields)
+@foreach (var field in Ordinary)
 {
-    <div class="mb-3">
+    @Render(field)
+}
+
+@* Depth without clutter: the rare settings are still here, one click away, and a form
+   that opens with fifteen boxes does not stop anybody adding the thing they came for. A
+   field the user has already set opens the section for them, so nothing they configured
+   can hide. *@
+@if (Advanced.Count > 0)
+{
+    <details class="mb-3" open="@_advancedOpen">
+        <summary class="tile-meta" style="cursor: pointer">
+            More settings (@Advanced.Count)
+        </summary>
+        <div class="mt-2">
+            @foreach (var field in Advanced)
+            {
+                @Render(field)
+            }
+        </div>
+    </details>
+}
+
+@* One definition of what a field looks like, used by both lists above — the alternative
+   was duplicating a hundred lines of switch to put some of them in a disclosure. *@
+@{
+    RenderFragment Render(FieldSpec field) => @<div class="mb-3">
         @if (field.Kind != FieldKind.Bool)
         {
             <label class="form-label" for="@FieldId(field)">
@@ -150,11 +175,23 @@
         {
             <div class="form-text">@field.Help</div>
         }
-    </div>
+    </div>;
 }
 
 @code {
     [Parameter, EditorRequired] public IReadOnlyList<FieldSpec> Fields { get; set; } = [];
+
+    // Named "spec" rather than "field": inside a property accessor, C# 14 treats "field"
+    // as the keyword for a synthesised backing field, and a lambda parameter of that name
+    // is a compile error with a genuinely baffling message.
+    private IReadOnlyList<FieldSpec> Ordinary => [.. Fields.Where(spec => !spec.Advanced)];
+    private IReadOnlyList<FieldSpec> Advanced => [.. Fields.Where(spec => spec.Advanced)];
+
+    /// <summary>
+    /// Opened when one of the hidden fields already holds a value, so a setting somebody
+    /// deliberately changed can never be invisible on the form that owns it.
+    /// </summary>
+    private bool _advancedOpen;
 
     /// <summary>Mutated in place; the parent saves it when the user submits.</summary>
     [Parameter, EditorRequired] public SettingsBag Values { get; set; } = new();
@@ -197,6 +234,11 @@
         // Seed defaults so what gets saved matches what the form showed.
         foreach (var field in Fields.Where(f => f.Default is { Length: > 0 } && !Values.ContainsKey(f.Key)))
             Values[field.Key] = field.Default!;
+
+        // Compared against the default rather than merely present, since defaults are
+        // seeded above and would otherwise open the section on every form that has one.
+        _advancedOpen = Advanced.Any(spec =>
+            Values.Get(spec.Key) is { Length: > 0 } value && value != (spec.Default ?? ""));
     }
 
     protected override async Task OnParametersSetAsync()
