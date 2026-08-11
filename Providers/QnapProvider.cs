@@ -31,6 +31,19 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
 
     private readonly ConcurrentDictionary<string, string> _sessions = new();
 
+    /// <summary>
+    /// What the last probe saw. The NAS card used to fetch its own copy on every render,
+    /// which meant three round trips to QTS for one card — the probe's, plus two more —
+    /// and QTS is slow enough under load that those extra ones regularly timed out and
+    /// showed as "Operation canceled" on an otherwise healthy NAS. The probe already has
+    /// this data, so the card reads it instead.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (SystemInfo Info, IReadOnlyList<VolumeInfo> Volumes, DateTimeOffset At)> _latest = new();
+
+    /// <summary>The most recent reading, or null if this connection has not been probed yet.</summary>
+    public (SystemInfo Info, IReadOnlyList<VolumeInfo> Volumes)? Latest(Connection connection) =>
+        _latest.TryGetValue(connection.Id, out var cached) ? (cached.Info, cached.Volumes) : null;
+
     public sealed record SystemInfo(
         string? Model, string? Firmware, string? HostName, TimeSpan? Uptime,
         double? CpuPercent, double? TotalMemoryMb, double? FreeMemoryMb,
@@ -80,9 +93,10 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
 
             // Volume fullness is the number people actually want alerts on, so fold the
             // busiest volume into the same probe rather than making it a second poll.
+            IReadOnlyList<VolumeInfo> volumes = [];
             try
             {
-                var volumes = await VolumesAsync(connection, ct);
+                volumes = await VolumesAsync(connection, ct);
                 if (volumes.Count > 0)
                     metrics["disk_percent"] = volumes.Max(v => v.UsedPercent);
             }
@@ -90,6 +104,9 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
             {
                 log.LogDebug(ex, "Volume usage unavailable for {Connection}", connection.Name);
             }
+
+            // Kept for the NAS card, so it draws from this rather than asking QTS again.
+            _latest[connection.Id] = (info, volumes, DateTimeOffset.Now);
 
             var details = new Dictionary<string, string>();
             if (info.Model is { Length: > 0 } model)
