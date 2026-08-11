@@ -1,3 +1,6 @@
+@inject ConfigStore Config
+@inject Registry Registry
+
 @* Renders any list of FieldSpec into a form. Providers, widgets and tab kinds all
    describe themselves with FieldSpec and none of them ship UI — this is the one place
    that knows how a field becomes an input, so a new integration needs no Razor at all. *@
@@ -83,6 +86,41 @@
                 <LinkListEditor Value="@Values.Get(field.Key)" ValueChanged="json => SetValue(field, json)" />
                 break;
 
+            case FieldKind.Connection:
+                @* Picked by name, stored by id. Asking somebody to find an id and type it
+                   was the least friendly thing in here, and it was in six places. *@
+                <select class="form-select" id="@FieldId(field)"
+                        value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                        @onchange="e => Set(field, e.Value)">
+                    <option value="">@(Candidates(field).Count == 1
+                        ? $"Use {Candidates(field)[0].Name}, the only one"
+                        : "Choose…")</option>
+                    @foreach (var option in Candidates(field))
+                    {
+                        <option value="@option.Id">@option.Icon @option.Name</option>
+                    }
+                </select>
+                @if (Candidates(field).Count == 0)
+                {
+                    <div class="form-text">
+                        Nothing suitable is connected yet.
+                        <a href="settings/connections">Add one</a> and come back.
+                    </div>
+                }
+                break;
+
+            case FieldKind.Provider:
+                <select class="form-select" id="@FieldId(field)"
+                        value="@Values.Get(field.Key, field.Default ?? string.Empty)"
+                        @onchange="e => Set(field, e.Value)">
+                    <option value="">Any</option>
+                    @foreach (var provider in Registry.Providers)
+                    {
+                        <option value="@provider.Type">@provider.Icon @provider.DisplayName</option>
+                    }
+                </select>
+                break;
+
             case FieldKind.Metric:
                 @* A datalist suggests without restricting: the provider's declared metrics
                    and whatever history has recorded are offered, but a name neither knows
@@ -133,6 +171,20 @@
     private IReadOnlyList<SelectOption> Suggestions(FieldSpec field) =>
         DynamicOptions?.Invoke(field) ?? field.Options ?? [];
 
+    private IReadOnlyList<Connection> _connections = [];
+
+    /// <summary>
+    /// What a connection field may point at. Alert channels are never offered: nothing is
+    /// "bound to" a webhook, and listing it only invites a choice that cannot work.
+    /// </summary>
+    private IReadOnlyList<Connection> Candidates(FieldSpec field) =>
+    [
+        .. _connections
+            .Where(c => Registry.Provider(c.Provider) is not IAlertChannel)
+            .Where(c => field.ProviderFilter is not { Length: > 0 } wanted
+                || c.Provider.Equals(wanted, StringComparison.OrdinalIgnoreCase)),
+    ];
+
     /// <summary>Keys whose stored secret existed when the form opened, for the placeholder text.</summary>
     private HashSet<string> _storedSecrets = new(StringComparer.OrdinalIgnoreCase);
 
@@ -145,6 +197,13 @@
         // Seed defaults so what gets saved matches what the form showed.
         foreach (var field in Fields.Where(f => f.Default is { Length: > 0 } && !Values.ContainsKey(f.Key)))
             Values[field.Key] = field.Default!;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Only when something on this form actually needs them.
+        if (Fields.Any(field => field.Kind == FieldKind.Connection))
+            _connections = await Config.ConnectionsAsync();
     }
 
     private string FieldId(FieldSpec field) => $"f-{_formId}-{field.Key}";

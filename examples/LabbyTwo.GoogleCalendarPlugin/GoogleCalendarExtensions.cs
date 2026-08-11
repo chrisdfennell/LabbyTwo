@@ -18,8 +18,8 @@ public sealed class GoogleCalendarTabKind : ITabKind
 
     public IReadOnlyList<FieldSpec> Fields =>
     [
-        new("connection", "Calendar", FieldKind.Text,
-            Help: "The Google Calendar connection's id. Leave blank to use the only one you have."),
+        new("connection", "Calendar", FieldKind.Connection, ProviderFilter: "google-calendar",
+            Help: "Leave blank to use the only Google calendar you have connected."),
 
         new("view", "Opens in", FieldKind.Select, Default: "month", Options:
         [

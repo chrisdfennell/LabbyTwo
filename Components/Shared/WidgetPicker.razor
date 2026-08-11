@@ -2,22 +2,37 @@
 @inject ConfigStore Config
 
 <Modal Title="Add a widget" Size="xl" OnClose="OnClose">
-    <div class="card-picker">
-        @foreach (var type in Registry.Widgets)
-        {
-            var usable = !type.NeedsConnection || CompatibleCount(type) > 0;
-            <button type="button" disabled="@(!usable)" @onclick="() => AddAsync(type)">
-                <span class="picker-title">@type.Icon @type.DisplayName</span>
-                <span class="picker-desc">@type.Description</span>
-                @if (!usable)
-                {
-                    <span class="picker-desc text-warning">
-                        Needs a @string.Join(" or ", type.ProviderTypes) connection first.
-                    </span>
-                }
-            </button>
-        }
-    </div>
+    @* A flat list of twenty-seven cards is a wall. Grouped, and with the ones you can
+       actually use first, it is a menu — the connections picker has worked this way for
+       ages and there was no reason this one did not. *@
+    <input class="form-control mb-3" placeholder="Search widgets…" autofocus
+           @bind="_search" @bind:event="oninput" />
+
+    @foreach (var group in Groups)
+    {
+        <h6 class="text-uppercase tile-meta mt-3 mb-2">@group.Key</h6>
+        <div class="card-picker">
+            @foreach (var type in group)
+            {
+                var usable = !type.NeedsConnection || CompatibleCount(type) > 0;
+                <button type="button" disabled="@(!usable)" @onclick="() => AddAsync(type)">
+                    <span class="picker-title">@type.Icon @type.DisplayName</span>
+                    <span class="picker-desc">@type.Description</span>
+                    @if (!usable)
+                    {
+                        <span class="picker-desc text-warning">
+                            Needs a @Needs(type) connection first.
+                        </span>
+                    }
+                </button>
+            }
+        </div>
+    }
+
+    @if (!Groups.Any())
+    {
+        <p class="tile-meta">Nothing matches “@_search”.</p>
+    }
 </Modal>
 
 @code {
@@ -26,11 +41,43 @@
     [Parameter] public EventCallback<Widget> OnPicked { get; set; }
 
     private IReadOnlyList<Connection> _connections = [];
+    private string _search = "";
 
     protected override async Task OnInitializedAsync() => _connections = await Config.ConnectionsAsync();
 
     private int CompatibleCount(IWidgetType type) =>
         _connections.Count(c => Registry.Accepts(type, c.Provider));
+
+    /// <summary>
+    /// Grouped, with everything usable ahead of everything that needs a connection you do
+    /// not have — so the list starts with what you can actually add today.
+    /// </summary>
+    private IEnumerable<IGrouping<string, IWidgetType>> Groups =>
+        Registry.Widgets
+            .Where(Matches)
+            .OrderBy(type => !type.NeedsConnection || CompatibleCount(type) > 0 ? 0 : 1)
+            .ThenBy(type => type.DisplayName)
+            .GroupBy(Group);
+
+    private bool Matches(IWidgetType type) =>
+        _search.Trim() is not { Length: > 0 } needle
+        || type.DisplayName.Contains(needle, StringComparison.OrdinalIgnoreCase)
+        || type.Description.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Grouped by what the card is *for*, worked out from what it binds to — a widget
+    /// describes itself already, and asking every existing one to declare a category would
+    /// be churn for no gain.
+    /// </summary>
+    private string Group(IWidgetType type) =>
+        !type.NeedsConnection ? "Needs nothing — text, links, clocks"
+        : type.ProviderTypes.Contains(AnyProvider.Wildcard) ? "Works with anything you have connected"
+        : "For one particular service";
+
+    /// <summary>Provider keys are internal; a person needs the names they saw in the picker.</summary>
+    private string Needs(IWidgetType type) =>
+        string.Join(" or ", type.ProviderTypes
+            .Select(key => Registry.Provider(key)?.DisplayName ?? key));
 
     private async Task AddAsync(IWidgetType type)
     {

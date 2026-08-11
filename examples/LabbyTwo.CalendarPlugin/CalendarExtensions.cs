@@ -35,7 +35,7 @@ public sealed class AgendaTabKind : ITabKind
 
     public IReadOnlyList<FieldSpec> Fields =>
     [
-        new("connection", "Calendar", FieldKind.Text,
+        new("connection", "Calendar", FieldKind.Connection, ProviderFilter: "ics-calendar",
             Help: "Leave blank to use the only calendar connection you have."),
         new("days", "Days to show", FieldKind.Number, Default: "14"),
     ];

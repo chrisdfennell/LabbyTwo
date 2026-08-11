@@ -20,6 +20,20 @@ public enum FieldKind
     /// suggestion, not a restriction, because a provider can report more than it declares.
     /// </summary>
     Metric,
+
+    /// <summary>
+    /// One of the connections already configured, picked by name. Stores its id, which is
+    /// what everything downstream wants — but nobody should ever have to find an id to
+    /// type it in, which is exactly what this replaced.
+    /// Narrow the list with <see cref="FieldSpec.ProviderFilter"/>.
+    /// </summary>
+    Connection,
+
+    /// <summary>
+    /// One of the installed providers, picked by display name and stored by key. For the
+    /// handful of settings that are about a *kind* of thing rather than one instance.
+    /// </summary>
+    Provider,
 }
 
 /// <summary>
@@ -35,8 +49,15 @@ public sealed record FieldSpec(
     string? Help = null,
     bool Required = false,
     string? Default = null,
-    IReadOnlyList<SelectOption>? Options = null)
+    IReadOnlyList<SelectOption>? Options = null,
+    string? ProviderFilter = null)
 {
+    /// <summary>
+    /// For <see cref="FieldKind.Connection"/>: only offer connections of this provider.
+    /// A calendar page should not list the NAS among the calendars it could show.
+    /// </summary>
+    public string? ProviderFilter { get; init; } = ProviderFilter;
+
     /// <summary>Password fields are encrypted at rest and never rendered back to the browser.</summary>
     public bool IsSecret => Kind == FieldKind.Password;
 }

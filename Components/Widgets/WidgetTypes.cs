@@ -468,8 +468,8 @@ public sealed class AggregateWidget : IWidgetType
             new SelectOption("count", "How many report it"),
         ]),
 
-        new("provider", "Only this provider", FieldKind.Text, "qnap",
-            Help: "Optional. The provider key — qnap, sonarr, prometheus. Blank includes every provider."),
+        new("provider", "Only this provider", FieldKind.Provider,
+            Help: "Optional. Blank includes every provider that reports the metric."),
 
         new("match", "Only names containing", FieldKind.Text,
             Help: "Optional. A further filter on the connection's name."),
