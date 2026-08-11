@@ -378,9 +378,9 @@ docker compose restart labbytwo
 Settings → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
 
-## Eight that work
+## Nine that work
 
-[`examples/`](../examples) has eight plugins that build and run, covering every extension
+[`examples/`](../examples) has nine plugins that build and run, covering every extension
 point on this page. Start from whichever is closest to what you are writing:
 
 | If you are writing | Read |
@@ -393,6 +393,7 @@ point on this page. Start from whichever is closest to what you are writing:
 | Something that stores its own data | `ChoresPlugin` — its own table in the host's database |
 | An importer | `DashyImportPlugin` — a pure function, and using a library the host ships |
 | Something that serves files | `QnapFilesPlugin` — a tab kind and an endpoint, downloads with Range |
+| Anything with OAuth | `GoogleCalendarPlugin` — consent, refresh tokens, and a callback endpoint |
 
 ### The rules
 

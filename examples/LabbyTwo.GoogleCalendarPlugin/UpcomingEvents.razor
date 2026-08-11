@@ -1,0 +1,79 @@
+@inject GoogleCalendarProvider Google
+
+@* The dashboard-sized view of the same calendar: what is on, soonest first. No timer of
+   its own — the host's monitor already probes on a schedule, and this redraws with it. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">No calendar bound to this card.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta text-danger mb-0">@_error</p>
+}
+else if (_events is { Count: 0 })
+{
+    <p class="tile-meta mb-0">Nothing in the next @Days days.</p>
+}
+else if (_events is not null)
+{
+    <div class="d-grid gap-2">
+        @foreach (var day in _events.Take(Limit).GroupBy(e => DateOnly.FromDateTime(e.Start.LocalDateTime)))
+        {
+            <div>
+                <div class="tile-meta">@DayLabel(day.Key)</div>
+                @foreach (var item in day)
+                {
+                    <div class="d-flex justify-content-between gap-2 @(item.IsNow(_now) ? "fw-semibold" : null)">
+                        <span class="text-truncate">@item.Summary</span>
+                        <span class="tile-meta flex-none text-nowrap">@item.TimeLabel</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<CalEvent>? _events;
+    private string _error = "";
+    private DateTimeOffset _now = DateTimeOffset.Now;
+
+    private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 90);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 50);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Context.Connection is not { } calendar)
+            return;
+
+        _now = DateTimeOffset.Now;
+        try
+        {
+            var events = await Google.EventsAsync(calendar, _now, _now.AddDays(Days), fresh: false, CancellationToken.None);
+            // Something that started this morning and runs all week is still "on", so keep
+            // anything that has not finished rather than anything that has not started.
+            _events = [.. events.Where(e => e.End > _now)];
+            _error = "";
+        }
+        catch (Exception ex)
+        {
+            _events = null;
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private string DayLabel(DateOnly day)
+    {
+        var today = DateOnly.FromDateTime(_now.LocalDateTime);
+        return (day.DayNumber - today.DayNumber) switch
+        {
+            0 => "Today",
+            1 => "Tomorrow",
+            < 7 and > 0 => day.ToString("dddd"),
+            _ => day.ToString("ddd d MMM"),
+        };
+    }
+}

@@ -1,6 +1,6 @@
 # Example plugins
 
-Eight plugins that build, load and do something worth having. They are meant to be
+Nine plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
@@ -12,6 +12,7 @@ same way yours will.
 |---|---|---|
 | [GluetunPlugin](LabbyTwo.GluetunPlugin) | provider | Whether your VPN tunnel is up, which country it exits from, and the forwarded port. |
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
+| [GoogleCalendarPlugin](LabbyTwo.GoogleCalendarPlugin) | provider + widget + tab kind + endpoint | A Google calendar you can write to — month, week and list views, and adding events. |
 | [ChoresPlugin](LabbyTwo.ChoresPlugin) | tab kind + widget | Recurring household jobs with due dates. Stores its own data. |
 | [QnapFilesPlugin](LabbyTwo.QnapFilesPlugin) | tab kind + endpoint | Browse, download and upload files on a QNAP you already monitor. |
 | [PresencePlugin](LabbyTwo.PresencePlugin) | provider + widget | Who's home — pings a list of devices and charts each one. |
@@ -78,6 +79,39 @@ the awkward cases can be checked with a string and no network.
 
 > The feed URL is a secret — anyone with the link can read the calendar. It is stored with
 > the same encryption as any other password field.
+
+## Google Calendar — the one you can write to
+
+The ICS plugin above reads a published feed, which is enough for bin collections and
+fixture lists. It cannot ever write: a feed is a file Google publishes, so nothing typed
+into a dashboard travels back up it. This one uses the Calendar API, so an event added on
+the wall tablet is on everyone's phone a second later, and an event added on a phone is
+here immediately rather than whenever Google's feed cache catches up.
+
+The page is a real calendar — **month**, **week** and **list**, with add, edit and delete.
+Clicking an empty day starts an event on it; clicking an event opens it.
+
+The interesting part is connecting, because **Google will not redirect OAuth to a LAN
+address**: a redirect URI must be https or loopback, and `http://192.168.1.50:5150/…` is
+refused outright. So the plugin supports both shapes:
+
+- **No https?** Register `http://127.0.0.1:5150/oauth2callback` on the OAuth client. Google
+  bounces the browser to a dead address, you copy the whole thing out of the address bar,
+  and paste it into the page — it takes the `code=` out for you. One paste, once ever.
+- **Have https?** Register `https://your-host/ext/google-calendar/callback` instead, and
+  `GoogleCalendarEndpoints` completes the exchange itself. That is the endpoint extension
+  point doing the one job a component cannot: being somewhere another site can redirect to.
+
+Either way the refresh token is written back through `ConfigStore`, so it is encrypted at
+rest like any other password field.
+
+Two details worth stealing if you write anything against Google:
+
+- **`access_type=offline` and `prompt=consent` together**, or you get an access token with
+  no refresh token and the connection dies silently an hour later.
+- **All-day ends are exclusive.** A one-day event on the 4th is `start 2026-08-04, end
+  2026-08-05`. The conversion lives in one place here, because doing it at each call site
+  is how every all-day event ends up a day long in the wrong direction.
 
 ## Chores — a plugin that owns its data
 
