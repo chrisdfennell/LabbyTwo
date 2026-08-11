@@ -203,6 +203,14 @@ h1[tabindex]:focus { outline: none; }
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: var(--gap);
+
+    /* Backfill the holes. Without this, a row ending at 10 of 12 columns keeps its gap
+       for ever: plain auto-flow only ever moves forward, so the next card that would fit
+       has already been placed further down and nothing comes back for it. Dense lets a
+       later card take an earlier hole it fits in, which is what people expect from a
+       dashboard of independent cards — and it is only ever a hole a card fits, so a wide
+       card still cannot squeeze into a narrow gap. */
+    grid-auto-flow: dense;
 }
 
 .widget {
