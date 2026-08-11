@@ -182,6 +182,17 @@ public sealed class Db
         // Without this an existing connection would come back as "no provider named
         // overseerr is installed" and quietly stop being monitored.
         "UPDATE connections SET provider = 'seerr' WHERE provider = 'overseerr'",
+
+        // 5 — what a connection sits behind. When the parent is down, the child's alert is
+        // one fault reported twice, so it is suppressed.
+        "ALTER TABLE connections ADD COLUMN depends_on TEXT",
+
+        // 6 — "stop telling me about this until X", for the hour somebody spends restarting
+        // the thing on purpose.
+        "ALTER TABLE connections ADD COLUMN silenced_until TEXT",
+
+        // 7 — which channel a rule speaks through. Null keeps the old behaviour: everything.
+        "ALTER TABLE alert_rules ADD COLUMN channel_id TEXT",
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
@@ -194,7 +205,19 @@ public sealed class Db
         {
             var cmd = connection.CreateCommand();
             cmd.CommandText = Migrations[version];
-            await cmd.ExecuteNonQueryAsync(ct);
+
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 1
+                && ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+            {
+                // The column is already there, so this migration has effectively run —
+                // SQLite has no ADD COLUMN IF NOT EXISTS, and a database that got ahead of
+                // its own version stamp (restored from a backup, or a version rewound by
+                // hand) must not be stuck refusing to start for ever.
+            }
 
             // user_version cannot be parameterised, and the value is ours, not a user's.
             var stamp = connection.CreateCommand();

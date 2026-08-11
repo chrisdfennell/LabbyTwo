@@ -29,7 +29,7 @@ public sealed class AlertRuleStore(Db db)
             var cmd = connection.CreateCommand();
             cmd.CommandText = """
                 SELECT id, name, connection_id, metric, comparison, threshold, clear_threshold,
-                       for_minutes, enabled
+                       for_minutes, enabled, channel_id
                 FROM alert_rules ORDER BY name, metric
                 """;
             var list = new List<AlertRule>();
@@ -49,6 +49,7 @@ public sealed class AlertRuleStore(Db db)
                     ClearThreshold = reader.IsDBNull(6) ? null : reader.GetDouble(6),
                     ForMinutes = reader.GetInt32(7),
                     Enabled = reader.GetInt64(8) != 0,
+                    ChannelId = reader.IsDBNull(9) ? null : reader.GetString(9),
                 });
             }
             return _cache = list;
@@ -68,13 +69,15 @@ public sealed class AlertRuleStore(Db db)
         var cmd = connection.CreateCommand();
         cmd.CommandText = """
             INSERT INTO alert_rules
-                (id, name, connection_id, metric, comparison, threshold, clear_threshold, for_minutes, enabled)
-            VALUES ($id, $name, $conn, $metric, $comparison, $threshold, $clear, $for, $enabled)
+                (id, name, connection_id, metric, comparison, threshold, clear_threshold,
+                 for_minutes, enabled, channel_id)
+            VALUES ($id, $name, $conn, $metric, $comparison, $threshold, $clear, $for, $enabled, $channel)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, connection_id = excluded.connection_id,
                 metric = excluded.metric, comparison = excluded.comparison,
                 threshold = excluded.threshold, clear_threshold = excluded.clear_threshold,
-                for_minutes = excluded.for_minutes, enabled = excluded.enabled
+                for_minutes = excluded.for_minutes, enabled = excluded.enabled,
+                channel_id = excluded.channel_id
             """;
         cmd.Parameters.AddWithValue("$id", rule.Id);
         cmd.Parameters.AddWithValue("$name", rule.Name);
@@ -85,6 +88,7 @@ public sealed class AlertRuleStore(Db db)
         cmd.Parameters.AddWithValue("$clear", (object?)rule.ClearThreshold ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$for", rule.ForMinutes);
         cmd.Parameters.AddWithValue("$enabled", rule.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$channel", (object?)rule.ChannelId ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
         Invalidate();
     }

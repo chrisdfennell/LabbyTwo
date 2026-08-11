@@ -40,7 +40,12 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
         {
             await using var connection = await db.OpenAsync(ct);
             var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT id, provider, name, icon, enabled, sort, settings, alerts FROM connections ORDER BY sort, name";
+            cmd.CommandText =
+                """
+                SELECT id, provider, name, icon, enabled, sort, settings, alerts, depends_on, silenced_until
+                FROM connections
+                ORDER BY sort, name
+                """;
             var list = new List<Connection>();
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
@@ -55,6 +60,11 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
                     Sort = reader.GetInt32(5),
                     Settings = Decrypt(reader.GetString(1), SettingsBag.FromJson(reader.GetString(6))),
                     AlertsEnabled = reader.GetInt64(7) != 0,
+                    DependsOn = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    SilencedUntil = reader.IsDBNull(9)
+                        || !DateTimeOffset.TryParse(reader.GetString(9), out var silenced)
+                            ? null
+                            : silenced,
                 });
             }
             return _connections = list;
@@ -68,17 +78,33 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
     public async Task<Connection?> ConnectionAsync(string? id, CancellationToken ct = default)
         => id is null ? null : (await ConnectionsAsync(ct)).FirstOrDefault(c => c.Id == id);
 
+    /// <summary>
+    /// Holds this connection's alerts until a moment, or clears the hold with null. Its own
+    /// method rather than a field on the editor: silencing is something you do in a hurry,
+    /// from the list, while the thing is already making noise.
+    /// </summary>
+    public async Task SilenceAsync(string id, DateTimeOffset? until, CancellationToken ct = default)
+    {
+        if (await ConnectionAsync(id, ct) is not { } connection)
+            return;
+
+        await SaveConnectionAsync(connection with { SilencedUntil = until }, ct);
+    }
+
     public async Task SaveConnectionAsync(Connection value, CancellationToken ct = default)
     {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO connections (id, provider, name, icon, enabled, sort, settings, alerts)
-            VALUES ($id, $provider, $name, $icon, $enabled, $sort, $settings, $alerts)
+            INSERT INTO connections
+                (id, provider, name, icon, enabled, sort, settings, alerts, depends_on, silenced_until)
+            VALUES
+                ($id, $provider, $name, $icon, $enabled, $sort, $settings, $alerts, $depends, $silenced)
             ON CONFLICT(id) DO UPDATE SET
                 provider = excluded.provider, name = excluded.name, icon = excluded.icon,
                 enabled = excluded.enabled, sort = excluded.sort, settings = excluded.settings,
-                alerts = excluded.alerts
+                alerts = excluded.alerts, depends_on = excluded.depends_on,
+                silenced_until = excluded.silenced_until
             """;
         cmd.Parameters.AddWithValue("$id", value.Id);
         cmd.Parameters.AddWithValue("$provider", value.Provider);
@@ -88,6 +114,8 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
         cmd.Parameters.AddWithValue("$sort", value.Sort);
         cmd.Parameters.AddWithValue("$settings", Encrypt(value.Provider, value.Settings).ToJson());
         cmd.Parameters.AddWithValue("$alerts", value.AlertsEnabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$depends", (object?)value.DependsOn ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$silenced", (object?)value.SilencedUntil?.ToString("o") ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
         Invalidate();
     }

@@ -178,8 +178,27 @@ monitoring works.
 | **Unmanic** | Pending tasks and how many workers are busy. |
 | **Webhook** | *Alert channel.* Discord, Slack or ntfy — the payload shape is detected from the URL. |
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
+| **Healthchecks** | Scheduled jobs that have stopped checking in. Catches the cron that silently stopped, which nothing else here can see. |
 | **Email (SMTP)** | *Alert channel.* Any SMTP server. The one that needs nothing else installed. |
 | **IFTTT** | *Alert channel.* Fires an applet, so an alert can turn a light on rather than only say something. |
+
+### Alerts you can leave switched on
+
+Monitoring forty things makes a dashboard worse, not better, unless something decides what
+is worth saying. Four things do:
+
+- **Quiet hours** — between the times you set, only a service actually going down gets
+  through, or nothing at all. Recoveries are always held: being woken to be told something
+  came back is the purest kind of pointless alert.
+- **Silences** — "stop telling me about this for an hour", from the connections list or
+  `Ctrl+K`, for the hour you spend restarting the thing on purpose.
+- **Dependencies** — a connection can sit *behind* another. While the VPN gateway is down,
+  the ten containers behind it stay quiet, and the one message you get names the gateway.
+- **Routing** — each rule can name a channel, so the disk-space rule goes to email and the
+  front door goes to your phone.
+
+Held alerts are not queued for later; they are simply not sent. The Alerts page still shows
+the real state, so a rule that fired overnight is red in the morning.
 
 Every connection is probed on a timer (30s by default). Whatever numbers a provider
 returns are recorded to SQLite, which is why **any** provider gets uptime tracking and
@@ -750,6 +769,11 @@ that and you have copied the entire installation. Nothing else is worth backing 
   their own credentials.
 - **Export with secrets** — the same file including credentials in plain text, for your
   own backup only.
+
+It also takes one by itself. A **nightly backup** writes a dated copy into `data/backups`
+and keeps a fortnight of them, using SQLite's own backup API so a copy taken mid-write is
+still a valid database. Somebody had to remember to click the button before, which meant
+the answer to "I deleted the wrong tab" was a shrug.
 
 Import is an upsert by id, so re-importing the same file changes nothing and importing
 someone's dashboard adds to your setup rather than replacing it. Anything it cannot place —

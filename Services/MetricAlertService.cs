@@ -169,6 +169,14 @@ public sealed class MetricAlertService(
             level == AlertLevel.Down ? "fired" : "cleared",
             connection.Name, rule.Metric, value);
 
-        await alerts.BroadcastAsync(alert, ct);
+        // The rule still changes state above — it is only the notification that is held —
+        // so the Alerts page keeps showing the truth while a silence is in force.
+        if (await alerts.SuppressedAsync(connection, level == AlertLevel.Up, ct) is { } reason)
+        {
+            log.LogInformation("Alert for {Connection} not sent: {Reason}", connection.Name, reason);
+            return;
+        }
+
+        await alerts.BroadcastAsync(alert, ct, rule.ChannelId);
     }
 }

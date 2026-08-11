@@ -1,0 +1,131 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+
+@* One number across several connections. Every other card binds to exactly one thing, so
+   "free space on both NASes" or "download rate across all three *arr boxes" could not be
+   said at all — only shown three times and added up by eye. *@
+
+@if (_count == 0)
+{
+    <p class="tile-meta mb-0">
+        Nothing matched@(Provider.Length > 0 ? $" \"{Provider}\"" : "") yet.
+    </p>
+}
+else
+{
+    <div class="metric-value">
+        @_value.ToString($"F{Decimals}")
+        <span class="metric-unit">@Unit</span>
+    </div>
+    <div class="tile-meta">@Caption</div>
+
+    @if (ShowParts && _parts.Count > 0)
+    {
+        <div class="mt-2 d-grid gap-1">
+            @foreach (var part in _parts.Take(6))
+            {
+                <div class="d-flex justify-content-between gap-2 small">
+                    <span class="text-truncate">@part.Name</span>
+                    <span class="tile-meta flex-none">@Spec.Format(part.Value)</span>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Part(string Name, double Value);
+
+    private double _value;
+    private int _count;
+    private List<Part> _parts = [];
+    private MetricSpec _spec = MetricSpec.Fallback("value");
+
+    private string Provider => Context.Widget.Settings.Get("provider").Trim();
+    private string Metric => Context.Widget.Settings.Get("metric", "latency_ms").Trim();
+    private string Match => Context.Widget.Settings.Get("match").Trim();
+    private string How => Context.Widget.Settings.Get("aggregate", "sum");
+    private bool ShowParts => Context.Widget.Settings.GetBool("show_parts", true);
+
+    private MetricSpec Spec => _spec;
+    private int Decimals => Math.Clamp(Context.Widget.Settings.GetInt("decimals", _spec.Decimals), 0, 4);
+    private string Unit => Context.Widget.Settings.Get("suffix", How == "count" ? "" : _spec.Unit);
+
+    private string Caption =>
+        Context.Widget.Settings.Get("caption") is { Length: > 0 } set
+            ? set
+            : $"{Word} of {_count} connection{(_count == 1 ? "" : "s")}";
+
+    private string Word => How switch
+    {
+        "avg" => "Average",
+        "min" => "Lowest",
+        "max" => "Highest",
+        "count" => "Count",
+        _ => "Total",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var connections = (await Config.ConnectionsAsync())
+            .Where(c => c.Enabled)
+            .Where(c => Provider.Length == 0 || c.Provider.Equals(Provider, StringComparison.OrdinalIgnoreCase))
+            .Where(c => Match.Length == 0 || c.Name.Contains(Match, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var parts = new List<Part>();
+
+        foreach (var connection in connections)
+        {
+            // Live probe first, then the last recorded sample — so a restart does not empty
+            // the card until the next sweep, the same rule every other card follows.
+            double? value = Health.State(connection.Id)?.Metrics.TryGetValue(Metric, out var live) == true
+                ? live
+                : null;
+
+            if (value is null)
+            {
+                var stored = await History.LatestAsync(connection.Id, TimeSpan.FromHours(6));
+                if (stored.TryGetValue(Metric, out var recorded))
+                    value = recorded;
+            }
+
+            if (value is { } number)
+                parts.Add(new Part(connection.Name, number));
+        }
+
+        _parts = [.. parts.OrderByDescending(part => part.Value)];
+        _count = parts.Count;
+        _spec = connections.Count > 0 ? Registry.Metric(connections[0], Metric) : MetricSpec.Fallback(Metric);
+
+        _value = _count == 0 ? 0 : How switch
+        {
+            "avg" => parts.Average(part => part.Value),
+            "min" => parts.Min(part => part.Value),
+            "max" => parts.Max(part => part.Value),
+            "count" => parts.Count,
+            _ => parts.Sum(part => part.Value),
+        };
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

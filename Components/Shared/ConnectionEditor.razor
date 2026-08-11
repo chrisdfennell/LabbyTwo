@@ -1,6 +1,7 @@
 @inject ConfigStore Config
 @inject HealthMonitor Health
 @inject AlertService Alerts
+@inject Registry Registry
 
 <Modal Title="@($"{Provider.Icon} {Provider.DisplayName}")" OnClose="OnClose">
     <ChildContent>
@@ -42,6 +43,25 @@
                 Send alerts when this goes down
                 <span class="form-text d-block">Off still records uptime — it just stops the notifications for this one thing.</span>
             </label>
+        </div>
+
+        @* One fault, one message. Everything behind a VPN container goes quiet together,
+           and eleven notifications for one outage is how people mute the whole app. *@
+        <div class="mb-3">
+            <label class="form-label" for="conn-depends">Sits behind</label>
+            <select id="conn-depends" class="form-select" value="@(_dependsOn ?? "")"
+                    @onchange="args => _dependsOn = args.Value?.ToString() is { Length: > 0 } id ? id : null">
+                <option value="">Nothing — alert on its own</option>
+                @foreach (var other in _candidates)
+                {
+                    <option value="@other.Id">@other.Icon @other.Name</option>
+                }
+            </select>
+            <div class="form-text">
+                Optional. While the thing it sits behind is down, this one's alerts are held —
+                a VPN gateway, or the NAS its container runs on. The parent still alerts, and that
+                is the message that names the cause.
+            </div>
         </div>
     }
 
@@ -88,6 +108,8 @@
     private string _icon = "";
     private bool _enabled = true;
     private bool _alerts = true;
+    private string? _dependsOn;
+    private IReadOnlyList<Connection> _candidates = [];
     private SettingsBag _settings = new();
     private ProbeResult? _result;
     private bool _testing;
@@ -100,7 +122,19 @@
         _icon = Draft.Icon;
         _enabled = Draft.Enabled;
         _alerts = Draft.AlertsEnabled;
+        _dependsOn = Draft.DependsOn;
         _settings = Draft.Settings.Clone();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Itself excluded, and alert channels too: a webhook is not something a service can
+        // be behind, and offering it only invites a dependency that never clears.
+        _candidates =
+        [
+            .. (await Config.ConnectionsAsync())
+                .Where(c => c.Id != Draft.Id && Registry.Provider(c.Provider) is not IAlertChannel),
+        ];
     }
 
     private Connection Current => Draft with
@@ -109,6 +143,7 @@
         Icon = _icon,
         Enabled = _enabled,
         AlertsEnabled = _alerts,
+        DependsOn = _dependsOn,
         Settings = _settings,
     };
 

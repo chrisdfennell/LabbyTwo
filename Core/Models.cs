@@ -20,6 +20,18 @@ public sealed record Connection
 
     public int Sort { get; init; }
     public SettingsBag Settings { get; init; } = new();
+
+    /// <summary>
+    /// The connection this one sits behind — a VPN gateway, the NAS the container runs on.
+    /// When the parent is down this one's alerts are suppressed, because ten services
+    /// behind one tunnel going quiet is one fault, not eleven.
+    /// </summary>
+    public string? DependsOn { get; init; }
+
+    /// <summary>Alerts held until this passes. Set from the connections list while working on something.</summary>
+    public DateTimeOffset? SilencedUntil { get; init; }
+
+    public bool IsSilenced(DateTimeOffset now) => SilencedUntil is { } until && until > now;
 }
 
 /// <summary>

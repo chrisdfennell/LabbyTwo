@@ -33,6 +33,50 @@
     </div>
 }
 
+@* Quiet hours sit above the rules on purpose: with forty things able to alert, when they
+   are allowed to speak matters more than what any one of them says. *@
+<div class="widget mb-3">
+    <div class="widget-head">
+        <h2 class="widget-title">Quiet hours</h2>
+        <span class="tile-meta">@_policy.Describe()</span>
+    </div>
+    <div class="widget-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="quiet-from">From</label>
+                <input id="quiet-from" type="time" class="form-control"
+                       value="@(_policy.QuietHoursOn ? _policy.QuietFrom.ToString("HH\\:mm") : "")"
+                       @onchange="e => SaveQuietAsync(e.Value?.ToString(), null, null)" />
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="quiet-to">Until</label>
+                <input id="quiet-to" type="time" class="form-control"
+                       value="@(_policy.QuietHoursOn ? _policy.QuietTo.ToString("HH\\:mm") : "")"
+                       @onchange="e => SaveQuietAsync(null, e.Value?.ToString(), null)" />
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label" for="quiet-mode">While quiet</label>
+                <select id="quiet-mode" class="form-select" value="@_policy.QuietMode"
+                        @onchange="e => SaveQuietAsync(null, null, e.Value?.ToString())">
+                    <option value="@AlertPolicy.DownOnly">Only send when something goes down</option>
+                    <option value="@AlertPolicy.Nothing">Send nothing at all</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-2">
+                <button class="btn btn-outline-secondary w-100" @onclick="ClearQuietAsync"
+                        disabled="@(!_policy.QuietHoursOn)">Turn off</button>
+            </div>
+        </div>
+
+        <p class="tile-meta mb-0 mt-2">
+            Held alerts are not queued for later — they are simply not sent. The state on this page
+            still moves, so a rule that fired overnight is red here in the morning even though nothing
+            reached your phone. Recoveries are always held while quiet: being woken to be told
+            something came back is the purest kind of pointless alert.
+        </p>
+    </div>
+</div>
+
 @if (_suggestions.Count > 0)
 {
     <div class="widget mb-3">
@@ -225,6 +269,22 @@ else
             </div>
 
             <div class="mb-3">
+                <label class="form-label" for="rule-channel">Send through</label>
+                <select id="rule-channel" class="form-select" value="@(draft.ChannelId ?? "")"
+                        @onchange="e => _draft = draft with { ChannelId = e.Value?.ToString() is { Length: > 0 } id ? id : null }">
+                    <option value="">Every channel</option>
+                    @foreach (var channel in _channels)
+                    {
+                        <option value="@channel.Id">@channel.Icon @channel.Name</option>
+                    }
+                </select>
+                <div class="form-text">
+                    Pick one to keep a noisy rule out of the others — the disk-space one to email,
+                    the front door to your phone.
+                </div>
+            </div>
+
+            <div class="mb-3">
                 <label class="form-label" for="rule-name">Name</label>
                 <input id="rule-name" class="form-control" value="@draft.Name" placeholder="@Preview(draft)"
                        @onchange="e => _draft = draft with { Name = e.Value?.ToString() ?? string.Empty }" />
@@ -262,7 +322,9 @@ else
     private IReadOnlyList<AlertRule> _rules = [];
     private IReadOnlyList<Connection> _connections = [];
     private IReadOnlyList<SelectOption> _metricOptions = [];
+    private IReadOnlyList<Connection> _channels = [];
     private int _channelCount;
+    private AlertPolicy _policy = AlertPolicy.Default;
     private List<Offer> _suggestions = [];
     private string _units = Appearance.Default.UnitSystem;
     private bool _adding;
@@ -281,11 +343,41 @@ else
         await LoadAsync();
     }
 
+    /// <summary>
+    /// Each control saves the one thing it changed, so a half-typed time cannot wipe the
+    /// other end of the window. A blank on either side turns quiet hours off, which is what
+    /// clearing the box looks like it should do.
+    /// </summary>
+    private async Task SaveQuietAsync(string? from, string? to, string? mode)
+    {
+        var next = _policy with
+        {
+            QuietFrom = from is null ? _policy.QuietFrom : Parse(from),
+            QuietTo = to is null ? _policy.QuietTo : Parse(to),
+            QuietMode = mode ?? _policy.QuietMode,
+        };
+
+        await AppSettings.SaveAsync(new Dictionary<string, string>
+        {
+            [AlertPolicy.FromKey] = next.QuietFrom.ToString("HH\\:mm"),
+            [AlertPolicy.ToKey] = next.QuietTo.ToString("HH\\:mm"),
+            [AlertPolicy.ModeKey] = next.QuietMode,
+        });
+
+        _policy = next;
+
+        static TimeOnly Parse(string value) => TimeOnly.TryParse(value, out var parsed) ? parsed : default;
+    }
+
+    private async Task ClearQuietAsync() => await SaveQuietAsync("", "", null);
+
     private async Task LoadAsync()
     {
         _rules = await Rules.AllAsync();
         _connections = [.. (await Config.ConnectionsAsync()).Where(c => Registry.Provider(c.Provider)?.IsMonitored != false)];
-        _channelCount = (await Alerts.ChannelsAsync()).Count;
+        _channels = [.. (await Alerts.ChannelsAsync()).Select(pair => pair.Connection)];
+        _channelCount = _channels.Count;
+        _policy = AlertPolicy.From(await AppSettings.AllAsync());
         _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
         LoadSuggestions();
         await LoadMetricsAsync(_draft?.ConnectionId);

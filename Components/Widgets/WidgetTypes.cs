@@ -442,6 +442,47 @@ public sealed class MetricsTableWidget : IWidgetType
     public Type Component => typeof(MetricsTableCard);
 }
 
+public sealed class AggregateWidget : IWidgetType
+{
+    public string Type => "aggregate";
+    public string DisplayName => "Total across connections";
+    public string Icon => "➕";
+    public string Description =>
+        "One number summed, averaged or maxed across several connections — free space on both NASes, " +
+        "download rate across every *arr.";
+
+    // Bound to no single connection on purpose: it gathers its own, which is the point.
+    public int DefaultWidth => 3;
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("metric", "Metric", FieldKind.Text, "disk_free_gb", Required: true,
+            Help: "The metric name as the providers report it. Everything reporting it is included."),
+
+        new("aggregate", "Combine by", FieldKind.Select, Default: "sum", Options:
+        [
+            new SelectOption("sum", "Total"),
+            new SelectOption("avg", "Average"),
+            new SelectOption("max", "Highest"),
+            new SelectOption("min", "Lowest"),
+            new SelectOption("count", "How many report it"),
+        ]),
+
+        new("provider", "Only this provider", FieldKind.Text, "qnap",
+            Help: "Optional. The provider key — qnap, sonarr, prometheus. Blank includes every provider."),
+
+        new("match", "Only names containing", FieldKind.Text,
+            Help: "Optional. A further filter on the connection's name."),
+
+        new("caption", "Caption", FieldKind.Text, Help: "Blank describes what it did — \"Total of 3 connections\"."),
+        new("suffix", "Unit override", FieldKind.Text),
+        new("decimals", "Decimal places", FieldKind.Number),
+        new("show_parts", "List what went into it", FieldKind.Bool, Default: "true"),
+    ];
+
+    public Type Component => typeof(AggregateCard);
+}
+
 public sealed class CameraWidget : IWidgetType
 {
     public string Type => "camera";

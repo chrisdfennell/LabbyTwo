@@ -92,6 +92,20 @@ else
             return;
         }
 
+        // What the monitor's last probe saw. Asking QTS again from here meant three round
+        // trips per card where one would do, and the extra two are the ones that timed out
+        // on a busy NAS and reported "Operation canceled" on a machine that was perfectly
+        // fine. The card now redraws from the probe, which it already waits for anyway.
+        if (Qnap.Latest(Context.Connection) is { } latest)
+        {
+            _info = latest.Info;
+            _volumes = latest.Volumes;
+            _error = null;
+            return;
+        }
+
+        // Nothing cached yet — a page opened within seconds of a restart. Fetch once, and
+        // say something useful if that fails rather than showing the raw exception.
         try
         {
             _info = await Qnap.SystemInfoAsync(Context.Connection, CancellationToken.None);
@@ -100,7 +114,7 @@ else
         }
         catch (Exception ex)
         {
-            _error = ex.GetBaseException().Message;
+            _error = ProbeError.Describe(ex, Context.Connection.Settings.Get("host"));
         }
     }
 

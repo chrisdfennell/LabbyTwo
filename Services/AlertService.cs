@@ -12,6 +12,7 @@ public sealed class AlertService(
     ConfigStore config,
     Registry registry,
     HealthMonitor monitor,
+    AppSettingsStore settings,
     ILogger<AlertService> log) : IHostedService
 {
     public Task StartAsync(CancellationToken ct)
@@ -31,6 +32,12 @@ public sealed class AlertService(
         if (!change.Connection.AlertsEnabled)
             return;
 
+        if (await SuppressedAsync(change.Connection, change.IsUp, CancellationToken.None) is { } reason)
+        {
+            log.LogInformation("Alert for {Connection} not sent: {Reason}", change.Connection.Name, reason);
+            return;
+        }
+
         var alert = change.IsUp
             ? new Alert(AlertLevel.Up, $"{change.Connection.Name} is back",
                 change.PreviousDuration is { } down
@@ -41,10 +48,63 @@ public sealed class AlertService(
         await BroadcastAsync(alert, CancellationToken.None);
     }
 
-    /// <summary>Sends to every enabled alert channel. Used by status changes and the digest alike.</summary>
-    public async Task<int> BroadcastAsync(Alert alert, CancellationToken ct)
+    /// <summary>
+    /// Why this connection should not be interrupting anyone right now, or null if it may.
+    /// One place, because status changes and threshold rules must agree — a rule that
+    /// alerted while a connection was silenced would make silencing worthless.
+    /// </summary>
+    public async Task<string?> SuppressedAsync(Connection connection, bool isRecovery, CancellationToken ct)
     {
+        var now = DateTimeOffset.Now;
+
+        if (connection.IsSilenced(now))
+            return $"silenced until {connection.SilencedUntil:HH:mm}";
+
+        // Ten services behind one VPN going quiet is one fault, not eleven. The parent's
+        // own alert still goes out, and it is the one that names the actual cause.
+        if (connection.DependsOn is { Length: > 0 } parentId
+            && await config.ConnectionAsync(parentId, ct) is { } parent
+            && monitor.State(parent.Id) is { IsUp: false })
+        {
+            return $"{parent.Name}, which it depends on, is down";
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether the hour allows this alert. Separate from suppression: it is about when, not what.</summary>
+    public async Task<bool> AllowedNowAsync(Alert alert, CancellationToken ct)
+    {
+        var policy = AlertPolicy.From(await settings.AllAsync(ct));
+        return policy.Allows(alert, DateTimeOffset.Now);
+    }
+
+    /// <summary>
+    /// Sends to every enabled alert channel, or to one when a rule names it. Used by status
+    /// changes and threshold rules alike.
+    /// </summary>
+    public async Task<int> BroadcastAsync(Alert alert, CancellationToken ct, string? channelId = null)
+    {
+        if (!await AllowedNowAsync(alert, ct))
+        {
+            log.LogInformation("Quiet hours: not sending \"{Title}\"", alert.Title);
+            return 0;
+        }
+
         var channels = await ChannelsAsync(ct);
+
+        if (channelId is { Length: > 0 })
+        {
+            // A rule pointing at a channel that has since been deleted should shout through
+            // whatever is left rather than going quiet — losing an alert is worse than
+            // sending it somewhere unexpected.
+            var chosen = channels.Where(pair => pair.Connection.Id == channelId).ToList();
+            if (chosen.Count > 0)
+                channels = chosen;
+            else
+                log.LogWarning("A rule names a channel that no longer exists; sending to all instead.");
+        }
+
         if (channels.Count == 0)
             return 0;
 

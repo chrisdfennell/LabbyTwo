@@ -49,6 +49,16 @@ else
                                 {
                                     <span class="badge text-bg-secondary">paused</span>
                                 }
+                                @if (connection.IsSilenced(_now))
+                                {
+                                    <span class="badge text-bg-warning" title="@($"Alerts held until {connection.SilencedUntil:HH:mm}")">
+                                        silenced until @connection.SilencedUntil?.ToString("HH:mm")
+                                    </span>
+                                }
+                                @if (connection.DependsOn is { Length: > 0 } parent && Name(parent) is { Length: > 0 } behind)
+                                {
+                                    <span class="tile-meta">behind @behind</span>
+                                }
                             </div>
                         </td>
                         <td class="tile-meta">@ProviderName(connection)</td>
@@ -77,6 +87,36 @@ else
                                 @if (!IsAlertChannel(connection))
                                 {
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(connection)">Test</button>
+
+                                    @* Silencing is something you do in a hurry, while the thing
+                                       is already making noise — so it lives on the list, not
+                                       three clicks into an editor. *@
+                                    @if (connection.IsSilenced(_now))
+                                    {
+                                        <button class="btn btn-sm btn-outline-warning" title="Alerts are held — click to resume"
+                                                @onclick="() => SilenceAsync(connection, null)">Unsilence</button>
+                                    }
+                                    else
+                                    {
+                                        <div class="dropdown">
+                                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                                                    @onclick="() => _silencing = _silencing == connection.Id ? string.Empty : connection.Id">
+                                                Silence
+                                            </button>
+                                            @if (_silencing == connection.Id)
+                                            {
+                                                <div class="dropdown-menu show" style="position:absolute; z-index:5">
+                                                    @foreach (var (label, span) in SilenceOptions)
+                                                    {
+                                                        <button class="dropdown-item" type="button"
+                                                                @onclick="() => SilenceAsync(connection, DateTimeOffset.Now + span)">
+                                                            @label
+                                                        </button>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
                                 }
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(connection)">Edit</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = connection">✕</button>
@@ -123,6 +163,31 @@ else
 
 @code {
     private IReadOnlyList<Connection> _connections = [];
+    private DateTimeOffset _now = DateTimeOffset.Now;
+    private string _silencing = "";
+
+    /// <summary>
+    /// Deliberately short. A silence you forget to lift is worse than no silence at all,
+    /// so there is no "forever" here — the longest is one night's work.
+    /// </summary>
+    private static readonly (string Label, TimeSpan Span)[] SilenceOptions =
+    [
+        ("For 30 minutes", TimeSpan.FromMinutes(30)),
+        ("For an hour", TimeSpan.FromHours(1)),
+        ("For 4 hours", TimeSpan.FromHours(4)),
+        ("Until tomorrow", TimeSpan.FromHours(12)),
+    ];
+
+    private async Task SilenceAsync(Connection connection, DateTimeOffset? until)
+    {
+        _silencing = "";
+        await Config.SilenceAsync(connection.Id, until);
+        _now = DateTimeOffset.Now;
+        await LoadAsync();
+    }
+
+    private string Name(string id) =>
+        _connections.FirstOrDefault(c => c.Id == id)?.Name ?? "";
     private bool _picking;
     private Connection? _draft;
     private IConnectionProvider? _draftProvider;

@@ -80,6 +80,12 @@ public sealed record AlertRule
 
     public bool Enabled { get; init; } = true;
 
+    /// <summary>
+    /// Which alert channel this rule speaks through. Null means all of them, which is what
+    /// every rule did before routing existed — so an upgrade changes nothing until asked.
+    /// </summary>
+    public string? ChannelId { get; init; }
+
     public double ClearsAt => ClearThreshold ?? Threshold;
 
     public bool IsBreaching(double value) =>
