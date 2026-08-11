@@ -612,6 +612,26 @@ h1[tabindex]:focus { outline: none; }
 .uptime-day.is-bad  { background: var(--down); }
 .uptime-day.is-unknown { background: transparent; border: 1px solid var(--edge); }
 
+/* ---------- forecast ----------
+   A week in a row. auto-fit rather than a fixed seven columns, because the same card can
+   be asked for three days or ten and lives in a tile whose width the user chooses; the
+   minimum keeps a day from squeezing below the width of "Wed". */
+.forecast-days {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(3.25rem, 1fr));
+    gap: .25rem;
+    border-top: 1px solid var(--edge);
+    padding-top: .6rem;
+}
+.forecast-day {
+    text-align: center;
+    padding: .35rem .15rem;
+    border-radius: 6px;
+    line-height: 1.35;
+}
+.forecast-day.is-today { background: var(--panel-2); }
+.forecast-icon { font-size: 1.15rem; }
+
 .bare-layout, .login-wrap {
     min-height: 100vh;
     display: flex;

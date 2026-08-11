@@ -182,7 +182,7 @@ monitoring works.
 | **Cloudflare Tunnel** | Whether your tunnels are healthy and how many connectors each has — the outage nobody on the LAN can see. |
 | **OPNsense** | Gateway packet loss and latency, WAN addresses, memory. The router is never "down"; it just starts dropping things. |
 | **Shelly** | Power draw, energy used and temperature, straight off the plug. No cloud, no broker. Gen1 and Gen2 both. |
-| **Weather forecast** | Today's high, low and chance of rain from Open-Meteo — no API key, and the half a weather station cannot tell you. |
+| **Weather forecast** | Up to sixteen days of highs, lows and chance of rain from Open-Meteo — no API key, and the half a weather station cannot tell you. |
 | **SABnzbd** | Queue size, speed, what is left, free disk, and whether it is paused. |
 | **Transmission** | Torrents active and transfer rates. Handles the session-id handshake for you. |
 | **Tdarr** | Transcode and health-check queues, workers busy, space saved. Falling behind looks exactly like working. |

@@ -6,13 +6,16 @@
 
 @* What is about to happen, next to the station that says what is happening. The two
    belong together: observations tell you it is 4°C now, and only a forecast tells you it
-   is going below zero tonight — which is the half you can act on. *@
+   is going below zero tonight — which is the half you can act on.
+
+   Today gets the detail because today is what you are deciding about; the rest of the
+   week is a row you scan, because that is all anybody does with day six. *@
 
 @if (Context.Connection is null)
 {
     <p class="tile-meta mb-0">Not bound to a forecast connection.</p>
 }
-else if (_readings.Count == 0)
+else if (_readings.Count == 0 && _days.Count == 0)
 {
     <p class="tile-meta mb-0">No forecast yet.</p>
 }
@@ -33,11 +36,11 @@ else
                 <div>@Show("rain_chance_percent")</div>
             </div>
         }
-        @if (_readings.ContainsKey("rain_today_mm"))
+        @if (_readings.ContainsKey("rain_today_in"))
         {
             <div>
                 <div class="tile-meta">Rain expected</div>
-                <div>@Show("rain_today_mm")</div>
+                <div>@Show("rain_today_in")</div>
             </div>
         }
         @if (_readings.ContainsKey("temp_now_c"))
@@ -47,21 +50,48 @@ else
                 <div>@Show("temp_now_c")</div>
             </div>
         }
-        @if (_readings.ContainsKey("wind_kph"))
+        @if (_readings.ContainsKey("wind_mph"))
         {
             <div>
                 <div class="tile-meta">Wind</div>
-                <div>@Show("wind_kph")</div>
+                <div>@Show("wind_mph")</div>
             </div>
         }
     </div>
+
+    @if (Days.Count > 1)
+    {
+        <div class="forecast-days mt-3">
+            @foreach (var day in Days)
+            {
+                <div class="forecast-day @(day.Date == _today ? "is-today" : "")"
+                     title="@Tooltip(day)">
+                    <div class="tile-meta">@day.Label(_today)</div>
+                    <div class="forecast-icon">@day.Icon</div>
+                    <div><strong>@Degrees(day.High)</strong> <span class="tile-meta">@Degrees(day.Low)</span></div>
+                    <div class="tile-meta">@(day.RainChance > 0 ? $"{day.RainChance:0}%" : "—")</div>
+                </div>
+            }
+        </div>
+    }
 }
 
 @code {
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
     private Dictionary<string, double> _readings = [];
+    private IReadOnlyList<ForecastProvider.Day> _days = [];
+    private DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
     private string _units = Appearance.Default.UnitSystem;
+
+    /// <summary>
+    /// How many days the connection fetches is the connection's business; this only trims
+    /// them for a tile too narrow to hold the lot. Blank — the default — shows all of them.
+    /// </summary>
+    private IReadOnlyList<ForecastProvider.Day> Days =>
+        Context.Widget.Settings.GetInt("days", 0) is var wanted && wanted > 0
+            ? [.. _days.Take(wanted)]
+            : _days;
 
     protected override async Task OnInitializedAsync()
     {
@@ -91,6 +121,15 @@ else
 
         readings.Remove("latency_ms");
         _readings = readings;
+
+        // The days are not metrics — a metric is one number, and this is a week — so they
+        // live on the provider and are read from there. They are therefore gone after a
+        // restart until the first sweep, which is why today's row is still driven by history.
+        _days = Registry.Provider(connection.Provider) is ForecastProvider forecast
+            ? forecast.Days(connection)
+            : [];
+
+        _today = DateOnly.FromDateTime(DateTime.Now);
     }
 
     /// <summary>
@@ -101,6 +140,17 @@ else
         _readings.TryGetValue(metric, out var value)
             ? Units.Format(Registry.Metric(Context.Connection, metric), value, _units)
             : "—";
+
+    /// <summary>Whole degrees, unlabelled: seven columns have no room to say °F seven times.</summary>
+    private string Degrees(double celsius) =>
+        Units.Display(celsius, "°C", _units).Value.ToString("F0") + "°";
+
+    private string Tooltip(ForecastProvider.Day day)
+    {
+        var (rain, unit) = Units.Display(day.RainInches, " in", _units);
+        return $"{day.Date:dddd d MMM} — {Degrees(day.High)} / {Degrees(day.Low)}, " +
+               $"{day.RainChance:0}% chance, {rain:0.##}{unit} expected";
+    }
 
     private void OnUpdated() => _ = InvokeAsync(async () =>
     {

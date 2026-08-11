@@ -447,9 +447,19 @@ public sealed class ForecastWidget : IWidgetType
     public string Type => "forecast";
     public string DisplayName => "Forecast";
     public string Icon => "🌦️";
-    public string Description => "Today's high and low, rain expected and the chance of it — what the station cannot tell you.";
+    public string Description => "Today in detail and the days after it in a row — what the station cannot tell you.";
     public IReadOnlyList<string> ProviderTypes => ["forecast"];
-    public int DefaultWidth => 3;
+
+    // Wider than it was: a row of days needs the room, and a four-column card still sits
+    // two-abreast on a desktop dashboard.
+    public int DefaultWidth => 4;
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("days", "Days to show", FieldKind.Number,
+            Help: "Blank shows every day the connection fetches. Set a smaller number for a narrow tile."),
+    ];
+
     public Type Component => typeof(ForecastCard);
 }
 
