@@ -21,11 +21,23 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
     /// <summary>Raised after any mutation. Components subscribe to refresh themselves.</summary>
     public event Action? Changed;
 
-    private void Invalidate()
+    /// <summary>
+    /// Drops the caches that a change could have affected and tells everyone.
+    ///
+    /// Which ones matters more than it looks. Rebuilding the connection cache decrypts
+    /// every stored password, so dropping it because a widget moved made dragging a card
+    /// on a busy dashboard take tens of seconds: the reorder writes every card on the tab,
+    /// and each write was invalidating everything and prompting a full reload.
+    /// </summary>
+    private void Invalidate(bool connections = true, bool tabs = true, bool widgets = true)
     {
-        _connections = null;
-        _tabs = null;
-        _widgets = null;
+        if (connections)
+            _connections = null;
+        if (tabs)
+            _tabs = null;
+        if (widgets)
+            _widgets = null;
+
         Changed?.Invoke();
     }
 
@@ -273,6 +285,17 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
 
     public async Task SaveWidgetAsync(Widget value, CancellationToken ct = default)
     {
+        await WriteWidgetAsync(value, ct);
+        Invalidate(connections: false, tabs: false);
+    }
+
+    /// <summary>
+    /// The write on its own. Reordering saves every card on the tab, and doing that
+    /// through <see cref="SaveWidgetAsync"/> meant one cache drop, one event and one
+    /// re-render *per card* — which is what made a drag feel broken rather than slow.
+    /// </summary>
+    private async Task WriteWidgetAsync(Widget value, CancellationToken ct)
+    {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
         cmd.CommandText = """
@@ -292,7 +315,6 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
         cmd.Parameters.AddWithValue("$width", value.Width);
         cmd.Parameters.AddWithValue("$settings", value.Settings.ToJson());
         await cmd.ExecuteNonQueryAsync(ct);
-        Invalidate();
     }
 
     public async Task DeleteWidgetAsync(string id, CancellationToken ct = default)
@@ -302,7 +324,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
         cmd.CommandText = "DELETE FROM widgets WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", id);
         await cmd.ExecuteNonQueryAsync(ct);
-        Invalidate();
+        Invalidate(connections: false, tabs: false);
     }
 
     public async Task ReorderWidgetAsync(string id, int direction, CancellationToken ct = default)
@@ -316,8 +338,16 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
         if (target < 0 || target >= siblings.Count)
             return;
         (siblings[index], siblings[target]) = (siblings[target], siblings[index]);
+
+        // Written as one batch and announced once: the whole tab is renumbered here, and
+        // saying so twelve times made the grid redraw twelve times before settling.
         for (var i = 0; i < siblings.Count; i++)
-            await SaveWidgetAsync(siblings[i] with { Sort = i }, ct);
+        {
+            if (siblings[i].Sort != i)
+                await WriteWidgetAsync(siblings[i] with { Sort = i }, ct);
+        }
+
+        Invalidate(connections: false, tabs: false);
     }
 
     /// <summary>
@@ -342,8 +372,10 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
         for (var i = 0; i < siblings.Count; i++)
         {
             if (siblings[i].Sort != i)
-                await SaveWidgetAsync(siblings[i] with { Sort = i }, ct);
+                await WriteWidgetAsync(siblings[i] with { Sort = i }, ct);
         }
+
+        Invalidate(connections: false, tabs: false);
     }
 
     /// <summary>Next sort value for a tab, so a new widget lands at the end.</summary>
