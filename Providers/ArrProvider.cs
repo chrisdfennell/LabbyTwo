@@ -89,6 +89,87 @@ public abstract class ArrProviderBase(IHttpClientFactory httpFactory) : IConnect
         return items;
     }
 
+    /// <param name="Title">The series or film. Sonarr sends the show; the episode is separate.</param>
+    /// <param name="Episode">"S02E05 · Title" for Sonarr, empty for Radarr.</param>
+    public sealed record Upcoming(string Title, string Episode, DateTimeOffset When, bool HaveIt);
+
+    /// <summary>
+    /// What is due in the next few days. Every *arr publishes a calendar and nothing here
+    /// read it, which is odd given "what's on this week" is the question a media dashboard
+    /// exists to answer.
+    /// </summary>
+    public async Task<IReadOnlyList<Upcoming>> CalendarAsync(Connection connection, int days, CancellationToken ct)
+    {
+        var from = DateTimeOffset.Now.Date;
+        var to = from.AddDays(Math.Clamp(days, 1, 60));
+
+        using var doc = await GetAsync(connection,
+            $"calendar?start={from:yyyy-MM-dd}&end={to:yyyy-MM-dd}&includeSeries=true&unmonitored=false", ct);
+
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var items = new List<Upcoming>();
+
+        foreach (var record in doc.RootElement.EnumerateArray())
+        {
+            // Sonarr nests the show under "series" and dates it "airDateUtc"; Radarr puts
+            // the film's own title at the top level and dates it by release. One shape each,
+            // read tolerantly, so this method serves both.
+            var series = record.TryGetProperty("series", out var show)
+                && show.TryGetProperty("title", out var showTitle)
+                    ? showTitle.GetString() ?? ""
+                    : "";
+
+            var own = record.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+            var title = series.Length > 0 ? series : own;
+            if (title.Length == 0)
+                continue;
+
+            var episode = "";
+            if (series.Length > 0)
+            {
+                var season = Number(record, "seasonNumber");
+                var number = Number(record, "episodeNumber");
+                episode = season is not null && number is not null
+                    ? $"S{season:00}E{number:00}{(own.Length > 0 ? $" · {own}" : "")}"
+                    : own;
+            }
+
+            if (When(record) is not { } when)
+                continue;
+
+            items.Add(new Upcoming(
+                title,
+                episode,
+                when,
+                record.TryGetProperty("hasFile", out var has) && has.ValueKind == JsonValueKind.True));
+        }
+
+        return [.. items.OrderBy(item => item.When)];
+    }
+
+    private static double? Number(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
+            ? value.GetDouble()
+            : null;
+
+    /// <summary>The date field differs per app, and some records carry more than one.</summary>
+    private static DateTimeOffset? When(JsonElement record)
+    {
+        foreach (var name in (string[])["airDateUtc", "airDate", "digitalRelease", "physicalRelease", "inCinemas"])
+        {
+            if (record.TryGetProperty(name, out var value)
+                && value.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(value.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var parsed))
+                return parsed.ToLocalTime();
+        }
+
+        return null;
+    }
+
     private async Task<JsonDocument> GetAsync(Connection connection, string path, CancellationToken ct)
     {
         var http = httpFactory.CreateClient(ProviderHttp.ClientName);

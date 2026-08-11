@@ -1,0 +1,109 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject Registry Registry
+
+@* What is on this week, from the Sonarr and Radarr connections already configured. Their
+   calendar endpoint was sitting there unused, and "what's on" is the question a media
+   dashboard exists to answer — the download queue answers a different, more anxious one. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta text-danger mb-0">@_error</p>
+}
+else if (_items.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing due in the next @Days days.</p>
+}
+else
+{
+    <div class="d-grid gap-2">
+        @foreach (var day in _items.Take(Limit).GroupBy(item => DateOnly.FromDateTime(item.When.LocalDateTime)))
+        {
+            <div>
+                <div class="tile-meta">@DayLabel(day.Key)</div>
+                @foreach (var item in day)
+                {
+                    <div class="d-flex justify-content-between gap-2">
+                        <span class="text-truncate">
+                            @(item.HaveIt ? "✓" : "·") @item.Title
+                            @if (item.Episode is { Length: > 0 })
+                            {
+                                <span class="tile-meta">@item.Episode</span>
+                            }
+                        </span>
+                        <span class="tile-meta flex-none text-nowrap">@item.When.ToString("HH:mm")</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    @if (_items.Count > Limit)
+    {
+        <div class="tile-meta mt-1">+@(_items.Count - Limit) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<ArrProviderBase.Upcoming> _items = [];
+    private string _error = "";
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 60);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 50);
+    private bool HideHave => Context.Widget.Settings.GetBool("hide_have", false);
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is not { } connection)
+            return;
+
+        if (Registry.Provider(connection.Provider) is not ArrProviderBase arr)
+        {
+            _error = "This card needs a Sonarr or Radarr connection.";
+            return;
+        }
+
+        try
+        {
+            var upcoming = await arr.CalendarAsync(connection, Days, CancellationToken.None);
+
+            // Already downloaded is still "on" — it is what you would watch tonight — so
+            // hiding it is a choice rather than the default.
+            _items = HideHave ? [.. upcoming.Where(item => !item.HaveIt)] : upcoming;
+            _error = "";
+        }
+        catch (Exception ex)
+        {
+            _items = [];
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private string DayLabel(DateOnly day) => (day.DayNumber - _today.DayNumber) switch
+    {
+        0 => "Today",
+        1 => "Tomorrow",
+        < 7 and > 0 => day.ToString("dddd"),
+        _ => day.ToString("ddd d MMM"),
+    };
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

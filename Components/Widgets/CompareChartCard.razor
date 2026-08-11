@@ -1,0 +1,150 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+
+@* The same metric from several connections on one axis. The chart card draws one
+   connection and can compare two of *its* metrics; this answers the other question — how
+   do the three NASes compare, is one of the four hosts hotter than the rest — which
+   previously meant three cards and doing the comparison by eye. *@
+
+@if (_series.Count == 0)
+{
+    <p class="tile-meta mb-0">
+        Nothing has recorded @Metric yet@(Provider.Length > 0 ? $" for {Provider}" : "").
+    </p>
+}
+else
+{
+    <div class="d-flex flex-wrap gap-2 mb-1">
+        @foreach (var series in _series)
+        {
+            <span class="series-key" style="color: @series.Colour">
+                @series.Name <span class="tile-meta">@Spec.Format(series.Last)</span>
+            </span>
+        }
+    </div>
+
+    <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%; height:@(Height)px"
+         role="img" aria-label="@($"{Spec.Label} across {_series.Count} connections over {Hours} hours")">
+        @foreach (var series in _series)
+        {
+            <polyline points="@series.Path" fill="none" stroke="@series.Colour" stroke-width="1.5"
+                      vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+        }
+    </svg>
+
+    <div class="d-flex justify-content-between tile-meta">
+        <span>@Hours h ago</span>
+        <span>@Spec.Format(_low) – @Spec.Format(_high)</span>
+        <span>now</span>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Series(string Name, string Path, double Last, string Colour);
+
+    private List<Series> _series = [];
+    private double _low, _high;
+
+    private string Metric => Context.Widget.Settings.Get("metric", "cpu_percent").Trim();
+    private string Provider => Context.Widget.Settings.Get("provider").Trim();
+    private string Match => Context.Widget.Settings.Get("match").Trim();
+    private int Hours => Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
+    private int Height => Math.Clamp(Context.Widget.Settings.GetInt("height", 120), 60, 500);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 6), 1, 12);
+
+    private MetricSpec _spec = MetricSpec.Fallback("value");
+    private MetricSpec Spec => _spec;
+
+    /// <summary>
+    /// Distinct hues rather than the accent colour, since telling the lines apart is the
+    /// entire point of the card. Ordered so the first few stay far apart on the wheel.
+    /// </summary>
+    private static readonly string[] Palette =
+    [
+        "var(--accent)", "#ffb84d", "#35d07f", "#c792ea", "#ff8a65", "#4dd0e1",
+        "#f06292", "#aed581", "#9575cd", "#4db6ac", "#ffd54f", "#90a4ae",
+    ];
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var window = TimeSpan.FromHours(Hours);
+
+        var connections = (await Config.ConnectionsAsync())
+            .Where(c => c.Enabled)
+            .Where(c => Provider.Length == 0 || c.Provider.Equals(Provider, StringComparison.OrdinalIgnoreCase))
+            .Where(c => Match.Length == 0 || c.Name.Contains(Match, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var loaded = new List<(Connection Connection, IReadOnlyList<HistoryStore.Sample> Samples)>();
+        foreach (var connection in connections)
+        {
+            var samples = await History.SamplesAsync(connection.Id, Metric, window);
+            if (samples.Count >= 2)
+                loaded.Add((connection, samples));
+        }
+
+        if (loaded.Count == 0)
+        {
+            _series = [];
+            return;
+        }
+
+        _spec = Registry.Metric(loaded[0].Connection, Metric);
+
+        // Busiest first, so the line you are looking for is the one at the top of the key.
+        loaded = [.. loaded.OrderByDescending(entry => entry.Samples[^1].Value).Take(Limit)];
+
+        // One scale for every line, taken from all of them — the whole point is comparison,
+        // and per-series scaling would make two very different machines look identical.
+        var values = loaded.SelectMany(entry => entry.Samples.Select(s => s.Value)).ToList();
+        _low = values.Min();
+        _high = values.Max();
+
+        var range = _high - _low;
+        var scale = range > 0 ? range : 1;
+        var offset = range > 0 ? _low : _low - 0.5;
+
+        _series =
+        [
+            .. loaded.Select((entry, index) => new Series(
+                entry.Connection.Name,
+                Plot(entry.Samples, offset, scale),
+                entry.Samples[^1].Value,
+                Palette[index % Palette.Length])),
+        ];
+    }
+
+    /// <summary>
+    /// Each series is drawn across the full width regardless of how many samples it has —
+    /// a connection added yesterday has fewer points than one running all week, and
+    /// stretching it is more honest than starting its line halfway across.
+    /// </summary>
+    private static string Plot(IReadOnlyList<HistoryStore.Sample> samples, double offset, double scale)
+    {
+        var step = 100d / Math.Max(1, samples.Count - 1);
+        return string.Join(' ', samples.Select((sample, index) =>
+        {
+            var x = index * step;
+            var y = 38 - (sample.Value - offset) / scale * 36;
+            return $"{x.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}," +
+                   $"{y.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}";
+        }));
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

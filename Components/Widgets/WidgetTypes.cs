@@ -442,6 +442,51 @@ public sealed class MetricsTableWidget : IWidgetType
     public Type Component => typeof(MetricsTableCard);
 }
 
+public sealed class CompareChartWidget : IWidgetType
+{
+    public string Type => "compare-chart";
+    public string DisplayName => "Chart across connections";
+    public string Icon => "📊";
+    public string Description =>
+        "One metric from several connections on one axis — CPU on every host, temperature on both NASes.";
+
+    // Gathers its own connections, so it binds to none.
+    public int DefaultWidth => 6;
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("metric", "Metric", FieldKind.Text, "cpu_percent", Required: true,
+            Help: "Every connection recording this metric is drawn, on one shared scale."),
+        new("provider", "Only this provider", FieldKind.Provider,
+            Help: "Optional. Blank includes every provider that reports it."),
+        new("match", "Only names containing", FieldKind.Text),
+        new("hours", "Window (hours)", FieldKind.Number, Default: "24"),
+        new("limit", "Most lines", FieldKind.Number, Default: "6",
+            Help: "The busiest are kept, since a dozen lines is a smudge rather than a chart."),
+        new("height", "Height (px)", FieldKind.Number, Default: "120"),
+    ];
+
+    public Type Component => typeof(CompareChartCard);
+}
+
+public sealed class UpcomingMediaWidget : IWidgetType
+{
+    public string Type => "upcoming-media";
+    public string DisplayName => "What's on this week";
+    public string Icon => "🍿";
+    public string Description => "Upcoming episodes or films from Sonarr and Radarr, grouped by day.";
+    public IReadOnlyList<string> ProviderTypes => ["sonarr", "radarr"];
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("days", "Days ahead", FieldKind.Number, Default: "7"),
+        new("limit", "Most to list", FieldKind.Number, Default: "8"),
+        new("hide_have", "Hide what you already have", FieldKind.Bool, Default: "false",
+            Help: "Off by default — something already downloaded is still what is on tonight."),
+    ];
+    public Type Component => typeof(UpcomingMediaCard);
+}
+
 public sealed class UptimeWidget : IWidgetType
 {
     public string Type => "uptime";
