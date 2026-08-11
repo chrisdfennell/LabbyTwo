@@ -12,6 +12,11 @@ public sealed class RenewalStore(Db db)
 {
     /// <param name="EveryDays">0 for a one-off. 365 for a domain, 30 for a monthly bill.</param>
     /// <param name="Cost">Free text on purpose — "£12.99/yr", "$120", "" — because it is for reading, not summing.</param>
+    /// <param name="TlsHost">
+    /// Optional. When set, a background job reads the certificate this host presents and
+    /// keeps <paramref name="Due"/> in step with it, so the date is observed rather than
+    /// remembered.
+    /// </param>
     public sealed record Renewal(
         string Id,
         string Title,
@@ -20,8 +25,18 @@ public sealed class RenewalStore(Db db)
         int EveryDays,
         string Cost = "",
         string Url = "",
-        string Notes = "")
+        string Notes = "",
+        string TlsHost = "",
+        string Issuer = "",
+        DateTimeOffset? CheckedAt = null,
+        string CheckError = "")
     {
+        public bool IsWatched => TlsHost.Length > 0;
+
+        /// <summary>True when the last check failed, which is worth showing on the row.</summary>
+        public bool CheckFailed => CheckError.Length > 0;
+
+
         public bool Recurs => EveryDays > 0;
 
         public int DaysLeft(DateOnly today) => Due.DayNumber - today.DayNumber;
@@ -84,14 +99,53 @@ public sealed class RenewalStore(Db db)
                     every_days INTEGER NOT NULL DEFAULT 0,
                     cost       TEXT NOT NULL DEFAULT '',
                     url        TEXT NOT NULL DEFAULT '',
-                    notes      TEXT NOT NULL DEFAULT ''
+                    notes      TEXT NOT NULL DEFAULT '',
+                    tls_host    TEXT NOT NULL DEFAULT '',
+                    issuer      TEXT NOT NULL DEFAULT '',
+                    checked_at  TEXT,
+                    check_error TEXT NOT NULL DEFAULT ''
                 )
                 """;
             await create.ExecuteNonQueryAsync(ct);
+
+            await MigrateAsync(connection, ct);
             _ready = true;
         }
 
         return connection;
+    }
+
+    /// <summary>
+    /// The certificate columns arrived after the first release, so a table created by that
+    /// version is caught up rather than recreated — dropping it to gain a column would
+    /// throw away the list. Same reasoning as the chores plugin next door.
+    /// </summary>
+    private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
+    {
+        var columns = new List<string>();
+        await using (var existing = connection.CreateCommand())
+        {
+            existing.CommandText = "SELECT name FROM pragma_table_info('plugin_renewals')";
+            await using var reader = await existing.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                columns.Add(reader.GetString(0));
+        }
+
+        foreach (var (name, definition) in ((string Name, string Definition)[])
+        [
+            ("tls_host", "TEXT NOT NULL DEFAULT ''"),
+            ("issuer", "TEXT NOT NULL DEFAULT ''"),
+            ("checked_at", "TEXT"),
+            ("check_error", "TEXT NOT NULL DEFAULT ''"),
+        ])
+        {
+            if (columns.Contains(name))
+                continue;
+
+            await using var add = connection.CreateCommand();
+            add.CommandText = $"ALTER TABLE plugin_renewals ADD COLUMN {name} {definition}";
+            await add.ExecuteNonQueryAsync(ct);
+        }
     }
 
     public async Task<IReadOnlyList<Renewal>> AllAsync(CancellationToken ct = default)
@@ -99,7 +153,12 @@ public sealed class RenewalStore(Db db)
         await using var connection = await OpenAsync(ct);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT id, title, category, due, every_days, cost, url, notes FROM plugin_renewals ORDER BY due, title";
+            """
+            SELECT id, title, category, due, every_days, cost, url, notes,
+                   tls_host, issuer, checked_at, check_error
+            FROM plugin_renewals
+            ORDER BY due, title
+            """;
 
         var renewals = new List<Renewal>();
         await using var reader = await command.ExecuteReaderAsync(ct);
@@ -113,11 +172,26 @@ public sealed class RenewalStore(Db db)
                 reader.GetInt32(4),
                 reader.GetString(5),
                 reader.GetString(6),
-                reader.GetString(7)));
+                reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                Moment(reader, 10),
+                reader.GetString(11)));
         }
 
         return renewals;
     }
+
+    /// <summary>
+    /// A timestamp column that might be null, might be empty, and might be nonsense — a
+    /// row hand-edited in a SQLite browser, or written by a version that stored it
+    /// differently. Reading the list is how every page here starts, so one bad cell must
+    /// not be able to take the whole thing down.
+    /// </summary>
+    private static DateTimeOffset? Moment(SqliteDataReader reader, int ordinal) =>
+        !reader.IsDBNull(ordinal) && DateTimeOffset.TryParse(reader.GetString(ordinal), out var parsed)
+            ? parsed
+            : null;
 
     public async Task<IReadOnlyList<string>> CategoriesAsync(CancellationToken ct = default) =>
         [.. (await AllAsync(ct))
@@ -135,8 +209,8 @@ public sealed class RenewalStore(Db db)
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO plugin_renewals (id, title, category, due, every_days, cost, url, notes)
-            VALUES ($id, $title, $category, $due, $every, $cost, $url, $notes)
+            INSERT INTO plugin_renewals (id, title, category, due, every_days, cost, url, notes, tls_host)
+            VALUES ($id, $title, $category, $due, $every, $cost, $url, $notes, $tls)
             """;
         Bind(command, renewal with { Id = Guid.NewGuid().ToString("n")[..12] });
         await command.ExecuteNonQueryAsync(ct);
@@ -153,7 +227,7 @@ public sealed class RenewalStore(Db db)
             """
             UPDATE plugin_renewals
             SET title = $title, category = $category, due = $due, every_days = $every,
-                cost = $cost, url = $url, notes = $notes
+                cost = $cost, url = $url, notes = $notes, tls_host = $tls
             WHERE id = $id
             """;
         Bind(command, renewal);
@@ -195,5 +269,69 @@ public sealed class RenewalStore(Db db)
         command.Parameters.AddWithValue("$cost", renewal.Cost.Trim());
         command.Parameters.AddWithValue("$url", renewal.Url.Trim());
         command.Parameters.AddWithValue("$notes", renewal.Notes.Trim());
+        command.Parameters.AddWithValue("$tls", renewal.TlsHost.Trim());
+    }
+
+    /// <summary>
+    /// Records what a certificate check found. The due date is taken from the certificate
+    /// itself, which is the whole point: whatever renewed it — Caddy, acme.sh, the NAS's
+    /// own web UI — the row follows along without anybody ticking anything off.
+    /// </summary>
+    public async Task RecordCheckAsync(
+        string id, DateOnly? due, string issuer, string error, CancellationToken ct = default)
+    {
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+
+        // A failed check leaves the last known date alone. Blanking it would turn "I cannot
+        // reach the host" into "this expires today", which is a different and much louder
+        // thing to say.
+        command.CommandText = due is null
+            ? """
+              UPDATE plugin_renewals
+              SET checked_at = $at, check_error = $error
+              WHERE id = $id
+              """
+            : """
+              UPDATE plugin_renewals
+              SET due = $due, issuer = $issuer, checked_at = $at, check_error = $error
+              WHERE id = $id
+              """;
+
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$at", DateTimeOffset.Now.ToString("o"));
+        command.Parameters.AddWithValue("$error", error);
+        if (due is { } date)
+        {
+            command.Parameters.AddWithValue("$due", date.ToString("yyyy-MM-dd"));
+            command.Parameters.AddWithValue("$issuer", issuer);
+        }
+
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// Checks one row's host and records the result. Shared by the background job and the
+    /// Check button, so what the button proves is exactly what runs on the timer.
+    /// </summary>
+    public async Task CheckAsync(Renewal renewal, CancellationToken ct = default)
+    {
+        if (!renewal.IsWatched)
+            return;
+
+        try
+        {
+            var certificate = await TlsCertificate.ReadAsync(renewal.TlsHost, ct);
+            await RecordCheckAsync(
+                renewal.Id,
+                DateOnly.FromDateTime(certificate.NotAfter.LocalDateTime),
+                certificate.Issuer,
+                "",
+                ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await RecordCheckAsync(renewal.Id, null, "", ex.GetBaseException().Message, ct);
+        }
     }
 }

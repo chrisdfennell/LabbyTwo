@@ -14,7 +14,7 @@ same way yours will.
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
 | [GoogleCalendarPlugin](LabbyTwo.GoogleCalendarPlugin) | provider + widget + tab kind + endpoint | A Google calendar you can write to — month, week and list views, and adding events. |
 | [ChoresPlugin](LabbyTwo.ChoresPlugin) | tab kind + widget | Recurring household jobs with due dates. Stores its own data. |
-| [RenewalsPlugin](LabbyTwo.RenewalsPlugin) | tab kind + widget + provider | Domains, certificates, subscriptions — expiry dates that can raise an alert. |
+| [RenewalsPlugin](LabbyTwo.RenewalsPlugin) | tab kind + widget + provider + job | Domains, certificates, subscriptions — expiry dates that can raise an alert, and certificates that watch themselves. |
 | [DropPlugin](LabbyTwo.DropPlugin) | tab kind + endpoint + job | A shared shelf for files and text between devices, cleared on a timer. |
 | [QnapFilesPlugin](LabbyTwo.QnapFilesPlugin) | tab kind + endpoint | Browse, download and upload files on a QNAP you already monitor. |
 | [PresencePlugin](LabbyTwo.PresencePlugin) | provider + widget | Who's home — pings a list of devices and charts each one. |
@@ -143,6 +143,30 @@ connection and the whole existing machinery applies: charts, thresholds, and a m
 through whichever channel you set up. That pairing is the pattern for any plugin holding
 data that is worth being told about, and without it a renewals page is a thing you
 remember to check after the certificate has already expired.
+
+### Certificates watch themselves
+
+A renewal can carry a **TLS host**. A background job then opens a connection to it four
+times a day, reads the certificate being presented, and writes its expiry onto the row —
+so the date is observed rather than remembered, and a certificate renewed by Caddy or
+acme.sh moves the row by itself with nothing to tick off.
+
+LabbyTwo deliberately does not *renew* anything. That means ACME: an account key, a
+challenge answered on port 80 or through your DNS provider's API, a fresh private key —
+and then installing the result wherever the certificate is actually served, which a
+dashboard cannot do. Holding that pile of credentials to produce a certificate it could
+not install is a poor trade, and Caddy, Traefik and acme.sh already do it properly, next
+to the thing being served. Pair this with an alert rule on `days_until_next` and a
+webhook, and LabbyTwo asks while the thing that owns the certificate acts.
+
+What it does catch is the failure the ACME clients cannot: **renewed but never reloaded**.
+The file on disk is new, the process is still serving the old one. Checking from the
+outside is the only way that is visible, and it is the most common way "automatic renewal"
+silently isn't.
+
+A failed check leaves the last known date alone rather than blanking it — "I cannot reach
+the host" and "this expires today" are different things to say, and only one of them
+should turn a row red.
 
 One deliberate difference from Chores: renewing rolls the date forward from **when it was
 due**, not from today. A domain paid three days late still renews on its anniversary, and

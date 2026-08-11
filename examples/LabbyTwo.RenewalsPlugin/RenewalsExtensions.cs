@@ -1,8 +1,67 @@
 using System.Diagnostics;
 using LabbyTwo.Core;
 using LabbyTwo.Storage;
+// A plugin is a plain class library, so the host's implicit usings have to be named here.
+using Microsoft.Extensions.Logging;
 
 namespace LabbyTwo.RenewalsPlugin;
+
+/// <summary>
+/// Keeps watched rows in step with the certificates themselves.
+///
+/// LabbyTwo deliberately does not renew anything. Renewing means ACME — an account key, a
+/// challenge answered on port 80 or through your DNS provider's API, a fresh private key —
+/// and then installing the result wherever the certificate is actually served, which a
+/// dashboard cannot do. Holding that pile of credentials to produce a certificate it could
+/// not install would be a poor trade. Caddy, Traefik and acme.sh already do this properly,
+/// next to the thing being served.
+///
+/// What a dashboard is well placed to do is notice. This reads the live certificate and
+/// writes its expiry onto the row, which catches the failure the ACME clients do not: a
+/// renewal that happened on disk and was never reloaded, where the file is new and the
+/// process is still serving the old one.
+/// </summary>
+public sealed class CertificateWatchJob(Db db, ILogger<CertificateWatchJob> log) : IBackgroundJob
+{
+    public string Name => "renewals-tls-check";
+
+    /// <summary>
+    /// Four times a day. Certificates move rarely, so this is not about catching the
+    /// change quickly — it is about the row never being more than a few hours stale, while
+    /// staying nowhere near often enough to look like traffic to anyone's web server.
+    /// </summary>
+    public TimeSpan Interval => TimeSpan.FromHours(6);
+
+    public bool RunAtStartup => true;
+
+    public async Task RunAsync(CancellationToken ct)
+    {
+        var store = new RenewalStore(db);
+        var watched = (await store.AllAsync(ct)).Where(renewal => renewal.IsWatched).ToList();
+
+        if (watched.Count == 0)
+            return;
+
+        var failures = 0;
+
+        // One at a time. Half a dozen TLS handshakes is nothing, and doing them in
+        // sequence keeps a slow or dead host from being indistinguishable from the rest.
+        foreach (var renewal in watched)
+        {
+            ct.ThrowIfCancellationRequested();
+            await store.CheckAsync(renewal, ct);
+        }
+
+        foreach (var renewal in (await store.AllAsync(ct)).Where(r => r.IsWatched && r.CheckFailed))
+        {
+            failures++;
+            log.LogWarning("Certificate check for {Title} ({Host}) failed: {Error}",
+                renewal.Title, renewal.TlsHost, renewal.CheckError);
+        }
+
+        log.LogInformation("Checked {Count} certificate(s), {Failures} unreachable", watched.Count, failures);
+    }
+}
 
 /// <summary>
 /// The page: everything that expires, soonest first.

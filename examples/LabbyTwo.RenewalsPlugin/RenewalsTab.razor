@@ -80,15 +80,44 @@ else
                             <td class="tile-meta">@renewal.Category</td>
                             <td class="@DueClass(renewal)">
                                 @renewal.DueLabel(_today)
-                                @if (renewal.Recurs)
+                                @if (renewal.IsWatched)
+                                {
+                                    @* A watched row's date is observed, so say where it came
+                                       from — otherwise an unexpected date looks like a typo. *@
+                                    <div class="tile-meta">
+                                        @if (renewal.CheckFailed)
+                                        {
+                                            <span class="text-danger">@renewal.CheckError</span>
+                                        }
+                                        else
+                                        {
+                                            <text>from @(renewal.Issuer.Length > 0 ? renewal.Issuer : "the certificate")</text>
+                                            @if (renewal.CheckedAt is { } at)
+                                            {
+                                                <text>, checked @Ago.Since(at)</text>
+                                            }
+                                        }
+                                    </div>
+                                }
+                                else if (renewal.Recurs)
                                 {
                                     <div class="tile-meta">every @Every(renewal.EveryDays)</div>
                                 }
                             </td>
                             <td class="tile-meta">@renewal.Cost</td>
                             <td class="text-end">
-                                <button class="btn btn-sm btn-outline-secondary" title="Renewed — move to the next date"
-                                        @onclick="() => RenewAsync(renewal)">Renewed</button>
+                                @if (renewal.IsWatched)
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" title="Read the certificate now"
+                                            @onclick="() => CheckAsync(renewal)" disabled="@_busy">
+                                        @(_checking == renewal.Id ? "Checking…" : "Check")
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" title="Renewed — move to the next date"
+                                            @onclick="() => RenewAsync(renewal)">Renewed</button>
+                                }
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(renewal)">Edit</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _deleting = renewal">✕</button>
                             </td>
@@ -137,6 +166,19 @@ else
                 </div>
 
                 <div class="col-12">
+                    <label class="form-label" for="renewal-tls">Watch this TLS host</label>
+                    <input id="renewal-tls" class="form-control" placeholder="osint.fennellfamily.org"
+                           @bind="_formTls" />
+                    <div class="form-text">
+                        Optional, and only for certificates. A host — with <code>:port</code> if it is not
+                        443 — whose certificate is read four times a day; the due date then comes from the
+                        certificate itself rather than from you. It also catches the one thing an ACME
+                        client cannot: a renewal that never got reloaded, where the file is new and the
+                        server is still serving the old one.
+                    </div>
+                </div>
+
+                <div class="col-12">
                     <label class="form-label" for="renewal-url">Link</label>
                     <input id="renewal-url" class="form-control" placeholder="https://registrar.example.com"
                            @bind="_formUrl" />
@@ -177,9 +219,11 @@ else
     private RenewalStore.Renewal? _editing;
     private RenewalStore.Renewal? _deleting;
     private bool _isNew;
-    private string _formTitle = "", _formCategory = "", _formCost = "", _formUrl = "", _formNotes = "";
+    private string _formTitle = "", _formCategory = "", _formCost = "", _formUrl = "", _formNotes = "", _formTls = "";
     private DateOnly _formDue = DateOnly.FromDateTime(DateTime.Today);
     private int _formEvery = 365;
+    private string _checking = "";
+    private bool _busy;
 
     private int WarnWithin => Math.Clamp(Tab.Settings.GetInt("warn_within", 30), 1, 365);
 
@@ -226,6 +270,7 @@ else
         _formCost = "";
         _formUrl = "";
         _formNotes = "";
+        _formTls = "";
         _formDue = _today.AddDays(365);
         _formEvery = 365;
     }
@@ -239,6 +284,7 @@ else
         _formCost = renewal.Cost;
         _formUrl = renewal.Url;
         _formNotes = renewal.Notes;
+        _formTls = renewal.TlsHost;
         _formDue = renewal.Due;
         _formEvery = renewal.EveryDays;
     }
@@ -263,10 +309,38 @@ else
             Cost = _formCost,
             Url = _formUrl,
             Notes = _formNotes,
+            TlsHost = _formTls,
         };
 
         _editing = null;
         await GuardAsync(() => _isNew ? _store.AddAsync(value) : _store.UpdateAsync(value));
+
+        // A host that was just added should prove itself immediately rather than waiting up
+        // to six hours to say it cannot be reached.
+        if (value.IsWatched && (await _store.AllAsync())
+                .FirstOrDefault(r => r.Title == value.Title.Trim() && r.TlsHost == value.TlsHost.Trim()) is { } saved)
+        {
+            await CheckAsync(saved);
+        }
+    }
+
+    private async Task CheckAsync(RenewalStore.Renewal renewal)
+    {
+        _checking = renewal.Id;
+        _busy = true;
+        StateHasChanged();
+
+        try
+        {
+            await _store.CheckAsync(renewal);
+        }
+        finally
+        {
+            _checking = "";
+            _busy = false;
+        }
+
+        await LoadAsync();
     }
 
     private async Task RenewAsync(RenewalStore.Renewal renewal) =>
