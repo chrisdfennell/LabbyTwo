@@ -152,7 +152,14 @@ monitoring works.
 | **qBittorrent** | Transfer rates and how many torrents are downloading or seeding. |
 | **UPS (NUT)** | Battery charge, runtime left, load, input voltage, and whether it is on battery. |
 | **Docker** | How many containers are running, and a live list. Needs the socket mounted. |
+| **Prometheus** | Any number you can write a query for. One connection covers every exporter you already scrape, so node_exporter, cAdvisor and blackbox all arrive without an integration each. |
 | **Uptime Kuma** | Monitors up, down and paused, each one by name, and the nearest certificate expiry. Reads Kuma's `/metrics`. |
+| **Proxmox Backup Server** | Datastore usage, snapshot count, and hours since the newest backup — the number that catches a job which stopped running. |
+| **Duplicati** | Backup jobs, when each last ran, and whether the last run failed. |
+| **Scrutiny** | SMART health per disk: how many are failing, the hottest, and the oldest. |
+| **Frigate NVR** | Cameras alive, detection rate, detector speed, recordings disk. A camera at zero frames is a silent failure nothing else notices. |
+| **Tailscale** | Devices on the tailnet, how many are online, and the nearest node-key expiry. |
+| **Synology NAS** | DSM system info, temperature, CPU and memory load, and volume usage. |
 | **Speedtest Tracker** | Latest download, upload, ping and jitter — plus how old that result is, which is what catches a scheduler that has stopped. |
 | **Immich** | Photos and videos in the library, what it takes on disk, and how full that disk is. |
 | **Nextcloud** | Users, files, shares, free space and load, from the Server info app. |
@@ -171,6 +178,8 @@ monitoring works.
 | **Unmanic** | Pending tasks and how many workers are busy. |
 | **Webhook** | *Alert channel.* Discord, Slack or ntfy — the payload shape is detected from the URL. |
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
+| **Email (SMTP)** | *Alert channel.* Any SMTP server. The one that needs nothing else installed. |
+| **IFTTT** | *Alert channel.* Fires an applet, so an alert can turn a light on rather than only say something. |
 
 Every connection is probed on a timer (30s by default). Whatever numbers a provider
 returns are recorded to SQLite, which is why **any** provider gets uptime tracking and

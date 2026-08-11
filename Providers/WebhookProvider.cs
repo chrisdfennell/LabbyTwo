@@ -113,6 +113,79 @@ public sealed class WebhookProvider(IHttpClientFactory httpFactory) : IAlertChan
     };
 }
 
+/// <summary>
+/// IFTTT's Webhooks service. Not a notification so much as a trigger: an applet on the
+/// other end can flash a lamp, add a row to a spreadsheet, or call you. It is the cheapest
+/// way to make an alert do something physical, which is a different job from telling
+/// somebody about it.
+/// </summary>
+public sealed class IftttProvider(IHttpClientFactory httpFactory) : IAlertChannel
+{
+    public string Type => "ifttt";
+    public string DisplayName => "IFTTT";
+    public string Icon => "🪄";
+    public string Category => "Alerts";
+    public string Description => "Fires an IFTTT applet, so an alert can turn a light on rather than just say something.";
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("event", "Event name", FieldKind.Text, "labbytwo_alert", Required: true,
+            Help: "The event your applet listens for, from the \"Receive a web request\" trigger."),
+
+        new("key", "Webhooks key", FieldKind.Password, Required: true,
+            Help: "ifttt.com/maker_webhooks → Documentation. The key in that URL is the whole credential, " +
+                  "so treat it as a password."),
+
+        new("json", "Send as JSON", FieldKind.Bool, Default: "true",
+            Help: "On sends value1/value2/value3, which is what applets read. Off posts nothing but the " +
+                  "trigger, for an applet that only needs to know it happened."),
+    ];
+
+    public Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
+        => Task.FromResult(
+            connection.Settings.Get("key").Length > 0 && connection.Settings.Get("event").Length > 0
+                ? ProbeResult.Up(TimeSpan.Zero, $"Ready — event \"{connection.Settings.Get("event")}\"")
+                : ProbeResult.Down(TimeSpan.Zero, "Needs an event name and a Webhooks key."));
+
+    public async Task SendAsync(Connection channel, Alert alert, CancellationToken ct)
+    {
+        var name = channel.Settings.Get("event");
+        var key = channel.Settings.Get("key");
+
+        if (name.Length == 0 || key.Length == 0)
+            throw new InvalidOperationException("This channel has no event name or key.");
+
+        var http = httpFactory.CreateClient(ProviderHttp.ClientName);
+        var url = $"https://maker.ifttt.com/trigger/{Uri.EscapeDataString(name)}/with/key/{Uri.EscapeDataString(key)}";
+
+        // value1/2/3 are the only ingredients an applet can read, and they are positional,
+        // so the order here is the contract: title, body, and the level to branch on.
+        HttpContent? content = channel.Settings.GetBool("json", true)
+            ? new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    value1 = alert.Title,
+                    value2 = alert.Body,
+                    value3 = alert.Level.ToString().ToLowerInvariant(),
+                }),
+                Encoding.UTF8, "application/json")
+            : null;
+
+        using var response = await http.PostAsync(url, content, ct);
+        content?.Dispose();
+
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            throw new InvalidOperationException("IFTTT rejected the key. Check it at ifttt.com/maker_webhooks.");
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new InvalidOperationException(
+                $"IFTTT answered HTTP {(int)response.StatusCode}. {body[..Math.Min(body.Length, 200)]}".Trim());
+        }
+    }
+}
+
 /// <summary>Pushover, for a notification that reaches a phone even when nothing is open.</summary>
 public sealed class PushoverProvider(IHttpClientFactory httpFactory) : IAlertChannel
 {
