@@ -52,8 +52,9 @@ public sealed class WeatherStationTabKind : ITabKind
     public string Description => "A whole page for one Ambient Weather station — readings, radar, today's extremes and history.";
     public IReadOnlyList<FieldSpec> Fields =>
     [
-        new("connection", "Weather station", FieldKind.Connection, ProviderFilter: "ambient",
-            Help: "Leave blank to use the only Ambient Weather connection you have."),
+        new("connection", "Weather station", FieldKind.Connection,
+            Help: "Leave blank to use the only Ambient Weather connection you have.")
+            { ProviderFilter = "ambient" },
         new("latitude", "Latitude", FieldKind.Text, "39.7392",
             Help: "Decimal degrees. Used for the radar and for sunrise and sunset, which are computed here rather than fetched."),
         new("longitude", "Longitude", FieldKind.Text, "-104.9903"),
@@ -72,8 +73,9 @@ public sealed class GitTabKind : ITabKind
     public string Description => "A whole page for one MyPersonalGit server — counts, repositories, open pull requests and open issues.";
     public IReadOnlyList<FieldSpec> Fields =>
     [
-        new("connection", "Git server", FieldKind.Connection, ProviderFilter: "mypersonalgit",
-            Help: "Leave blank to use the only MyPersonalGit connection you have."),
+        new("connection", "Git server", FieldKind.Connection,
+            Help: "Leave blank to use the only MyPersonalGit connection you have.")
+            { ProviderFilter = "mypersonalgit" },
         new("subtitle", "Subtitle", FieldKind.Text),
     ];
     public Type Component => typeof(GitTab);

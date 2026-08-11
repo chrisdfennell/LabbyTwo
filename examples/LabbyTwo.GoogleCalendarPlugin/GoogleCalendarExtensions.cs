@@ -18,8 +18,9 @@ public sealed class GoogleCalendarTabKind : ITabKind
 
     public IReadOnlyList<FieldSpec> Fields =>
     [
-        new("connection", "Calendar", FieldKind.Connection, ProviderFilter: "google-calendar",
-            Help: "Leave blank to use the only Google calendar you have connected."),
+        new("connection", "Calendar", FieldKind.Connection,
+            Help: "Leave blank to use the only Google calendar you have connected.")
+            { ProviderFilter = "google-calendar" },
 
         new("view", "Opens in", FieldKind.Select, Default: "month", Options:
         [

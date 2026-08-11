@@ -17,8 +17,9 @@ public sealed class QnapFilesTabKind : ITabKind
 
     public IReadOnlyList<FieldSpec> Fields =>
     [
-        new("connection", "NAS", FieldKind.Connection, ProviderFilter: "qnap",
-            Help: "Leave blank to use the only QNAP you have."),
+        new("connection", "NAS", FieldKind.Connection,
+            Help: "Leave blank to use the only QNAP you have.")
+            { ProviderFilter = "qnap" },
 
         new("root", "Start in", FieldKind.Text, "/Public",
             Help: "Optional. Blank starts at the list of shared folders. This is where the tab " +

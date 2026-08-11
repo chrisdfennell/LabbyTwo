@@ -49,14 +49,20 @@ public sealed record FieldSpec(
     string? Help = null,
     bool Required = false,
     string? Default = null,
-    IReadOnlyList<SelectOption>? Options = null,
-    string? ProviderFilter = null)
+    IReadOnlyList<SelectOption>? Options = null)
 {
     /// <summary>
     /// For <see cref="FieldKind.Connection"/>: only offer connections of this provider.
     /// A calendar page should not list the NAS among the calendars it could show.
+    ///
+    /// Deliberately a property rather than another constructor parameter. Plugins are
+    /// separate DLLs compiled against whichever LabbyTwo they were built with, and adding
+    /// a positional parameter to this record deletes the old constructor — so every plugin
+    /// built before that change starts throwing the moment its fields are read. It cost a
+    /// working Gluetun integration to find that out; an init-only property is additive and
+    /// leaves old DLLs alone.
     /// </summary>
-    public string? ProviderFilter { get; init; } = ProviderFilter;
+    public string? ProviderFilter { get; init; }
 
     /// <summary>Password fields are encrypted at rest and never rendered back to the browser.</summary>
     public bool IsSecret => Kind == FieldKind.Password;
