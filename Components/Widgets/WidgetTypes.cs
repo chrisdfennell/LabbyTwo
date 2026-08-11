@@ -423,6 +423,47 @@ public sealed class GitActivityWidget : IWidgetType
     public Type Component => typeof(GitActivity);
 }
 
+public sealed class MetricsTableWidget : IWidgetType
+{
+    public string Type => "metrics-table";
+    public string DisplayName => "Readings list";
+    public string Icon => "📋";
+    public string Description =>
+        "Every reading a connection produces, as a list. For providers that report more numbers than tiles.";
+    public IReadOnlyList<string> ProviderTypes => AnyProvider.Types;
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("filter", "Only these", FieldKind.Text,
+            Help: "Blank shows everything. A prefix — monitor_, node_ — shows that family; " +
+                  "a comma-separated list shows exactly those."),
+        new("limit", "Most rows", FieldKind.Number, Default: "10"),
+    ];
+    public Type Component => typeof(MetricsTableCard);
+}
+
+public sealed class CameraWidget : IWidgetType
+{
+    public string Type => "camera";
+    public string DisplayName => "Camera";
+    public string Icon => "📷";
+    public string Description => "A camera image or MJPEG stream, fetched by your browser rather than the server.";
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("url", "Image URL", FieldKind.Url, "http://192.168.1.63:5000/api/front_door/latest.jpg",
+            Required: true,
+            Help: "A still image or an MJPEG stream. Your browser loads this directly, so it has to be " +
+                  "reachable from your phone and laptop — not only from LabbyTwo."),
+        new("refresh", "Refresh every (seconds)", FieldKind.Number, Default: "10",
+            Help: "0 for an MJPEG stream, which updates itself — refreshing one would restart it."),
+        new("height", "Height (px)", FieldKind.Number, Default: "180"),
+        new("caption", "Caption", FieldKind.Text),
+        new("link", "Opens", FieldKind.Url, Help: "Optional. Clicking the picture goes here — the full NVR, usually."),
+    ];
+    public Type Component => typeof(CameraCard);
+}
+
 /// <summary>
 /// Marker for widgets that work with any probed connection. Kept as a single list so the
 /// generic widgets don't have to name every provider — the picker treats an entry of "*"

@@ -1,0 +1,17 @@
+<!-- Razor SDK: this plugin ships a tab kind, an endpoint and a background job. -->
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+
+    <!-- The host already ships this. Reference it to compile, do not copy it. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

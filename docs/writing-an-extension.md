@@ -1,6 +1,6 @@
 # Writing an extension
 
-LabbyTwo has five extension points. Each one is an interface, each one is found by
+LabbyTwo has six extension points. Each one is an interface, each one is found by
 scanning for classes rather than from a list, and each one works identically whether you
 are editing LabbyTwo itself or shipping a plugin DLL that somebody drops into their
 `data/plugins` folder.
@@ -12,6 +12,7 @@ are editing LabbyTwo itself or shipping a plugin DLL that somebody drops into th
 | `ITabKind` | a whole kind of page in the nav | `Components/Pages/Kinds/` |
 | `IDashboardImporter` | a config format it can read from another dashboard | `Services/Import/` |
 | `IEndpointExtension` | routes the server answers itself, outside the Blazor circuit | anywhere |
+| `IBackgroundJob` | work on a timer, with nobody looking at a page | anywhere |
 
 There is no registration step. `Program.cs` scans the assembly, finds every public
 non-abstract class implementing one of these, and registers it as a singleton. Add the
@@ -334,6 +335,49 @@ lists a NAS folder, and an endpoint next to it that serves the file the listing 
 
 ---
 
+## A background job
+
+Everything above happens because somebody asked for it — a page rendered, a probe fired, a
+URL was opened. This is for work that has to happen anyway: an expiry sweep, a nightly
+tidy-up, a cache that goes stale on its own.
+
+```csharp
+public sealed class DropCleanupJob(Db db, ILogger<DropCleanupJob> log) : IBackgroundJob
+{
+    public string Name => "drop-cleanup";
+    public TimeSpan Interval => TimeSpan.FromHours(1);
+
+    // Off by default. A NAS that was switched off overnight should not keep yesterday's
+    // expired files around for an hour after it comes back, so this one opts in.
+    public bool RunAtStartup => true;
+
+    public async Task RunAsync(CancellationToken ct)
+    {
+        var removed = await new DropStore(db).PurgeAsync(ct);
+        if (removed > 0)
+            log.LogInformation("Removed {Count} expired item(s)", removed);
+    }
+}
+```
+
+### Things worth knowing
+
+- **Deliberately not `IHostedService`.** A hosted service is a lifetime to manage, and a
+  plugin that hangs in `StartAsync` hangs the whole app. This is a method with an interval;
+  `BackgroundJobRunner` owns the loop, so a job that throws or overruns is only its own
+  problem.
+- **Throwing is survivable.** The failure is logged, shown under Settings, and the job runs
+  again next interval — so make the message say what a person should do about it.
+- **Every job gets its own loop**, and a slow one delays only itself.
+- **The interval has a floor of one minute.** Anything that wants to be faster is really
+  reacting to something rather than polling, and should be triggered by that instead.
+- **`RunAtStartup` is false unless you say otherwise.** A dozen plugins all doing their
+  daily sweep during boot is how a dashboard comes up slowly and nobody can tell why.
+- **Settings shows when each job last ran** and what happened. Work nobody watches needs
+  somewhere to say it stopped.
+
+---
+
 ## Shipping it as a plugin
 
 Nothing above needs to live in the LabbyTwo repository. A plugin is an ordinary class
@@ -383,9 +427,9 @@ docker compose restart labbytwo
 Settings → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
 
-## Nine that work
+## Eleven that work
 
-[`examples/`](../examples) has nine plugins that build and run, covering every extension
+[`examples/`](../examples) has eleven plugins that build and run, covering every extension
 point on this page. Start from whichever is closest to what you are writing:
 
 | If you are writing | Read |
@@ -399,6 +443,8 @@ point on this page. Start from whichever is closest to what you are writing:
 | An importer | `DashyImportPlugin` — a pure function, and using a library the host ships |
 | Something that serves files | `QnapFilesPlugin` — a tab kind and an endpoint, downloads with Range |
 | Anything with OAuth | `GoogleCalendarPlugin` — consent, refresh tokens, and a callback endpoint |
+| Data that should raise alerts | `RenewalsPlugin` — a tab kind paired with a provider, so a date can page you |
+| Work on a timer | `DropPlugin` — a tab kind, an endpoint and a background job in one DLL |
 
 ### The rules
 

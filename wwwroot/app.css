@@ -240,6 +240,24 @@ h1[tabindex]:focus { outline: none; }
 }
 .widget-body { flex: 1; min-width: 0; }
 
+/* A camera picture fills its card and keeps its own shape — letterboxed rather than
+   stretched, because a squashed doorway is worse than a black bar. */
+.camera-frame {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: .5rem;
+    background: #000;
+}
+
+.camera-frame img,
+.camera-frame a {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
 .widget-edit-bar {
     display: flex;
     gap: .25rem;

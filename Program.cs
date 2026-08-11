@@ -49,7 +49,7 @@ static SocketsHttpHandler ProviderHandler() => new()
 
 // ---- Extension points -------------------------------------------------------------
 // Nothing is listed here. Every public class implementing IConnectionProvider,
-// IWidgetType, ITabKind, IDashboardImporter or IEndpointExtension is found by reflection —
+// IWidgetType, ITabKind, IDashboardImporter, IEndpointExtension or IBackgroundJob is found by reflection —
 // in this assembly and in any DLL dropped into the plugins folder — so adding an
 // integration is one file and no registration, whether you are editing LabbyTwo or
 // shipping a plugin for it.
@@ -85,6 +85,11 @@ builder.Services.AddSingleton<AlertService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertService>());
 builder.Services.AddSingleton<MetricAlertService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricAlertService>());
+
+// Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
+// plugin's nightly tidy-up cannot hang startup or take the process down with it.
+builder.Services.AddSingleton<BackgroundJobRunner>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<BackgroundJobRunner>());
 
 // Login is opt-in: setting a password turns it on, otherwise LabbyTwo stays open on a
 // trusted LAN, which is how most home labs actually run.

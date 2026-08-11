@@ -1,6 +1,6 @@
 # Example plugins
 
-Nine plugins that build, load and do something worth having. They are meant to be
+Eleven plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
@@ -14,6 +14,8 @@ same way yours will.
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
 | [GoogleCalendarPlugin](LabbyTwo.GoogleCalendarPlugin) | provider + widget + tab kind + endpoint | A Google calendar you can write to — month, week and list views, and adding events. |
 | [ChoresPlugin](LabbyTwo.ChoresPlugin) | tab kind + widget | Recurring household jobs with due dates. Stores its own data. |
+| [RenewalsPlugin](LabbyTwo.RenewalsPlugin) | tab kind + widget + provider | Domains, certificates, subscriptions — expiry dates that can raise an alert. |
+| [DropPlugin](LabbyTwo.DropPlugin) | tab kind + endpoint + job | A shared shelf for files and text between devices, cleared on a timer. |
 | [QnapFilesPlugin](LabbyTwo.QnapFilesPlugin) | tab kind + endpoint | Browse, download and upload files on a QNAP you already monitor. |
 | [PresencePlugin](LabbyTwo.PresencePlugin) | provider + widget | Who's home — pings a list of devices and charts each one. |
 | [SyncthingPlugin](LabbyTwo.SyncthingPlugin) | provider | A Syncthing daemon: devices connected, data moved, uptime. |
@@ -127,6 +129,50 @@ backup and every "Download database" without anyone thinking about it.
 Ticking off a repeating chore sets the next due date **from today**, not from when it was
 supposed to be done — otherwise a chore you are three weeks late on stays three weeks late
 forever.
+
+## Renewals — a date that can page you
+
+Domains, TLS certificates, subscriptions, warranties. A page of them, soonest first, red
+once they are past.
+
+The reason it is here rather than being a fourth thing like Chores is the second half: it
+ships a **provider as well as a tab kind**. A tab kind cannot alert — alert rules are
+written against a connection's metrics, and a page is not a connection — so the provider's
+probe reads the plugin's own table and reports `days_until_next` and `overdue`. Add the
+connection and the whole existing machinery applies: charts, thresholds, and a message
+through whichever channel you set up. That pairing is the pattern for any plugin holding
+data that is worth being told about, and without it a renewals page is a thing you
+remember to check after the certificate has already expired.
+
+One deliberate difference from Chores: renewing rolls the date forward from **when it was
+due**, not from today. A domain paid three days late still renews on its anniversary, and
+counting from today would walk the date a little further every year until it drifted into
+a different month. Chores does the opposite, on purpose, because a chore you are three
+weeks late on should not stay three weeks late for ever.
+
+## Drop — a shelf both devices can reach
+
+Put a file or some text here on the laptop; pick it up on the phone. The thing everyone
+improvises with emails to themselves.
+
+It is the example of the sixth extension point. Three pieces in one DLL, each doing the
+job only it can:
+
+- The **tab kind** takes the upload and lists what is there.
+- The **endpoint** at `/ext/drop/download` hands the bytes back, with Range support, so a
+  video on the shelf seeks instead of downloading whole.
+- The **background job** clears expired items hourly and at startup. Before
+  `IBackgroundJob` existed, nothing would ever have swept the shelf unless somebody
+  happened to open the page — the disk would just fill.
+
+The metadata lives in the host's database and the bytes in a folder beside it, so the list
+is in every backup without putting three gigabytes of video into a SQLite row the
+dashboard reads on every page load. The purge also removes orphaned files — bytes with no
+row, left by a crash between the two writes — but only if they are more than ten minutes
+old, so it cannot delete an upload that is still in flight.
+
+> Everything on the shelf is readable by anyone who can open the dashboard. It is a
+> convenience, not a vault.
 
 ## NAS files — the one that needed a real URL
 

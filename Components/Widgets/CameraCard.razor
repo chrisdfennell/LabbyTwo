@@ -1,0 +1,77 @@
+@implements IDisposable
+@inject NavigationManager Nav
+
+@* A camera on the dashboard. Deliberately the browser's job: the image is fetched by
+   whoever is looking at the page, not by the server, so a still frame every few seconds
+   costs LabbyTwo nothing and a page nobody has open costs nothing at all. *@
+
+@if (Url.Length == 0)
+{
+    <p class="tile-meta mb-0">No image URL set — edit this card and paste one.</p>
+}
+else
+{
+    <div class="camera-frame" style="@FrameStyle">
+        @if (LinkTo.Length > 0)
+        {
+            <a href="@LinkTo" target="_blank" rel="noopener">
+                <img src="@Source" alt="@Caption" loading="lazy" />
+            </a>
+        }
+        else
+        {
+            <img src="@Source" alt="@Caption" loading="lazy" />
+        }
+    </div>
+
+    @if (Caption.Length > 0)
+    {
+        <div class="tile-meta mt-1">@Caption</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private System.Threading.Timer? _timer;
+    private long _tick;
+
+    private string Url => Context.Widget.Settings.Get("url").Trim();
+    private string Caption => Context.Widget.Settings.Get("caption").Trim();
+    private string LinkTo => Context.Widget.Settings.Get("link").Trim();
+    private int Height => Math.Clamp(Context.Widget.Settings.GetInt("height", 180), 60, 1200);
+
+    /// <summary>
+    /// Zero means the URL is a stream — MJPEG, which the browser keeps open and updates by
+    /// itself. Refreshing that would restart the stream every few seconds.
+    /// </summary>
+    private int RefreshSeconds => Math.Clamp(Context.Widget.Settings.GetInt("refresh", 10), 0, 3600);
+
+    private string FrameStyle => $"height:{Height}px";
+
+    /// <summary>
+    /// A cache-buster on a still image, and nothing on a stream. Without it the browser
+    /// serves the first frame it ever fetched for the rest of the day.
+    /// </summary>
+    private string Source => RefreshSeconds == 0
+        ? Url
+        : Url + (Url.Contains('?') ? "&" : "?") + "labby=" + _tick;
+
+    protected override void OnParametersSet()
+    {
+        _timer?.Dispose();
+        _timer = null;
+
+        if (Url.Length == 0 || RefreshSeconds == 0)
+            return;
+
+        var period = TimeSpan.FromSeconds(RefreshSeconds);
+        _timer = new System.Threading.Timer(_ => _ = InvokeAsync(() =>
+        {
+            _tick++;
+            StateHasChanged();
+        }), null, period, period);
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

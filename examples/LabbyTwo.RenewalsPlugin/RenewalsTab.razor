@@ -1,0 +1,316 @@
+@inject Db Database
+
+@* Everything with an expiry date, soonest first. The colour is the whole interface: red is
+   already gone, amber is close enough to act on, and everything else can wait. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "⏳" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_renewals.Count == 0)
+            {
+                <text>Nothing tracked yet.</text>
+            }
+            else
+            {
+                @($"{Shown.Count(r => r.IsOverdue(_today))} overdue, {Shown.Count(r => r.DaysLeft(_today) is >= 0 && r.DaysLeft(_today) <= WarnWithin)} due soon, {Shown.Count} tracked")
+            }
+        </p>
+    </div>
+
+    <div class="d-flex gap-2 align-items-center">
+        @if (_categories.Count > 0)
+        {
+            <select class="form-select form-select-sm" style="width:auto" value="@_filter" @onchange="OnFilterChanged">
+                <option value="">All categories</option>
+                @foreach (var category in _categories)
+                {
+                    <option value="@category">@category</option>
+                }
+            </select>
+        }
+        <button class="btn btn-sm btn-primary" @onclick="BeginNew">+ Add</button>
+    </div>
+</div>
+
+@if (_error.Length > 0)
+{
+    <div class="alert alert-warning py-2">@_error</div>
+}
+
+@if (Shown.Count == 0)
+{
+    <div class="empty-state">
+        <p class="mb-3">Nothing here yet. Domains, certificates, subscriptions, warranties — anything with a date on it.</p>
+        <button class="btn btn-primary btn-sm" @onclick="BeginNew">Add the first one</button>
+    </div>
+}
+else
+{
+    <div class="widget">
+        <div class="widget-body p-0">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>What</th>
+                        <th style="width:10rem">Category</th>
+                        <th style="width:11rem">Due</th>
+                        <th style="width:8rem">Cost</th>
+                        <th style="width:14rem"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var renewal in Shown)
+                    {
+                        <tr @key="renewal.Id">
+                            <td>
+                                @if (renewal.Url.Length > 0)
+                                {
+                                    <a href="@renewal.Url" target="_blank" rel="noopener">@renewal.Title</a>
+                                }
+                                else
+                                {
+                                    @renewal.Title
+                                }
+                                @if (renewal.Notes.Length > 0)
+                                {
+                                    <div class="tile-meta">@renewal.Notes</div>
+                                }
+                            </td>
+                            <td class="tile-meta">@renewal.Category</td>
+                            <td class="@DueClass(renewal)">
+                                @renewal.DueLabel(_today)
+                                @if (renewal.Recurs)
+                                {
+                                    <div class="tile-meta">every @Every(renewal.EveryDays)</div>
+                                }
+                            </td>
+                            <td class="tile-meta">@renewal.Cost</td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-secondary" title="Renewed — move to the next date"
+                                        @onclick="() => RenewAsync(renewal)">Renewed</button>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(renewal)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _deleting = renewal">✕</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_editing is not null)
+{
+    <Modal Title="@(_isNew ? "New renewal" : "Edit renewal")" OnClose="Cancel">
+        <ChildContent>
+            <div class="row g-2">
+                <div class="col-12 col-md-7">
+                    <label class="form-label" for="renewal-title">What</label>
+                    <input id="renewal-title" class="form-control" placeholder="fennellfamily.org"
+                           @bind="_formTitle" @bind:event="oninput" />
+                </div>
+                <div class="col-12 col-md-5">
+                    <label class="form-label" for="renewal-category">Category</label>
+                    <input id="renewal-category" class="form-control" placeholder="Domain" list="renewal-categories"
+                           @bind="_formCategory" />
+                    <datalist id="renewal-categories">
+                        @foreach (var category in _categories)
+                        {
+                            <option value="@category"></option>
+                        }
+                    </datalist>
+                </div>
+
+                <div class="col-6 col-md-4">
+                    <label class="form-label" for="renewal-due">Due</label>
+                    <input id="renewal-due" type="date" class="form-control" @bind="_formDue" />
+                </div>
+                <div class="col-6 col-md-4">
+                    <label class="form-label" for="renewal-every">Repeats every (days)</label>
+                    <input id="renewal-every" type="number" class="form-control" min="0" @bind="_formEvery" />
+                    <div class="form-text">0 for a one-off. 365 for a year, 30 for a month.</div>
+                </div>
+                <div class="col-12 col-md-4">
+                    <label class="form-label" for="renewal-cost">Cost</label>
+                    <input id="renewal-cost" class="form-control" placeholder="$12.99/yr" @bind="_formCost" />
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label" for="renewal-url">Link</label>
+                    <input id="renewal-url" class="form-control" placeholder="https://registrar.example.com"
+                           @bind="_formUrl" />
+                    <div class="form-text">Where you go to renew it. Saves hunting for the registrar at 11pm.</div>
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label" for="renewal-notes">Notes</label>
+                    <input id="renewal-notes" class="form-control" @bind="_formNotes" />
+                </div>
+            </div>
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="Cancel">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@(_formTitle.Trim().Length == 0)">Save</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_deleting is { } doomed)
+{
+    <ConfirmDialog Title="Remove this?"
+                   Message="@($"\"{doomed.Title}\" will be removed from the list. Nothing else happens — this tracks dates, it does not cancel anything.")"
+                   OnCancel="() => _deleting = null"
+                   OnConfirm="DeleteAsync" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private RenewalStore _store = default!;
+    private IReadOnlyList<RenewalStore.Renewal> _renewals = [];
+    private IReadOnlyList<string> _categories = [];
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+    private string _error = "";
+    private string _filter = "";
+
+    private RenewalStore.Renewal? _editing;
+    private RenewalStore.Renewal? _deleting;
+    private bool _isNew;
+    private string _formTitle = "", _formCategory = "", _formCost = "", _formUrl = "", _formNotes = "";
+    private DateOnly _formDue = DateOnly.FromDateTime(DateTime.Today);
+    private int _formEvery = 365;
+
+    private int WarnWithin => Math.Clamp(Tab.Settings.GetInt("warn_within", 30), 1, 365);
+
+    private IReadOnlyList<RenewalStore.Renewal> Shown =>
+    [
+        .. _renewals.Where(renewal =>
+            (_filter.Length == 0 || renewal.Category.Equals(_filter, StringComparison.OrdinalIgnoreCase))
+            && (Tab.Settings.Get("category") is not { Length: > 0 } fixedCategory
+                || renewal.Category.Equals(fixedCategory, StringComparison.OrdinalIgnoreCase))),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _store = new RenewalStore(Database);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _renewals = await _store.AllAsync();
+            _categories = await _store.CategoriesAsync();
+            _error = "";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private async Task OnFilterChanged(ChangeEventArgs args)
+    {
+        _filter = args.Value?.ToString() ?? "";
+        await LoadAsync();
+    }
+
+    private void BeginNew()
+    {
+        _isNew = true;
+        _editing = new RenewalStore.Renewal("", "", "", _today.AddDays(365), 365);
+        _formTitle = "";
+        _formCategory = _filter;
+        _formCost = "";
+        _formUrl = "";
+        _formNotes = "";
+        _formDue = _today.AddDays(365);
+        _formEvery = 365;
+    }
+
+    private void BeginEdit(RenewalStore.Renewal renewal)
+    {
+        _isNew = false;
+        _editing = renewal;
+        _formTitle = renewal.Title;
+        _formCategory = renewal.Category;
+        _formCost = renewal.Cost;
+        _formUrl = renewal.Url;
+        _formNotes = renewal.Notes;
+        _formDue = renewal.Due;
+        _formEvery = renewal.EveryDays;
+    }
+
+    private void Cancel()
+    {
+        _editing = null;
+        _deleting = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is not { } editing)
+            return;
+
+        var value = editing with
+        {
+            Title = _formTitle,
+            Category = _formCategory,
+            Due = _formDue,
+            EveryDays = _formEvery,
+            Cost = _formCost,
+            Url = _formUrl,
+            Notes = _formNotes,
+        };
+
+        _editing = null;
+        await GuardAsync(() => _isNew ? _store.AddAsync(value) : _store.UpdateAsync(value));
+    }
+
+    private async Task RenewAsync(RenewalStore.Renewal renewal) =>
+        await GuardAsync(() => _store.RenewAsync(renewal, _today));
+
+    private async Task DeleteAsync()
+    {
+        if (_deleting is not { } doomed)
+            return;
+
+        _deleting = null;
+        await GuardAsync(() => _store.DeleteAsync(doomed.Id));
+    }
+
+    private async Task GuardAsync(Func<Task> operation)
+    {
+        try
+        {
+            await operation();
+            _error = "";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+
+        await LoadAsync();
+    }
+
+    private string DueClass(RenewalStore.Renewal renewal) => renewal.Urgency(_today, WarnWithin) switch
+    {
+        "overdue" => "text-danger fw-semibold",
+        "soon" => "text-warning",
+        _ => "",
+    };
+
+    /// <summary>"every 365 days" is true and unreadable. People think in years and months.</summary>
+    private static string Every(int days) => days switch
+    {
+        365 or 366 => "year",
+        30 or 31 => "month",
+        90 or 91 or 92 => "quarter",
+        7 => "week",
+        var other when other % 365 == 0 => $"{other / 365} years",
+        var other => $"{other} days",
+    };
+}

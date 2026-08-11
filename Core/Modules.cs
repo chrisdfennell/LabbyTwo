@@ -17,10 +17,11 @@ public sealed record ModuleInfo(
     IReadOnlyList<string> Widgets,
     IReadOnlyList<string> TabKinds,
     IReadOnlyList<string> Importers,
-    IReadOnlyList<string> Endpoints)
+    IReadOnlyList<string> Endpoints,
+    IReadOnlyList<string> Jobs)
 {
     public int TypeCount =>
-        Providers.Count + Widgets.Count + TabKinds.Count + Importers.Count + Endpoints.Count;
+        Providers.Count + Widgets.Count + TabKinds.Count + Importers.Count + Endpoints.Count + Jobs.Count;
 }
 
 /// <summary>A DLL in the plugins folder that could not be loaded, kept so the UI can say why.</summary>
@@ -64,6 +65,7 @@ public static class Modules
         typeof(ITabKind),
         typeof(IDashboardImporter),
         typeof(IEndpointExtension),
+        typeof(IBackgroundJob),
     ];
 
     /// <summary>
@@ -153,7 +155,7 @@ public static class Modules
             log?.LogWarning(ex, "Some types in {Assembly} could not be loaded", assembly.FullName);
         }
 
-        List<string> providers = [], widgets = [], tabKinds = [], importers = [], endpoints = [];
+        List<string> providers = [], widgets = [], tabKinds = [], importers = [], endpoints = [], jobs = [];
 
         foreach (var type in types)
         {
@@ -177,16 +179,17 @@ public static class Modules
                     : point == typeof(IWidgetType) ? widgets
                     : point == typeof(ITabKind) ? tabKinds
                     : point == typeof(IDashboardImporter) ? importers
-                    : endpoints;
+                    : point == typeof(IEndpointExtension) ? endpoints
+                    : jobs;
                 names.Add(type.Name);
             }
         }
 
-        if (providers.Count + widgets.Count + tabKinds.Count + importers.Count + endpoints.Count == 0
-            && isPlugin)
+        if (providers.Count + widgets.Count + tabKinds.Count + importers.Count
+            + endpoints.Count + jobs.Count == 0 && isPlugin)
         {
             catalog.Failures.Add(new ModuleFailure(assembly.Location,
-                "Loaded, but declares no providers, widgets, tab kinds, importers or endpoints."));
+                "Loaded, but declares no providers, widgets, tab kinds, importers, endpoints or jobs."));
             return;
         }
 
@@ -197,6 +200,6 @@ public static class Modules
                 ?? name.Version?.ToString() ?? "",
             isPlugin ? assembly.Location : null,
             isPlugin,
-            providers, widgets, tabKinds, importers, endpoints));
+            providers, widgets, tabKinds, importers, endpoints, jobs));
     }
 }

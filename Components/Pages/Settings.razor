@@ -13,6 +13,7 @@
 @inject ModuleCatalog Catalog
 @inject DashboardImportService Imports
 @inject IEnumerable<IEndpointExtension> Endpoints
+@inject BackgroundJobRunner Jobs
 @inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
 @using System.Reflection
 
@@ -350,6 +351,30 @@
                                 @foreach (var endpoint in Endpoints.OrderBy(e => e.Key))
                                 {
                                     <li>@ExtensionRoutes.PathFor(endpoint.Key)</li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @* Jobs run with nobody watching, so when each last ran — and whether it
+                       worked — is the only way anyone would ever know it had stopped. *@
+                    @if (Jobs.Runs.Count > 0)
+                    {
+                        <div class="col-md-3">
+                            <div class="tile-meta mb-1">Background jobs (@Jobs.Runs.Count)</div>
+                            <ul class="small mb-0 ps-3">
+                                @foreach (var run in Jobs.Runs)
+                                {
+                                    <li class="@(run.Ok ? null : "text-danger")">
+                                        @run.Name
+                                        <span class="tile-meta">
+                                            — @(run.At is { } at ? Ago.Since(at) : "not run yet")
+                                        </span>
+                                        @if (!run.Ok)
+                                        {
+                                            <div class="tile-meta text-danger">@run.Message</div>
+                                        }
+                                    </li>
                                 }
                             </ul>
                         </div>

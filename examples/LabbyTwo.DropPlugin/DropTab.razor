@@ -1,0 +1,264 @@
+@inject Db Database
+
+@* Put something on the shelf; take it off somewhere else. The list is the interface —
+   there is nothing to configure per item beyond how long it stays. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "📥" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_drops.Count == 0)
+            {
+                <text>Nothing on the shelf.</text>
+            }
+            else
+            {
+                @($"{_drops.Count} item{(_drops.Count == 1 ? "" : "s")}")
+            }
+            @if (KeepFor is { } keep)
+            {
+                <text> — new items are kept for @Describe(keep)</text>
+            }
+        </p>
+    </div>
+</div>
+
+@if (_error.Length > 0)
+{
+    <div class="alert alert-warning py-2">@_error</div>
+}
+
+@if (!ReadOnly)
+{
+    <div class="widget mb-3">
+        <div class="widget-body">
+            <div class="row g-3">
+                <div class="col-12 col-lg-5">
+                    <label class="form-label" for="drop-files">Files</label>
+                    <InputFile id="drop-files" class="form-control" multiple OnChange="OnFilesChosenAsync"
+                               disabled="@_busy" />
+                    <div class="form-text">Up to @MaxUploadMb MB each.</div>
+                </div>
+
+                <div class="col-12 col-lg-7">
+                    <label class="form-label" for="drop-text">Text</label>
+                    <div class="d-flex gap-2">
+                        <textarea id="drop-text" class="form-control" rows="2"
+                                  placeholder="A link, a password to type on the other machine, a shell command…"
+                                  @bind="_text" @bind:event="oninput"></textarea>
+                        <button class="btn btn-primary flex-none" @onclick="AddTextAsync"
+                                disabled="@(_busy || _text.Trim().Length == 0)">Drop</button>
+                    </div>
+                </div>
+            </div>
+
+            @if (_uploading.Count > 0)
+            {
+                <div class="tile-meta mt-2">Uploading @string.Join(", ", _uploading)…</div>
+            }
+        </div>
+    </div>
+}
+
+@if (_drops.Count > 0)
+{
+    <div class="widget">
+        <div class="widget-body p-0">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th style="width:7rem">Size</th>
+                        <th style="width:9rem">Added</th>
+                        <th style="width:9rem">Expiry</th>
+                        <th style="width:13rem"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var drop in _drops)
+                    {
+                        <tr @key="drop.Id">
+                            <td>
+                                <span>@(drop.IsText ? "📝" : "📄") @drop.Name</span>
+                                @if (drop.IsText)
+                                {
+                                    <div class="tile-meta text-truncate" style="max-width:40rem">@drop.Text</div>
+                                }
+                            </td>
+                            <td class="tile-meta">@drop.SizeLabel</td>
+                            <td class="tile-meta">@Ago(drop.Created)</td>
+                            <td class="tile-meta">@drop.ExpiryLabel(_now)</td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-secondary"
+                                   href="@DropEndpoints.DownloadUrl(drop.Id)">
+                                    @(drop.IsText ? "Open" : "Download")
+                                </a>
+                                @if (!ReadOnly)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            @onclick="() => _deleting = drop">✕</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <p class="tile-meta mt-2">
+        Anything here is readable by anyone who can open this dashboard. Expired items are cleared
+        by the <code>drop-cleanup</code> job, listed under Settings.
+    </p>
+}
+
+@if (_deleting is { } doomed)
+{
+    <ConfirmDialog Title="Take this off the shelf?"
+                   Message="@($"\"{doomed.Name}\" will be deleted.")"
+                   OnCancel="() => _deleting = null"
+                   OnConfirm="DeleteAsync" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private DropStore _store = default!;
+    private IReadOnlyList<DropStore.Drop> _drops = [];
+    private DropStore.Drop? _deleting;
+    private readonly List<string> _uploading = [];
+
+    private string _text = "";
+    private string _error = "";
+    private bool _busy;
+    private DateTimeOffset _now = DateTimeOffset.Now;
+
+    private bool ReadOnly => Tab.Settings.GetBool("read_only", false);
+    private int MaxUploadMb => Math.Clamp(Tab.Settings.GetInt("max_upload_mb", 512), 1, 20_000);
+    private long MaxUploadBytes => MaxUploadMb * 1024L * 1024L;
+
+    /// <summary>Null means keep it until somebody deletes it.</summary>
+    private TimeSpan? KeepFor =>
+        Tab.Settings.GetInt("keep_hours", 24) is var hours && hours > 0 ? TimeSpan.FromHours(hours) : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _store = new DropStore(Database);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _now = DateTimeOffset.Now;
+        try
+        {
+            // Expired items are hidden immediately even though the job clears them hourly:
+            // seeing something listed that will not download is worse than it being gone.
+            _drops = [.. (await _store.AllAsync()).Where(drop => !drop.HasExpired(_now))];
+            _error = "";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private async Task OnFilesChosenAsync(InputFileChangeEventArgs args)
+    {
+        if (ReadOnly)
+            return;
+
+        _busy = true;
+        _error = "";
+
+        foreach (var file in args.GetMultipleFiles(20))
+        {
+            if (file.Size > MaxUploadBytes)
+            {
+                _error = $"{file.Name} is bigger than this tab's {MaxUploadMb} MB limit.";
+                continue;
+            }
+
+            _uploading.Add(file.Name);
+            StateHasChanged();
+
+            try
+            {
+                await using var content = file.OpenReadStream(MaxUploadBytes);
+                await _store.AddFileAsync(file.Name, file.ContentType, content, KeepFor);
+            }
+            catch (Exception ex)
+            {
+                _error = $"{file.Name} did not upload: {ex.GetBaseException().Message}";
+            }
+            finally
+            {
+                _uploading.Remove(file.Name);
+            }
+        }
+
+        _busy = false;
+        await LoadAsync();
+    }
+
+    private async Task AddTextAsync()
+    {
+        if (ReadOnly || _text.Trim().Length == 0)
+            return;
+
+        var text = _text;
+        _text = "";
+        _busy = true;
+
+        try
+        {
+            await _store.AddTextAsync(text, KeepFor);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_deleting is not { } doomed)
+            return;
+
+        _deleting = null;
+        try
+        {
+            await _store.DeleteAsync(doomed.Id);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+
+        await LoadAsync();
+    }
+
+    private string Ago(DateTimeOffset at)
+    {
+        var since = _now - at;
+        return since.TotalMinutes < 1 ? "just now"
+            : since.TotalHours < 1 ? $"{since.TotalMinutes:0} min ago"
+            : since.TotalDays < 1 ? $"{since.TotalHours:0} h ago"
+            : $"{since.TotalDays:0} days ago";
+    }
+
+    /// <summary>The default is 24 hours, and "kept for 1 days" is how that read at first.</summary>
+    private static string Describe(TimeSpan span)
+    {
+        if (span.TotalHours < 24)
+            return span.TotalHours <= 1 ? "an hour" : $"{span.TotalHours:0} hours";
+
+        return span.TotalDays < 2 ? "a day" : $"{span.TotalDays:0} days";
+    }
+}

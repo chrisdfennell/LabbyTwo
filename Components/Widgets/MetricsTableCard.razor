@@ -1,0 +1,124 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+
+@* Every reading a connection produces, in a list. The metric tile answers "what is this
+   number"; this answers "what does this thing know", which is the question you have when
+   a provider reports twenty things — a Prometheus query set, a monitor per Kuma check, a
+   device per presence ping — and one tile each would be absurd. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (_rows.Count == 0)
+{
+    <p class="tile-meta mb-0">
+        @(Filter.Length > 0 ? $"Nothing matching \"{Filter}\" yet." : "No readings yet.")
+    </p>
+}
+else
+{
+    <table class="table table-sm mb-0 align-middle">
+        <tbody>
+            @foreach (var row in _rows)
+            {
+                <tr>
+                    <td class="text-truncate" title="@row.Key">@row.Label</td>
+                    <td class="text-end text-nowrap">@row.Text</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    @if (_hidden > 0)
+    {
+        <div class="tile-meta mt-1">+@_hidden more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Row(string Key, string Label, string Text);
+
+    private IReadOnlyList<Row> _rows = [];
+    private int _hidden;
+
+    /// <summary>Blank shows everything. Otherwise a prefix, or a comma-separated list of names.</summary>
+    private string Filter => Context.Widget.Settings.Get("filter").Trim();
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 10), 1, 100);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is not { } connection)
+            return;
+
+        // The live probe first, then history — the same order the metric tile uses, so a
+        // restart does not blank the card until the next sweep.
+        var values = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (key, value) in await History.LatestAsync(connection.Id, TimeSpan.FromHours(6)))
+            values[key] = value;
+
+        if (Health.State(connection.Id)?.Metrics is { } live)
+        {
+            foreach (var (key, value) in live)
+                values[key] = value;
+        }
+
+        var wanted = values
+            .Where(pair => Matches(pair.Key))
+            // latency_ms is on every connection and is rarely what this card is for, so it
+            // sorts last rather than being dropped — someone may have asked for it.
+            .OrderBy(pair => pair.Key == "latency_ms" ? 1 : 0)
+            .ThenBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _hidden = Math.Max(0, wanted.Count - Limit);
+
+        _rows =
+        [
+            .. wanted.Take(Limit).Select(pair =>
+            {
+                var spec = Registry.Metric(connection, pair.Key);
+                return new Row(pair.Key, spec.Label, spec.Format(pair.Value));
+            }),
+        ];
+    }
+
+    private bool Matches(string key)
+    {
+        if (Filter.Length == 0)
+            return true;
+
+        // A comma means "these ones"; anything else is treated as a prefix, which is what
+        // makes "monitor_" or "node_" a useful thing to type.
+        if (Filter.Contains(','))
+        {
+            return Filter
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Any(name => key.Equals(name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return key.StartsWith(Filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

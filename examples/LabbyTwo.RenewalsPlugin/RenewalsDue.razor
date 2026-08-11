@@ -1,0 +1,67 @@
+@inject Db Database
+
+@* Only what is close enough to act on. Anything a year out is noise on a dashboard. *@
+
+@if (_due.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing due in the next @Within days. 🎉</p>
+}
+else
+{
+    <div class="d-grid gap-1">
+        @foreach (var renewal in _due.Take(Limit))
+        {
+            <div class="d-flex justify-content-between gap-2">
+                <span class="text-truncate @(renewal.IsOverdue(_today) ? "text-danger" : null)">
+                    @if (renewal.Url.Length > 0)
+                    {
+                        <a href="@renewal.Url" target="_blank" rel="noopener">@renewal.Title</a>
+                    }
+                    else
+                    {
+                        @renewal.Title
+                    }
+                </span>
+                <span class="tile-meta flex-none text-nowrap">@renewal.DueLabel(_today)</span>
+            </div>
+        }
+    </div>
+
+    @if (_due.Count > Limit)
+    {
+        <div class="tile-meta mt-1">+@(_due.Count - Limit) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private RenewalStore _store = default!;
+    private IReadOnlyList<RenewalStore.Renewal> _due = [];
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private int Within => Math.Clamp(Context.Widget.Settings.GetInt("within_days", 30), 1, 3650);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 5), 1, 50);
+    private string Category => Context.Widget.Settings.Get("category").Trim();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _store = new RenewalStore(Database);
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var horizon = _today.AddDays(Within);
+
+        _due =
+        [
+            .. (await _store.AllAsync())
+                .Where(renewal => renewal.Due <= horizon)
+                .Where(renewal => Category.Length == 0
+                    || renewal.Category.Equals(Category, StringComparison.OrdinalIgnoreCase)),
+        ];
+    }
+}

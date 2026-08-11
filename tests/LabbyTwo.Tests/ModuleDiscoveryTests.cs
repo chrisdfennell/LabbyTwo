@@ -43,7 +43,7 @@ public class ModuleDiscoveryTests
             "mypersonalgit",
             "uptime-kuma", "speedtest-tracker", "immich", "nextcloud",
             "prometheus", "pbs", "duplicati", "scrutiny", "frigate", "tailscale", "synology",
-            "email", "ifttt",
+            "healthchecks", "email", "ifttt",
         ];
 
         Assert.Equal(

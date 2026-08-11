@@ -424,7 +424,7 @@ Save the file, rebuild, and Pi-hole appears in the add-connection picker, gets a
 form, gets a Test button, gets monitored, gets uptime history, gets alerts when it goes
 down, and gets charts.
 
-There are five extension points, all shaped the same way:
+There are six extension points, all shaped the same way:
 
 | Interface | Adds |
 |---|---|
@@ -433,6 +433,7 @@ There are five extension points, all shaped the same way:
 | `ITabKind` | a whole kind of page |
 | `IDashboardImporter` | a config format to read from another dashboard |
 | `IEndpointExtension` | routes the server answers itself — a download, an upload, a share link |
+| `IBackgroundJob` | work on a timer — a nightly tidy-up, an expiry sweep |
 
 A provider only reports numbers; it never decides that a number is *bad*. Reporting a
 nearly-full disk as "down" to borrow the alerting would make every tile and uptime figure
