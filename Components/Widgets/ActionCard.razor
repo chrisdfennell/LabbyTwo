@@ -1,0 +1,118 @@
+@inject IHttpClientFactory HttpFactory
+@inject ILogger<ActionCard> Log
+
+@* A button that does something. Every other card reports; this one acts — which is the
+   difference between a dashboard you look at and one you use. Deliberately just an HTTP
+   call: point it at n8n, Home Assistant, IFTTT or a container's own API and the dangerous
+   half stays over there, with its own credentials and its own idea of what is allowed. *@
+
+@if (Url.Length == 0)
+{
+    <p class="tile-meta mb-0">No URL set — edit this card and give it something to call.</p>
+}
+else
+{
+    <button class="btn @ButtonClass w-100" @onclick="PressAsync" disabled="@_busy">
+        @if (_busy)
+        {
+            <span>Working…</span>
+        }
+        else
+        {
+            @(Label.Length > 0 ? Label : "Run")
+        }
+    </button>
+
+    @if (_confirming)
+    {
+        <ConfirmDialog Title="@($"{Label}?")"
+                       Message="@(Confirm.Length > 0 ? Confirm : "This will send the request straight away.")"
+                       ConfirmText="Do it"
+                       OnCancel="() => _confirming = false"
+                       OnConfirm="SendAsync" />
+    }
+
+    @if (_result is { Length: > 0 })
+    {
+        <div class="tile-meta mt-2 @(_failed ? "text-danger" : "text-success")">@_result</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private bool _busy;
+    private bool _confirming;
+    private bool _failed;
+    private string _result = "";
+
+    private string Url => Context.Widget.Settings.Get("url").Trim();
+    private string Label => Context.Widget.Settings.Get("label").Trim();
+    private string Method => Context.Widget.Settings.Get("method", "POST").ToUpperInvariant();
+    private string Body => Context.Widget.Settings.Get("body");
+    private string Confirm => Context.Widget.Settings.Get("confirm").Trim();
+    private bool NeedsConfirming => Context.Widget.Settings.GetBool("ask_first", true);
+
+    private string ButtonClass => Context.Widget.Settings.Get("style", "primary") switch
+    {
+        "danger" => "btn-danger",
+        "secondary" => "btn-outline-secondary",
+        _ => "btn-primary",
+    };
+
+    /// <summary>
+    /// Asking first is the default. A button on a dashboard is a button a child leaning on
+    /// a wall tablet can press, and "restart the NAS" should not be one tap away.
+    /// </summary>
+    private async Task PressAsync()
+    {
+        if (NeedsConfirming)
+        {
+            _confirming = true;
+            return;
+        }
+
+        await SendAsync();
+    }
+
+    private async Task SendAsync()
+    {
+        _confirming = false;
+        _busy = true;
+        _result = "";
+
+        try
+        {
+            var http = HttpFactory.CreateClient(ProviderHttp.ClientName);
+            using var request = new HttpRequestMessage(new HttpMethod(Method), Url);
+
+            if (Body is { Length: > 0 } payload && Method != "GET")
+            {
+                // JSON unless it plainly is not, so pasting a webhook payload just works.
+                var looksJson = payload.TrimStart().StartsWith('{') || payload.TrimStart().StartsWith('[');
+                request.Content = new StringContent(payload,
+                    System.Text.Encoding.UTF8, looksJson ? "application/json" : "text/plain");
+            }
+
+            if (Context.Widget.Settings.Get("token") is { Length: > 0 } token)
+                request.Headers.TryAddWithoutValidation("Authorization", token);
+
+            using var response = await http.SendAsync(request, CancellationToken.None);
+
+            _failed = !response.IsSuccessStatusCode;
+            _result = response.IsSuccessStatusCode
+                ? $"Sent — {(int)response.StatusCode} at {DateTimeOffset.Now:HH:mm:ss}"
+                : $"{(int)response.StatusCode} {response.ReasonPhrase}";
+        }
+        catch (Exception ex)
+        {
+            _failed = true;
+            _result = ex.GetBaseException().Message;
+            Log.LogWarning(ex, "Action card {Label} failed", Label);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

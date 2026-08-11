@@ -1,0 +1,85 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+@* What happened while you were out. Every other card says how things are *now*; nothing
+   said what changed, so a service that dropped at lunchtime and came back looks identical
+   to one that never moved. *@
+
+@if (_events.Count == 0)
+{
+    <p class="tile-meta mb-0">Nothing has changed in the last @Hours hours.</p>
+}
+else
+{
+    <div class="d-grid gap-1">
+        @foreach (var entry in _events)
+        {
+            <div class="d-flex justify-content-between gap-2">
+                <span class="text-truncate">
+                    <span class="status-dot @(entry.Event.IsUp ? "is-up" : "is-down")"></span>
+                    @Name(entry.Event.ConnectionId)
+                    <span class="tile-meta">@(entry.Event.IsUp ? "came back" : "went down")</span>
+                </span>
+                <span class="tile-meta flex-none text-nowrap" title="@entry.Event.At.ToString("f")">
+                    @Ago.Since(entry.Event.At)
+                </span>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Entry(HistoryStore.StatusEvent Event);
+
+    private IReadOnlyList<Entry> _events = [];
+    private IReadOnlyList<Connection> _connections = [];
+
+    private int Hours => Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 720);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 50);
+    private bool DownOnly => Context.Widget.Settings.GetBool("down_only", false);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _connections = await Config.ConnectionsAsync();
+
+        // Asked for generously and trimmed here: the store returns the newest events across
+        // everything, and the window is what makes this "today" rather than "ever".
+        var since = DateTimeOffset.Now.AddHours(-Hours);
+
+        // A card bound to a connection shows only that one; unbound shows everything, which
+        // is the more useful default on a dashboard.
+        var events = await History.RecentEventsAsync(Context.Connection?.Id, Limit * 4);
+
+        _events =
+        [
+            .. events
+                .Where(e => e.At >= since)
+                .Where(e => !DownOnly || !e.IsUp)
+                .Take(Limit)
+                .Select(e => new Entry(e)),
+        ];
+    }
+
+    private string Name(string connectionId) =>
+        _connections.FirstOrDefault(c => c.Id == connectionId)?.Name ?? "Something removed";
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

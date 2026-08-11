@@ -1,0 +1,95 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+@* The number people actually quote about a service, and a strip of days behind it so the
+   figure has a shape — 99.2% from one bad afternoon reads very differently from 99.2%
+   spread over a fortnight of flapping. The status page has had this; a dashboard could
+   not show it. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else
+{
+    <div class="metric-value">
+        @(_uptime is { Samples: > 0 } ? _uptime.Percent.ToString("0.0") : "—")
+        <span class="metric-unit">%</span>
+    </div>
+    <div class="tile-meta">@Caption</div>
+
+    @if (_days.Count > 0)
+    {
+        @* The status page's strip, reused rather than reinvented, so a day means the same
+           colour wherever you look at it. *@
+        <div class="uptime-strip mt-2" role="img" aria-label="@AltText">
+            @foreach (var day in _days)
+            {
+                <span class="uptime-day @DayClass(day)" title="@DayTitle(day)"></span>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private HistoryStore.Uptime? _uptime;
+    private IReadOnlyList<HistoryStore.Day> _days = [];
+
+    private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 30), 1, 90);
+    private bool ShowDays => Context.Widget.Settings.GetBool("show_days", true);
+
+    private string Caption =>
+        Context.Widget.Settings.Get("caption") is { Length: > 0 } set
+            ? set
+            : _uptime is { Samples: 0 }
+                ? "No history yet"
+                : $"{Context.Connection?.Name} · last {Days} days";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is not { } connection)
+            return;
+
+        _uptime = await History.UptimeAsync(connection.Id, TimeSpan.FromDays(Days));
+        _days = ShowDays ? await History.DailyUptimeAsync(connection.Id, Days) : [];
+    }
+
+    /// <summary>
+    /// A day with no data is not a day that was down. Grey says "nothing recorded", which
+    /// is the honest answer for the days before this connection existed.
+    /// </summary>
+    private static string DayClass(HistoryStore.Day day) => day.Percent switch
+    {
+        null => "is-unknown",
+        >= 99.9 => "is-good",
+        >= 95 => "is-warn",
+        _ => "is-bad",
+    };
+
+    private static string DayTitle(HistoryStore.Day day) =>
+        day.Percent is { } percent
+            ? $"{day.Date:d MMM} — {percent:0.0}%"
+            : $"{day.Date:d MMM} — nothing recorded";
+
+    private string AltText =>
+        _days.Count == 0 ? "" : $"Daily uptime for the last {_days.Count} days";
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

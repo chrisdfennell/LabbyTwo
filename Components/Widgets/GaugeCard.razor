@@ -1,0 +1,104 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+
+@* A proportion, drawn as one. Everything numeric here is a figure or a line, and neither
+   answers "how full is it" at a glance from across the room — which is the only question
+   a disk or a battery is ever really asked. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (_value is not { } value)
+{
+    <p class="tile-meta mb-0">No reading for @Metric yet.</p>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-baseline">
+        <span class="metric-value gauge-value">@Spec.Format(value, Decimals)</span>
+        <span class="tile-meta">of @Spec.Format(Max, 0)</span>
+    </div>
+
+    <div class="gauge" role="meter" aria-valuenow="@value" aria-valuemin="0" aria-valuemax="@Max"
+         aria-label="@Spec.Label">
+        <div class="gauge-fill @Level(value)" style="width: @Percent(value).ToString("0.#")%"></div>
+        @if (Warn is { } warn && warn > 0 && warn < Max)
+        {
+            <div class="gauge-mark" style="left: @((warn / Max * 100).ToString("0.#"))%"
+                 title="@($"Warning at {Spec.Format(warn, 0)}")"></div>
+        }
+    </div>
+
+    <div class="tile-meta">@Caption</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private double? _value;
+
+    private string Metric => Context.Widget.Settings.Get("metric", "disk_percent");
+    private MetricSpec Spec => Registry.Metric(Context.Connection, Metric);
+    private int Decimals => Math.Clamp(Context.Widget.Settings.GetInt("decimals", Spec.Decimals), 0, 4);
+
+    /// <summary>Percentages know their own scale; anything else has to be told.</summary>
+    private double Max => Context.Widget.Settings.GetDouble("max", Spec.Unit.Trim() == "%" ? 100 : 0) is var max and > 0
+        ? max
+        : 100;
+
+    private double? Warn => Context.Widget.Settings.GetDouble("warn", 0) is var warn and > 0 ? warn : null;
+
+    private string Caption =>
+        Context.Widget.Settings.Get("caption") is { Length: > 0 } set
+            ? set
+            : $"{Spec.Label} · {Context.Connection?.Name}";
+
+    private double Percent(double value) => Math.Clamp(value / Max * 100, 0, 100);
+
+    /// <summary>
+    /// Colour follows the warning mark when one is set, and otherwise the usual reading of
+    /// a bar: nearly full is worth noticing. Below the mark it stays neutral — a gauge that
+    /// is amber all day teaches you to ignore it.
+    /// </summary>
+    private string Level(double value)
+    {
+        var threshold = Warn ?? Max * 0.8;
+        var critical = Warn is { } warn ? warn + (Max - warn) / 2 : Max * 0.95;
+
+        return value >= critical ? "is-critical" : value >= threshold ? "is-warm" : "is-fine";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is not { } connection)
+            return;
+
+        if (Health.State(connection.Id)?.Metrics.TryGetValue(Metric, out var live) == true)
+        {
+            _value = live;
+            return;
+        }
+
+        var stored = await History.LatestAsync(connection.Id, TimeSpan.FromHours(6));
+        _value = stored.TryGetValue(Metric, out var recorded) ? recorded : null;
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

@@ -442,6 +442,100 @@ public sealed class MetricsTableWidget : IWidgetType
     public Type Component => typeof(MetricsTableCard);
 }
 
+public sealed class UptimeWidget : IWidgetType
+{
+    public string Type => "uptime";
+    public string DisplayName => "Uptime";
+    public string Icon => "📶";
+    public string Description => "The percentage, with a bar per day behind it so the figure has a shape.";
+    public IReadOnlyList<string> ProviderTypes => AnyProvider.Types;
+    public int DefaultWidth => 3;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("days", "Days", FieldKind.Number, Default: "30"),
+        new("show_days", "Show a bar per day", FieldKind.Bool, Default: "true"),
+        new("caption", "Caption", FieldKind.Text),
+    ];
+    public Type Component => typeof(UptimeCard);
+}
+
+public sealed class ChangesWidget : IWidgetType
+{
+    public string Type => "changes";
+    public string DisplayName => "Recent changes";
+    public string Icon => "🔀";
+    public string Description => "What went down or came back, newest first. Bind it to nothing to watch everything.";
+    public IReadOnlyList<string> ProviderTypes => AnyProvider.Types;
+    public bool NeedsConnection => false;
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("hours", "Look back (hours)", FieldKind.Number, Default: "24"),
+        new("limit", "Most to list", FieldKind.Number, Default: "8"),
+        new("down_only", "Only things going down", FieldKind.Bool, Default: "false",
+            Help: "Off shows recoveries too, which is usually what makes the story readable."),
+    ];
+    public Type Component => typeof(ChangesCard);
+}
+
+public sealed class GaugeWidget : IWidgetType
+{
+    public string Type => "gauge";
+    public string DisplayName => "Gauge";
+    public string Icon => "🌡️";
+    public string Description => "One reading as a bar, with a warning mark — how full, how charged, how hot.";
+    public IReadOnlyList<string> ProviderTypes => AnyProvider.Types;
+    public int DefaultWidth => 3;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("metric", "Metric", FieldKind.Metric, "disk_percent", Required: true),
+        new("max", "Full scale", FieldKind.Number,
+            Help: "Blank uses 100, which is right for anything measured in percent."),
+        new("warn", "Warning mark", FieldKind.Number,
+            Help: "Optional. Draws a line on the bar and colours it past that point."),
+        new("caption", "Caption", FieldKind.Text),
+        new("decimals", "Decimal places", FieldKind.Number),
+    ];
+    public Type Component => typeof(GaugeCard);
+}
+
+public sealed class ActionWidget : IWidgetType
+{
+    public string Type => "action";
+    public string DisplayName => "Action button";
+    public string Icon => "🔘";
+    public string Description =>
+        "A button that calls a URL — an n8n flow, a Home Assistant scene, a container's own API.";
+    public int DefaultWidth => 2;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("label", "Button says", FieldKind.Text, "Run the backup", Required: true),
+        new("url", "Calls", FieldKind.Url, "http://n8n:5678/webhook/backup", Required: true,
+            Help: "Called by the LabbyTwo server, so it needs to resolve from there rather than from your phone."),
+        new("method", "Method", FieldKind.Select, Default: "POST", Options:
+        [
+            new SelectOption("POST", "POST"),
+            new SelectOption("GET", "GET"),
+            new SelectOption("PUT", "PUT"),
+            new SelectOption("DELETE", "DELETE"),
+        ]),
+        new("body", "Body", FieldKind.Textarea,
+            Help: "Optional. Sent as JSON when it looks like JSON, otherwise as plain text."),
+        new("token", "Authorization header", FieldKind.Password,
+            Help: "Optional, sent verbatim — so include the \"Bearer \" if the far end wants one."),
+        new("ask_first", "Ask before running", FieldKind.Bool, Default: "true",
+            Help: "On by default. A dashboard button is a button somebody can lean on."),
+        new("confirm", "Confirmation asks", FieldKind.Text, Help: "Optional wording for that prompt."),
+        new("style", "Looks", FieldKind.Select, Default: "primary", Options:
+        [
+            new SelectOption("primary", "Ordinary"),
+            new SelectOption("secondary", "Quiet"),
+            new SelectOption("danger", "Dangerous"),
+        ]),
+    ];
+    public Type Component => typeof(ActionCard);
+}
+
 public sealed class AggregateWidget : IWidgetType
 {
     public string Type => "aggregate";

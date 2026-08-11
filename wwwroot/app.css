@@ -275,6 +275,47 @@ h1[tabindex]:focus { outline: none; }
     .widget-skeleton span { animation: none; }
 }
 
+/* The uptime card reuses the status page's own day strip — see .uptime-strip further
+   down. Two visual languages for the same idea would be worse than none, and the classes
+   already existed. */
+
+/* ---------- gauge ---------- */
+
+.gauge {
+    position: relative;
+    height: .6rem;
+    margin: .35rem 0;
+    border-radius: .3rem;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--edge) 60%, transparent);
+}
+
+.gauge-fill {
+    height: 100%;
+    border-radius: .3rem;
+    transition: width .3s ease;
+}
+
+.gauge-fill.is-fine { background: var(--up); }
+.gauge-fill.is-warm { background: var(--warn); }
+.gauge-fill.is-critical { background: var(--down); }
+
+/* The warning line sits above the fill so it stays visible once the bar passes it. */
+.gauge-mark {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: var(--text);
+    opacity: .55;
+}
+
+.gauge-value { font-size: 1.6rem; }
+
+@media (prefers-reduced-motion: reduce) {
+    .gauge-fill { transition: none; }
+}
+
 /* A camera picture fills its card and keeps its own shape — letterboxed rather than
    stretched, because a squashed doorway is worse than a black bar. */
 .camera-frame {
