@@ -8,27 +8,61 @@ namespace LabbyTwo.Core;
 public sealed class Registry(
     IEnumerable<IConnectionProvider> providers,
     IEnumerable<IWidgetType> widgets,
-    IEnumerable<ITabKind> tabKinds)
+    IEnumerable<ITabKind> tabKinds,
+    ModuleCatalog? catalog = null)
 {
     private readonly Dictionary<string, IConnectionProvider> _providers =
-        Deduplicate(providers, p => p.Type);
+        Deduplicate(providers, p => p.Type, p => p.Fields, catalog);
 
     private readonly Dictionary<string, IWidgetType> _widgets =
-        Deduplicate(widgets, w => w.Type);
+        Deduplicate(widgets, w => w.Type, w => w.Fields, catalog);
 
     private readonly Dictionary<string, ITabKind> _tabKinds =
-        Deduplicate(tabKinds, k => k.Kind);
+        Deduplicate(tabKinds, k => k.Kind, k => k.Fields, catalog);
 
     /// <summary>
     /// Last registration wins on a key collision. A plugin is registered after the
     /// built-ins, so shipping a "qnap" provider of your own replaces the bundled one
     /// rather than crashing the app at startup with a duplicate-key exception.
+    ///
+    /// Each extension is also asked to describe itself once, here, where the answer can be
+    /// thrown away. Anything that cannot manage that is left out and reported on the
+    /// Settings page — because those properties are read on the path that loads every
+    /// connection, so one plugin throwing there used to take down every page in the app,
+    /// not merely its own. A plugin's mistakes should cost you the plugin.
     /// </summary>
-    private static Dictionary<string, T> Deduplicate<T>(IEnumerable<T> items, Func<T, string> key)
+    private static Dictionary<string, T> Deduplicate<T>(
+        IEnumerable<T> items,
+        Func<T, string> key,
+        Func<T, IReadOnlyList<FieldSpec>> describe,
+        ModuleCatalog? catalog)
     {
         var result = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var item in items)
-            result[key(item)] = item;
+        {
+            string id;
+            try
+            {
+                id = key(item);
+
+                // Touch the settings it claims to have. This is where a half-updated
+                // plugin — built against a different LabbyTwo — actually fails.
+                _ = describe(item).Count;
+            }
+            catch (Exception ex)
+            {
+                var type = item?.GetType();
+                catalog?.Failures.Add(new ModuleFailure(
+                    type?.Assembly.Location is { Length: > 0 } path ? path : type?.FullName ?? "unknown",
+                    $"{type?.Name} could not describe itself, so it was left out: {ex.GetBaseException().Message}. " +
+                    "Rebuild the plugin against this version of LabbyTwo."));
+                continue;
+            }
+
+            result[id] = item;
+        }
+
         return result;
     }
 

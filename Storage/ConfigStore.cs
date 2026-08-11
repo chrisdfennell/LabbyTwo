@@ -407,7 +407,22 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
         var provider = registry.Provider(providerType);
         if (provider is null)
             return settings;
-        foreach (var field in provider.Fields.Where(f => f.IsSecret))
+
+        // Belt and braces with the check in Registry: this runs for every connection on
+        // every reload, so if a provider ever does start throwing here, the failure is one
+        // connection's credentials rather than every page in the app.
+        IReadOnlyList<FieldSpec> fields;
+        try
+        {
+            fields = provider.Fields;
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "Provider {Provider} could not list its fields, so its secrets were left encrypted", providerType);
+            return settings;
+        }
+
+        foreach (var field in fields.Where(f => f.IsSecret))
         {
             if (!settings.TryGetValue(field.Key, out var value) || !value.StartsWith(SecretPrefix))
                 continue;
