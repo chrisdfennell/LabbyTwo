@@ -80,6 +80,22 @@ else
                             The connection this widget used is gone. Edit it to pick another.
                         </p>
                     }
+                    else if (!RendererInfo.IsInteractive)
+                    {
+                        @* The page is being prerendered, and prerendering waits for every
+                           component on it to finish its work before a single byte is sent.
+                           A dozen cards each calling out to Plex, the NAS and the database
+                           therefore cost the *whole page* seconds before anything appears.
+
+                           So the prerender draws the grid — real sizes, real titles — with
+                           a placeholder in each card. The page is on screen at once, and
+                           each widget fills itself in as its own data arrives, which is
+                           also why one slow service can no longer hold up the other
+                           eleven. *@
+                        <div class="widget-skeleton" aria-hidden="true">
+                            <span></span><span></span><span></span>
+                        </div>
+                    }
                     else
                     {
                         <DynamicComponent Type="type.Component"
