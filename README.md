@@ -179,6 +179,12 @@ monitoring works.
 | **Webhook** | *Alert channel.* Discord, Slack or ntfy — the payload shape is detected from the URL. |
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
 | **Healthchecks** | Scheduled jobs that have stopped checking in. Catches the cron that silently stopped, which nothing else here can see. |
+| **Cloudflare Tunnel** | Whether your tunnels are healthy and how many connectors each has — the outage nobody on the LAN can see. |
+| **OPNsense** | Gateway packet loss and latency, WAN addresses, memory. The router is never "down"; it just starts dropping things. |
+| **Shelly** | Power draw, energy used and temperature, straight off the plug. No cloud, no broker. Gen1 and Gen2 both. |
+| **Weather forecast** | Today's high, low and chance of rain from Open-Meteo — no API key, and the half a weather station cannot tell you. |
+| **Audiobookshelf** | Libraries, items, and how many are part-listened. |
+| **Navidrome** | Albums, songs, and who is playing something right now. |
 | **Email (SMTP)** | *Alert channel.* Any SMTP server. The one that needs nothing else installed. |
 | **IFTTT** | *Alert channel.* Fires an applet, so an alert can turn a light on rather than only say something. |
 

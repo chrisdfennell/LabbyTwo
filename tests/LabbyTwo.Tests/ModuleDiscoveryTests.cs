@@ -44,6 +44,7 @@ public class ModuleDiscoveryTests
             "uptime-kuma", "speedtest-tracker", "immich", "nextcloud",
             "prometheus", "pbs", "duplicati", "scrutiny", "frigate", "tailscale", "synology",
             "healthchecks", "email", "ifttt",
+            "cloudflare", "opnsense", "shelly", "forecast", "audiobookshelf", "navidrome",
         ];
 
         Assert.Equal(
