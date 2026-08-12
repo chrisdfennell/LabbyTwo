@@ -24,3 +24,7 @@ data/
 
 # Docker image exports
 *.tar
+
+# Python bytecode, from running the scripts in docs/
+__pycache__/
+*.pyc
