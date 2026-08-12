@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 using LabbyTwo.Components.Widgets;
 using LabbyTwo.Core;
@@ -814,6 +815,62 @@ public class UpdateCheckerTests
         var result = UpdateChecker.ReadRelease("v1.0.0", json.RootElement);
         Assert.False(result.Known);
         Assert.NotNull(result.Error);
+    }
+}
+
+public class ProbeSchedulingTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 8, 12, 12, 0, 0, TimeSpan.Zero);
+    private static readonly TimeSpan Sweep = TimeSpan.FromSeconds(30);
+
+    [Fact]
+    public void MostThingsAreAskedEverySweep()
+    {
+        // The default. Anything on your own network reports a number that is true at the
+        // moment you ask, so there is nothing to be gained by asking less often.
+        Assert.True(HealthMonitor.IsDue(TimeSpan.Zero, Now.AddSeconds(-1), Now, Sweep));
+    }
+
+    [Fact]
+    public void SomethingNeverProbedIsAlwaysDue()
+    {
+        // Or a restart would leave a forecast tile blank for a quarter of an hour.
+        Assert.True(HealthMonitor.IsDue(TimeSpan.FromMinutes(15), null, Now, Sweep));
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(14, false)]
+    [InlineData(16, true)]
+    [InlineData(60, true)]
+    public void AMeteredUpstreamIsLeftAloneUntilItsIntervalHasPassed(int minutesAgo, bool due)
+        => Assert.Equal(due, HealthMonitor.IsDue(
+            TimeSpan.FromMinutes(15), Now.AddMinutes(-minutesAgo), Now, Sweep));
+
+    [Fact]
+    public void TheIntervalDoesNotDriftLongerEveryTimeItFires()
+    {
+        // The sweep runs on its own rhythm, so the tick that should fire usually lands a
+        // fraction short. Without the slack it waits another whole sweep, and 15 minutes
+        // becomes 15:30, then 16:00, and so on for as long as the process is up.
+        var justShort = Now.AddMinutes(-15).AddSeconds(2);
+        Assert.True(HealthMonitor.IsDue(TimeSpan.FromMinutes(15), justShort, Now, Sweep));
+    }
+
+    [Fact]
+    public void TheProvidersThatCallAMeteredApiSayHowOftenTheyMayBeAsked()
+    {
+        // Open-Meteo cut us off for a day when these polled on the default sweep. Named
+        // individually so removing one is a deliberate act rather than an oversight.
+        var registry = TestHost.Build(TestHost.TempDirectory()).GetRequiredService<Registry>();
+
+        foreach (var type in new[] { "forecast", "air-quality", "nws" })
+        {
+            var provider = registry.Provider(type);
+            Assert.NotNull(provider);
+            Assert.True(provider.MinimumInterval > TimeSpan.Zero,
+                $"{type} calls a public API on a schedule and must declare a MinimumInterval.");
+        }
     }
 }
 

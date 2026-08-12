@@ -26,6 +26,15 @@ public sealed class WeatherAlertsProvider(IHttpClientFactory httpFactory, AppSet
     public string Description =>
         "Tornado, flood, winter-storm and heat warnings from the National Weather Service, pushed to your alert channels. United States only.";
 
+    /// <summary>
+    /// Matched to <see cref="Services.WeatherAlertJob"/>, which is what actually delivers a
+    /// warning and already runs every five minutes. The connection probe only records the
+    /// counts for tiles and charts, so polling it six times a minute added nothing but
+    /// load on a public service that asks callers to be reasonable. Deliberately not
+    /// longer: a tornado warning is the one reading here where minutes matter.
+    /// </summary>
+    public TimeSpan MinimumInterval => TimeSpan.FromMinutes(5);
+
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("latitude", "Latitude", FieldKind.Text,

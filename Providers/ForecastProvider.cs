@@ -21,6 +21,16 @@ public sealed class ForecastProvider(IHttpClientFactory httpFactory, AppSettings
     public string Category => "Sensors";
     public string Description => "The next few hours and the next couple of weeks — rain, wind, UV and snow. No API key needed.";
 
+    /// <summary>
+    /// Open-Meteo recomputes its forecast hourly, so a fifteen-minute floor already asks
+    /// four times more often than the answer can change. At the default thirty-second
+    /// sweep this was 2,880 requests a day from one connection — and this is a fat
+    /// request, four hourly variables over a week plus eleven daily ones, which their
+    /// fair-use policy weighs accordingly. Free use is meant to stay under 10,000 a day.
+    /// Two of these connections were enough to spend it by the evening.
+    /// </summary>
+    public TimeSpan MinimumInterval => TimeSpan.FromMinutes(15);
+
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("latitude", "Latitude", FieldKind.Text,

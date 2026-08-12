@@ -22,6 +22,13 @@ public sealed class AirQualityProvider(IHttpClientFactory httpFactory, AppSettin
     public string Category => "Sensors";
     public string Description => "AQI, smoke particulates and ozone from Open-Meteo. No API key needed.";
 
+    /// <summary>
+    /// Same reasoning as the forecast: Open-Meteo publishes air quality hourly, and asking
+    /// every thirty seconds spends the day's allowance on 119 identical answers out of
+    /// every 120. See <see cref="ForecastProvider.MinimumInterval"/>.
+    /// </summary>
+    public TimeSpan MinimumInterval => TimeSpan.FromMinutes(15);
+
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("latitude", "Latitude", FieldKind.Text,

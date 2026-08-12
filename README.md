@@ -246,6 +246,12 @@ charts without a line of chart-specific code. Providers also say how their numbe
 read — units, labels, precision — so a new integration's metrics look right on a tile
 without touching anything else.
 
+A provider can also say how often it is *worth* asking, and the weather ones do. Open-Meteo
+recomputes hourly, so the forecast and air quality are polled every fifteen minutes rather
+than every thirty seconds: the answer would be the same 119 times out of 120, and the
+120th would be a quota error. Everything that answers from your own network is still asked
+every sweep.
+
 The **JSON API** provider is the one that makes "add your everything" true. Point it at
 any endpoint that returns JSON, list the numbers you want as `name = path`, and they
 become tiles, charts and alert-able metrics — no code, no restart:

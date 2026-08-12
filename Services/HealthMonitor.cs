@@ -51,6 +51,35 @@ public sealed class HealthMonitor(
     public bool IsMonitored(Connection connection) =>
         connection.Enabled && registry.Provider(connection.Provider)?.IsMonitored != false;
 
+    /// <summary>
+    /// Whether enough time has passed to ask this one again. Always true for the great
+    /// majority, which declare no minimum; always true for a connection never probed, so
+    /// a restart does not leave one blank for a quarter of an hour.
+    /// </summary>
+    public bool IsDue(Connection connection, DateTimeOffset now) => IsDue(
+        registry.Provider(connection.Provider)?.MinimumInterval ?? TimeSpan.Zero,
+        State(connection.Id)?.At,
+        now,
+        TimeSpan.FromSeconds(Math.Clamp(options.Value.ProbeSeconds, 5, 3600)));
+
+    /// <summary>
+    /// The decision on its own, so it can be reasoned about without a database or a clock.
+    /// </summary>
+    /// <param name="lastProbe">Null for a connection never probed in this process.</param>
+    public static bool IsDue(TimeSpan minimum, DateTimeOffset? lastProbe, DateTimeOffset now, TimeSpan sweep)
+    {
+        if (minimum <= TimeSpan.Zero || lastProbe is not { } last)
+            return true;
+
+        // Half a sweep of slack. Sweeps land on their own rhythm, not on this one, so
+        // without it a 15-minute minimum checked every 30 seconds falls a moment short on
+        // the tick that should fire, waits a whole sweep more, and drifts a little further
+        // every time — 15 minutes becomes 15:30, then 16:00.
+        return now - last >= minimum - (sweep / 2);
+    }
+
+    private bool IsDue(Connection connection) => IsDue(connection, DateTimeOffset.Now);
+
     public ProbeState? State(string connectionId) =>
         _states.TryGetValue(connectionId, out var state) ? state : null;
 
@@ -91,9 +120,16 @@ public sealed class HealthMonitor(
         foreach (var id in _states.Keys.Where(id => connections.All(c => c.Id != id)))
             _states.TryRemove(id, out _);
 
+        // Some upstreams publish on a schedule and meter how often you ask — a forecast is
+        // recomputed hourly, so asking every thirty seconds gets the same answer 119 times
+        // and a quota error on the 120th. Those declare a MinimumInterval and are skipped
+        // until it has passed, which leaves their last real reading in place rather than
+        // replacing it with a cached one dressed up as a new measurement.
+        var due = connections.Where(IsDue).ToList();
+
         // Probes are independent and mostly waiting on the network; running them together
         // keeps a sweep as slow as the slowest host rather than the sum of all of them.
-        await Task.WhenAll(connections.Select(connection => ProbeAndRecordAsync(connection, ct)));
+        await Task.WhenAll(due.Select(connection => ProbeAndRecordAsync(connection, ct)));
 
         Updated?.Invoke();
 

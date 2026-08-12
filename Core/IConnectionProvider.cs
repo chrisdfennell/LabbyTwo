@@ -25,6 +25,24 @@ public interface IConnectionProvider
     /// </summary>
     bool IsMonitored => true;
 
+    /// <summary>
+    /// The least often this is worth asking. Zero — the default — means every sweep, which
+    /// is right for anything that answers from your own network and reports a number that
+    /// is true at the moment you ask.
+    ///
+    /// Override it for an upstream that publishes on a schedule, and especially for one
+    /// that meters how often you ask. A weather forecast is recomputed hourly and a public
+    /// API is entitled to be annoyed at being asked for it every thirty seconds; the
+    /// answer would be the same 119 times out of 120, and the 120th would be a quota
+    /// error. The monitor skips the connection until this much time has passed, so what
+    /// gets recorded is a real probe taken less often rather than a cached one pretending
+    /// to be fresh.
+    ///
+    /// The Test button ignores this and always makes the request — testing a connection
+    /// that answered from a cache would be testing nothing.
+    /// </summary>
+    TimeSpan MinimumInterval => TimeSpan.Zero;
+
     IReadOnlyList<FieldSpec> Fields { get; }
 
     /// <summary>

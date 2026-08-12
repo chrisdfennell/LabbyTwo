@@ -140,6 +140,14 @@ charts.
 - **A provider is a singleton.** Cache the last reading on it if a widget needs richer
   data than metrics can carry; `AmbientWeatherProvider` and `PlexProvider` both do this.
 - **`IsMonitored => false`** for something that exists to be used rather than watched.
+- **`MinimumInterval`** if the far end publishes on a schedule, and especially if it meters
+  how often you ask. The sweep is every 30 seconds by default, which is 2,880 requests a
+  day per connection — fine against your own NAS, and enough to get you cut off by a free
+  public API. `ForecastProvider` sets fifteen minutes, because Open-Meteo recomputes hourly
+  and the answer would be identical 119 times out of 120. The monitor then skips the
+  connection until it is due, so what lands in the history is a real probe taken less
+  often rather than a cached one dressed up as a new measurement. The Test button ignores
+  it and always makes the request.
 - **Implement `IAlertChannel` instead** and your provider becomes somewhere notifications
   are *sent*, with the same generated form and encrypted storage. See `WebhookProvider`.
 - **Suggest the rules that matter.** `SuggestedRules` offers ready-made alert rules on the
