@@ -47,7 +47,10 @@ else
             var type = Registry.WidgetType(widget.Type);
             var connection = _connections.FirstOrDefault(c => c.Id == widget.ConnectionId);
             var current = widget;
-            <div class="widget @DragClass(current)" style="grid-column: span @Math.Clamp(widget.Width, 1, 12)"
+            @* The width is a class rather than an inline span so the breakpoints can widen
+               a narrow card on a small screen. An inline style could not be overridden by
+               a media query without !important on every rule. *@
+            <div class="widget w-@Math.Clamp(widget.Width, 1, 12) @DragClass(current)"
                  draggable="@(_editing ? "true" : null)"
                  @ondragstart="() => _dragging = current"
                  @ondragend="() => { _dragging = null; _dragOver = null; }"
@@ -148,7 +151,7 @@ else
 
         @if (_moving is not null)
         {
-            <div class="widget place-at-end" style="grid-column: span 12">
+            <div class="widget place-at-end w-12">
                 <button class="btn btn-sm btn-outline-primary w-100" @onclick="() => PlaceBeforeAsync(null)">
                     ↳ Place at the end
                 </button>

@@ -362,16 +362,63 @@ h1[tabindex]:focus { outline: none; }
 }
 .drag-handle:hover { color: var(--text); }
 
+/* Card widths are twelfths of the row.
+
+   The column count stays at twelve at every size, and only the spans below move. It is
+   tempting to drop the template to six columns on a narrower screen instead, and that is
+   what this used to do — but a card wider than the template does not shrink to fit. The
+   grid invents the columns it is short of, and implicit columns are sized `auto` rather
+   than `1fr`. One full-width search box was therefore enough to re-column the entire
+   dashboard into twelve uneven strips, which is why a quarter-width tile ended up 34px
+   wide with its label broken over three lines. */
+.widget-grid > .w-1  { grid-column: span 1; }
+.widget-grid > .w-2  { grid-column: span 2; }
+.widget-grid > .w-3  { grid-column: span 3; }
+.widget-grid > .w-4  { grid-column: span 4; }
+.widget-grid > .w-5  { grid-column: span 5; }
+.widget-grid > .w-6  { grid-column: span 6; }
+.widget-grid > .w-7  { grid-column: span 7; }
+.widget-grid > .w-8  { grid-column: span 8; }
+.widget-grid > .w-9  { grid-column: span 9; }
+.widget-grid > .w-10 { grid-column: span 10; }
+.widget-grid > .w-11 { grid-column: span 11; }
+.widget-grid > .w-12 { grid-column: span 12; }
+
+/* Nothing narrower than a third of the row on a laptop. A quarter-width card is fine at
+   1400px and is a column of hyphenated words at 1000px. These override by source order
+   rather than !important, which is why they live after the block above. */
 @media (max-width: 1100px) {
-    .widget-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .widget-grid > .w-1,
+    .widget-grid > .w-2,
+    .widget-grid > .w-3 { grid-column: span 4; }
 }
+
+/* Half a row, then. Below this a third is two words wide. */
+@media (max-width: 900px) {
+    .widget-grid > .w-1,
+    .widget-grid > .w-2,
+    .widget-grid > .w-3,
+    .widget-grid > .w-4,
+    .widget-grid > .w-5,
+    .widget-grid > .w-6 { grid-column: span 6; }
+
+    .widget-grid > .w-7,
+    .widget-grid > .w-8,
+    .widget-grid > .w-9,
+    .widget-grid > .w-10,
+    .widget-grid > .w-11 { grid-column: span 12; }
+}
+
 @media (max-width: 768px) {
     .app-shell { grid-template-columns: 1fr; }
     .app-nav { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; }
     .nav-links { flex-direction: row; flex-wrap: wrap; flex: 1 0 100%; }
-    .nav-footer { flex-direction: row; border-top: 0; }
-    .widget-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .widget { grid-column: span 2 !important; }
+    /* Wraps, or the last link is cut off by the edge of a phone. */
+    .nav-footer { flex-direction: row; flex-wrap: wrap; border-top: 0; }
+
+    /* One card per row. Scoped to the dashboard grid: the weather page's stat strip is
+       also made of .widget, and it sizes its own columns with auto-fill. */
+    .widget-grid > .widget { grid-column: span 12; }
 }
 
 /* ---------- status ---------- */
