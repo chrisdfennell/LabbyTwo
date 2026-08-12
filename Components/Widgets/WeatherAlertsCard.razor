@@ -1,0 +1,86 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject Registry Registry
+
+@* Warnings in the words the National Weather Service used. Nothing here is summarised or
+   softened: this is the one card where the source's own phrasing is the point, and
+   "TAKE COVER NOW" should arrive as written. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a weather warnings connection.</p>
+}
+else if (_warnings.Count == 0)
+{
+    <p class="tile-meta mb-0">✅ Nothing in force.</p>
+}
+else
+{
+    <div class="d-flex flex-column gap-2">
+        @foreach (var warning in Warnings)
+        {
+            <div class="weather-warning @warning.Css">
+                <div class="d-flex align-items-baseline gap-2">
+                    <span class="forecast-icon">@warning.Icon</span>
+                    <strong>@(warning.Headline is { Length: > 0 } ? warning.Headline : warning.Event)</strong>
+                </div>
+                <div class="tile-meta">
+                    @warning.Severity@(warning.Window is { Length: > 0 } ? $" · {warning.Window}" : "")
+                </div>
+                @if (ShowArea && warning.Area is { Length: > 0 })
+                {
+                    @* The NWS lists every zone by name, which for one Alaskan advisory ran to
+                       sixteen of them and buried the warning itself. The full list is still
+                       there on hover. *@
+                    <div class="tile-meta" title="@warning.Area">@Shorten(warning.Area)</div>
+                }
+                @if (ShowInstruction && warning.Instruction is { Length: > 0 })
+                {
+                    <p class="mb-0 mt-1 small">@warning.Instruction</p>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<WeatherAlertsProvider.Warning> _warnings = [];
+
+    private bool ShowArea => Context.Widget.Settings.GetBool("show_area", true);
+    private bool ShowInstruction => Context.Widget.Settings.GetBool("show_instruction", true);
+
+    private IReadOnlyList<WeatherAlertsProvider.Warning> Warnings =>
+        [.. _warnings.Take(Math.Clamp(Context.Widget.Settings.GetInt("limit", 5), 1, 25))];
+
+    /// <summary>
+    /// The first few zones and a count of the rest. Split on the semicolons the NWS uses,
+    /// so it breaks between places rather than mid-name.
+    /// </summary>
+    private static string Shorten(string area, int keep = 3)
+    {
+        var zones = area.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        return zones.Length <= keep
+            ? area
+            : string.Join("; ", zones.Take(keep)) + $" and {zones.Length - keep} more";
+    }
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override void OnParametersSet() => Load();
+
+    private void Load() =>
+        _warnings = Context.Connection is { } connection
+                    && Registry.Provider(connection.Provider) is WeatherAlertsProvider provider
+            ? provider.Active(connection)
+            : [];
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Load();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

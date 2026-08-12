@@ -20,6 +20,13 @@ public sealed class PingProvider : IConnectionProvider
 
     public IReadOnlyList<MetricSpec> Metrics => [new("rtt_ms", "Round-trip time", " ms", 1)];
 
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("Slow to answer", "rtt_ms", Comparison.Above, 150, ClearThreshold: 80, ForMinutes: 10,
+            Why: "Still up, but something is wrong: a saturated line, a failing wireless link, or a " +
+                 "host too busy to reply. Ten minutes, so one bad packet is not an alert."),
+    ];
+
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {
         var host = connection.Settings.Get("host");

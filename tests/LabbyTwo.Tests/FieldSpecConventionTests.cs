@@ -17,6 +17,7 @@ public class FieldSpecConventionTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddHttpClient();
+        services.AddTestStorage(TestHost.TempDirectory());
         services.AddModules(
             typeof(Registry).Assembly,
             Path.Combine(Path.GetTempPath(), "labbytwo-no-plugins-" + Guid.NewGuid().ToString("n")),

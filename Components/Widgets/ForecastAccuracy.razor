@@ -1,0 +1,149 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject ConfigStore Config
+@inject AppSettingsStore AppSettings
+
+@* Was the forecast right? Nobody else's dashboard can answer this, because answering it
+   needs both a prediction and a thermometer in the same garden — and you have both.
+
+   The prediction used is the first one recorded each day, so this scores the forecast you
+   read at breakfast rather than the one it quietly corrected to at teatime. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a forecast connection.</p>
+}
+else if (_station is null)
+{
+    <p class="tile-meta mb-0">Edit this widget and pick the weather station to compare against.</p>
+}
+else if (_rows.Count == 0)
+{
+    <p class="tile-meta mb-0">
+        Nothing to compare yet — this needs a full day with both a forecast and station
+        readings recorded, so it fills in from tomorrow.
+    </p>
+}
+else
+{
+    <div class="d-flex align-items-baseline gap-2 mb-2">
+        <span class="metric-value">@Degrees(_averageError)</span>
+        <span class="tile-meta">average miss over @_rows.Count day(s)</span>
+    </div>
+
+    <table class="table table-sm mb-0">
+        <thead>
+            <tr>
+                <th>Day</th>
+                <th class="text-end">Forecast</th>
+                <th class="text-end">Actual</th>
+                <th class="text-end">Miss</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var row in _rows)
+            {
+                <tr>
+                    <td class="tile-meta">@row.Date.ToString("ddd d MMM")</td>
+                    <td class="text-end">@Temperature(row.Predicted)</td>
+                    <td class="text-end">@Temperature(row.Observed)</td>
+                    <td class="text-end @(Math.Abs(row.Error) >= 3 ? "text-warning" : "")">
+                        @(row.Error > 0 ? "+" : "")@Degrees(row.Error)
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    <p class="tile-meta mb-0 mt-2">A positive miss means the forecast was warmer than the day turned out.</p>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Row(DateOnly Date, double Predicted, double Observed)
+    {
+        public double Error => Predicted - Observed;
+    }
+
+    private Connection? _station;
+    private IReadOnlyList<Row> _rows = [];
+    private double _averageError;
+    private string _units = Appearance.Default.UnitSystem;
+
+    private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 30);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is not { } forecast)
+            return;
+
+        _station = Context.Widget.Settings.Get("station") is { Length: > 0 } chosen
+            ? await Config.ConnectionAsync(chosen)
+            : (await Config.ConnectionsAsync()).FirstOrDefault(c => c.Provider == "ambient" && c.Enabled);
+
+        if (_station is null)
+            return;
+
+        // A day either side of the window, so the earliest day compared is a whole one.
+        var window = TimeSpan.FromDays(Days + 1);
+        var predicted = await History.SamplesAsync(forecast.Id, "temp_high_c", window);
+        var observed = await History.SamplesAsync(_station.Id, "temp_outdoor_c", window);
+
+        _rows = Compare(predicted, observed, DateOnly.FromDateTime(DateTime.Now), Days);
+        _averageError = _rows.Count == 0 ? 0 : _rows.Average(r => Math.Abs(r.Error));
+    }
+
+    /// <summary>
+    /// Pairs each day's first prediction with what the station actually recorded. Today is
+    /// excluded on purpose: its high has not happened yet, and scoring a forecast against
+    /// half a day would make every morning look like a triumph.
+    /// </summary>
+    private static IReadOnlyList<Row> Compare(
+        IReadOnlyList<HistoryStore.Sample> predicted,
+        IReadOnlyList<HistoryStore.Sample> observed,
+        DateOnly today,
+        int days)
+    {
+        var firstForecast = predicted
+            .GroupBy(s => DateOnly.FromDateTime(s.At.LocalDateTime))
+            .ToDictionary(g => g.Key, g => g.OrderBy(s => s.At).First().Value);
+
+        var observedHigh = observed
+            .GroupBy(s => DateOnly.FromDateTime(s.At.LocalDateTime))
+            .ToDictionary(g => g.Key, g => g.Max(s => s.Value));
+
+        return
+        [
+            .. firstForecast
+                .Where(entry => entry.Key < today && observedHigh.ContainsKey(entry.Key))
+                .OrderByDescending(entry => entry.Key)
+                .Take(days)
+                .Select(entry => new Row(entry.Key, entry.Value, observedHigh[entry.Key]))
+        ];
+    }
+
+    private string Temperature(double celsius) =>
+        Units.Display(celsius, "°C", _units).Value.ToString("F1") + "°";
+
+    /// <summary>A difference, not a temperature: 3°C of error is 5.4°F of error, not 37.4°F.</summary>
+    private string Degrees(double celsiusDifference) =>
+        (Units.Display(0, "°C", _units).Unit.Trim() == "°F" ? celsiusDifference * 9 / 5 : celsiusDifference)
+            .ToString("F1") + "°";
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

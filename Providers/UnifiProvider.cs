@@ -36,9 +36,17 @@ public sealed class UnifiProvider(IHttpClientFactory httpFactory) : IConnectionP
         new("clients_wireless", "Wireless clients"),
         new("devices_adopted", "Devices adopted"),
         new("devices_offline", "Devices offline"),
+
         new("download_mbps", "WAN download", " Mbps", 1),
         new("upload_mbps", "WAN upload", " Mbps", 1),
         new("latency_ms", "Response time", " ms"),
+    ];
+
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("An access point has dropped off", "devices_offline", Comparison.Above, 0, ForMinutes: 10,
+            Why: "The controller stays up while a switch or AP goes offline, so nothing else notices. " +
+                 "Ten minutes' grace covers a firmware update rebooting one."),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

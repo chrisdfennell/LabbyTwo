@@ -1,11 +1,12 @@
 @implements IDisposable
+@inject AppSettingsStore AppSettings
 
 @if (_url.Length == 0)
 {
     <p class="tile-meta mb-0">
         @(_source.IsCustom
             ? "Edit this widget and paste the URL of your radar image or page."
-            : "Edit this widget and set a location.")
+            : "No location — set one in Settings, or give this widget its own coordinates.")
     </p>
 }
 else if (_source.Kind == RadarKind.Image)
@@ -42,16 +43,30 @@ else
 
     private int RefreshMinutes => Math.Clamp(Context.Widget.Settings.GetInt("refresh_minutes", 5), 1, 120);
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         var settings = Context.Widget.Settings;
         _source = RadarSource.Resolve(settings.Get("source"));
-        _url = _source.BuildUrl(
-            settings.GetDouble("latitude"),
-            settings.GetDouble("longitude"),
-            settings.GetInt("zoom", 7),
-            settings.Get("station"),
-            settings.Get("custom_url"));
+
+        // Blank coordinates used to mean (0, 0), which is in the Atlantic and radars badly.
+        // They now mean "wherever this dashboard says it lives".
+        var home = HomeLocation.From(await AppSettings.AllAsync());
+        var point = home.Resolve(settings.Get("latitude"), settings.Get("longitude"));
+
+        // Some sources are addressed by radar site or by a URL somebody pasted, and want no
+        // coordinates at all — asking those for a location would be a question with no
+        // reason behind it.
+        var template = _source.IsCustom ? settings.Get("custom_url") : _source.UrlTemplate;
+        var needsPoint = template.Contains("{lat}") || template.Contains("{lon}");
+
+        _url = needsPoint && point is null
+            ? ""
+            : _source.BuildUrl(
+                point?.Latitude ?? 0,
+                point?.Longitude ?? 0,
+                settings.GetInt("zoom", 7),
+                settings.Get("station"),
+                settings.Get("custom_url"));
 
         // Only image sources need refreshing; an embedded map animates on its own, and
         // reloading its iframe would just restart somebody else's JavaScript.

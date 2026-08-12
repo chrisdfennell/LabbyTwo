@@ -50,6 +50,7 @@ public class MetricSpecTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddHttpClient();
+        services.AddTestStorage(TestHost.TempDirectory());
         services.AddModules(typeof(Registry).Assembly,
             Path.Combine(Path.GetTempPath(), "labbytwo-none-" + Guid.NewGuid().ToString("n")),
             LoggerFactory.Create(_ => { }).CreateLogger("test"));

@@ -29,14 +29,22 @@
     </div>
 </div>
 
-@if (_station is null)
+@* Warnings first, above everything, whether or not there is a station: a page that puts a
+   tornado warning below seven charts of yesterday's humidity has its priorities wrong. *@
+@if (_warnings is { } warnings)
 {
-    <div class="empty-state">
-        <p class="mb-3">This tab needs an Ambient Weather connection.</p>
-        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    <div class="widget mb-3">
+        <div class="widget-head">
+            <h2 class="widget-title">Warnings</h2>
+            <span class="tile-meta">@warnings.Name</span>
+        </div>
+        <div class="widget-body">
+            <DynamicComponent Type="typeof(WeatherAlertsCard)" Parameters="_warningParameters" />
+        </div>
     </div>
 }
-else
+
+@if (_station is { } station)
 {
     <div class="stat-grid mb-3">
         @foreach (var tile in Tiles)
@@ -47,33 +55,66 @@ else
             </div>
         }
     </div>
+}
 
-    @* The station says what is happening; this says what is about to. Shown only when a
-       forecast connection exists, so the page is unchanged for anyone who has not added
-       one — and it finds the connection itself rather than asking for it twice. *@
-    @if (_forecast is { } forecast)
-    {
-        <div class="widget mb-3">
-            <div class="widget-head">
-                <h2 class="widget-title">Forecast</h2>
-                <span class="tile-meta">@forecast.Name</span>
-            </div>
-            <div class="widget-body">
-                <DynamicComponent Type="typeof(ForecastCard)" Parameters="_forecastParameters" />
-            </div>
+@* The station says what is happening; this says what is about to. Shown only when a
+   forecast connection exists, so the page is unchanged for anyone who has not added
+   one — and it finds the connection itself rather than asking for it twice. *@
+@if (_forecast is { } forecast)
+{
+    <div class="widget mb-3">
+        <div class="widget-head">
+            <h2 class="widget-title">Forecast</h2>
+            <span class="tile-meta">@forecast.Name</span>
         </div>
-    }
+        <div class="widget-body">
+            <DynamicComponent Type="typeof(ForecastCard)" Parameters="_forecastParameters" />
 
-    @if (ShowRadar)
-    {
-        <div class="widget mb-3">
-            <div class="widget-head"><h2 class="widget-title">Radar</h2></div>
-            <div class="widget-body">
-                <DynamicComponent Type="typeof(RadarCard)" Parameters="_radarParameters" />
-            </div>
+            @if (HourlyHours > 0)
+            {
+                <hr class="my-3" />
+                <DynamicComponent Type="typeof(HourlyForecast)" Parameters="_hourlyParameters" />
+            }
         </div>
-    }
+    </div>
+}
 
+@if (_air is { } air)
+{
+    <div class="widget mb-3">
+        <div class="widget-head">
+            <h2 class="widget-title">Air quality</h2>
+            <span class="tile-meta">@air.Name</span>
+        </div>
+        <div class="widget-body">
+            <DynamicComponent Type="typeof(AirQualityCard)" Parameters="_airParameters" />
+        </div>
+    </div>
+}
+
+@if (ShowRadar)
+{
+    <div class="widget mb-3">
+        <div class="widget-head"><h2 class="widget-title">Radar</h2></div>
+        <div class="widget-body">
+            <DynamicComponent Type="typeof(RadarCard)" Parameters="_radarParameters" />
+        </div>
+    </div>
+}
+
+@if (_station is null)
+{
+    <div class="empty-state">
+        <p class="mb-1">No weather station connected.</p>
+        <p class="tile-meta mb-3">
+            Everything above comes from the internet. A station of your own adds what is happening in
+            your garden right now — and, with it, the history and the forecast-versus-reality scoring.
+        </p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    </div>
+}
+else
+{
     <div class="widget mb-4">
         <div class="widget-body">
             <WeatherSummary Context="_context" HoursOverride="_hours" />
@@ -111,6 +152,17 @@ else
             <ReadingsTable Context="_context" HoursOverride="_hours" MetricsOverride="@TableMetrics" />
         </div>
     </div>
+
+    @* Only possible on a page that has both, which is the whole reason it lives here. *@
+    @if (_forecast is not null)
+    {
+        <div class="widget mt-3">
+            <div class="widget-head"><h2 class="widget-title">Forecast vs reality</h2></div>
+            <div class="widget-body">
+                <DynamicComponent Type="typeof(ForecastAccuracy)" Parameters="_accuracyParameters" />
+            </div>
+        </div>
+    }
 }
 
 @code {
@@ -121,6 +173,12 @@ else
     private Dictionary<string, object> _radarParameters = [];
     private Connection? _forecast;
     private Dictionary<string, object> _forecastParameters = [];
+    private Dictionary<string, object> _hourlyParameters = [];
+    private Dictionary<string, object> _accuracyParameters = [];
+    private Connection? _warnings;
+    private Dictionary<string, object> _warningParameters = [];
+    private Connection? _air;
+    private Dictionary<string, object> _airParameters = [];
     private DateTimeOffset? _lastReport;
     private IReadOnlyDictionary<string, double> _readings = new Dictionary<string, double>();
     private string _units = Appearance.Default.UnitSystem;
@@ -147,6 +205,15 @@ else
         "temp_outdoor_c,feels_like_c,humidity,wind_mph,gust_mph,pressure_inhg,rain_in,solar_wm2,uv_index";
 
     private bool ShowRadar => Tab.Settings.GetBool("radar", true);
+
+    private int HourlyHours => Math.Clamp(Tab.Settings.GetInt("hourly_hours", 12), 0, 48);
+
+    /// <summary>
+    /// The panels on this page are ordinary widgets bound by hand, because the layout is
+    /// the point of the tab kind — there is nothing here for the user to arrange.
+    /// </summary>
+    private static Dictionary<string, object> Bind(Widget widget, Connection connection) =>
+        new() { ["Context"] = new WidgetContext(widget, connection) };
 
     private sealed record Tile(string Label, string Value);
 
@@ -235,24 +302,54 @@ else
             // Nothing chosen yet: the only station there is, is almost certainly the one.
             : connections.FirstOrDefault(c => c.Provider == "ambient");
 
-        // The forecast is optional and found rather than configured: somebody who has added
-        // one wants it here, and somebody who has not should see the page they had before.
-        _forecast = Tab.Settings.Get("forecast") is { Length: > 0 } picked
-            ? connections.FirstOrDefault(c => c.Id == picked)
-            : connections.FirstOrDefault(c => c.Provider == "forecast" && c.Enabled);
+        // Everything below is optional and found rather than configured: somebody who has
+        // added one wants it here, and somebody who has not should see the page they had
+        // before. Explicitly picking one on the tab still wins.
+        _forecast = Find("forecast", "forecast");
+        _warnings = Find("warnings", "nws");
+        _air = Find("air", "air-quality");
 
         if (_forecast is { } forecast)
         {
-            _forecastParameters = new Dictionary<string, object>
-            {
-                ["Context"] = new WidgetContext(
-                    new Widget { TabId = Tab.Id, Type = "forecast" },
-                    forecast),
-            };
+            _forecastParameters = Bind(new Widget { TabId = Tab.Id, Type = "forecast" }, forecast);
+
+            _hourlyParameters = Bind(
+                new Widget
+                {
+                    Id = $"{Tab.Id}-hourly",
+                    TabId = Tab.Id,
+                    Type = "forecast-hourly",
+                    Settings = new SettingsBag { ["hours"] = HourlyHours.ToString() },
+                },
+                forecast);
+
+            _accuracyParameters = Bind(
+                new Widget
+                {
+                    Id = $"{Tab.Id}-accuracy",
+                    TabId = Tab.Id,
+                    Type = "forecast-accuracy",
+                    Settings = new SettingsBag { ["station"] = _station?.Id ?? "" },
+                },
+                forecast);
         }
 
+        if (_warnings is { } alerts)
+            _warningParameters = Bind(new Widget { TabId = Tab.Id, Type = "weather-warnings" }, alerts);
+
+        if (_air is { } air)
+            _airParameters = Bind(new Widget { TabId = Tab.Id, Type = "air-quality" }, air);
+
+        // Only the station's own half of the page needs a station. The rest — warnings,
+        // forecast, air, radar — stands on its own, which is what this page used to refuse
+        // to do at all.
         if (_station is null)
             return;
+
+        Connection? Find(string setting, string provider) =>
+            Tab.Settings.Get(setting) is { Length: > 0 } picked
+                ? connections.FirstOrDefault(c => c.Id == picked)
+                : connections.FirstOrDefault(c => c.Provider == provider && c.Enabled);
 
         _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
 

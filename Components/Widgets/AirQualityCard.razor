@@ -1,0 +1,104 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Registry Registry
+
+@* The index, what it means, and what to do about it. A bare "AQI 168" is a number people
+   have to go and look up, which they will not do — so the band and the advice are the
+   card, and the number is the detail. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to an air quality connection.</p>
+}
+else if (!_readings.TryGetValue("aqi", out var aqi))
+{
+    <p class="tile-meta mb-0">No reading yet.</p>
+}
+else
+{
+    var band = AirQualityProvider.Band(aqi);
+
+    <div class="d-flex align-items-baseline gap-2">
+        <span class="metric-value aqi-value @band.Css">@aqi.ToString("0")</span>
+        <span><strong>@band.Label</strong></span>
+    </div>
+
+    <div class="aqi-scale mt-2" aria-hidden="true">
+        <span style="left: @(Math.Clamp(aqi / 300 * 100, 0, 100).ToString("0.#"))%"></span>
+    </div>
+
+    @if (ShowAdvice)
+    {
+        <p class="tile-meta mt-2 mb-0">@band.Advice</p>
+    }
+
+    <div class="d-flex flex-wrap gap-3 mt-2">
+        @foreach (var (key, label) in Pollutants)
+        {
+            @if (_readings.TryGetValue(key, out var value))
+            {
+                <div>
+                    <div class="tile-meta">@label</div>
+                    <div>@Show(key, value)</div>
+                </div>
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private Dictionary<string, double> _readings = [];
+
+    private bool ShowAdvice => Context.Widget.Settings.GetBool("advice", true);
+
+    // PM2.5 first: it is the one that matters on a smoke day, and the one health advice
+    // is actually written against.
+    private static readonly (string Key, string Label)[] Pollutants =
+    [
+        ("pm2_5", "PM2.5"),
+        ("pm10", "PM10"),
+        ("ozone", "Ozone"),
+        ("nitrogen_dioxide", "NO₂"),
+        ("dust", "Dust"),
+    ];
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is not { } connection)
+            return;
+
+        // Recorded values first, live probe over the top — the same order every other card
+        // uses, so a restart does not blank this until the next sweep.
+        var readings = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (key, value) in await History.LatestAsync(connection.Id, TimeSpan.FromHours(6)))
+            readings[key] = value;
+
+        if (Health.State(connection.Id)?.Metrics is { } live)
+        {
+            foreach (var (key, value) in live)
+                readings[key] = value;
+        }
+
+        readings.Remove("latency_ms");
+        _readings = readings;
+    }
+
+    private string Show(string metric, double value) =>
+        Registry.Metric(Context.Connection, metric) is { } spec ? spec.Format(value) : value.ToString("0.#");
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

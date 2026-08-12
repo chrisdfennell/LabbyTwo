@@ -16,6 +16,7 @@ public class ModuleDiscoveryTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddHttpClient();
+        services.AddTestStorage(TestHost.TempDirectory());
         var catalog = services.AddModules(
             typeof(Registry).Assembly,
             pluginDirectory ?? Path.Combine(Path.GetTempPath(), "labbytwo-no-plugins-" + Guid.NewGuid().ToString("n")),
@@ -44,7 +45,8 @@ public class ModuleDiscoveryTests
             "uptime-kuma", "speedtest-tracker", "immich", "nextcloud",
             "prometheus", "pbs", "duplicati", "scrutiny", "frigate", "tailscale", "synology",
             "healthchecks", "email", "ifttt",
-            "cloudflare", "opnsense", "shelly", "forecast", "audiobookshelf", "navidrome",
+            "cloudflare", "opnsense", "shelly", "forecast", "nws", "air-quality",
+            "audiobookshelf", "navidrome",
             "sabnzbd", "transmission", "tdarr", "mylar3", "whisparr", "komga",
         ];
 

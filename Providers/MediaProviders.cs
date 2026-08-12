@@ -31,6 +31,13 @@ public sealed class JellyfinProvider(IHttpClientFactory httpFactory) : IConnecti
         new("latency_ms", "Response time", " ms"),
     ];
 
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("Transcoding hard", "transcode_count", Comparison.Above, 2, ClearThreshold: 1, ForMinutes: 10,
+            Why: "Three transcodes at once is where a home server starts stuttering. Usually a " +
+                 "client that will happily direct-play if somebody changes its quality setting."),
+    ];
+
     public sealed record Session(string User, string Item, string Device, double PercentDone, bool Transcoding);
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
@@ -157,6 +164,16 @@ public sealed class QBittorrentProvider(IHttpClientFactory httpFactory) : IConne
         new("torrents_downloading", "Downloading"),
         new("torrents_seeding", "Seeding"),
         new("latency_ms", "Response time", " ms"),
+    ];
+
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("Upload is eating the line", "upload_mbps", Comparison.Above, 20, ClearThreshold: 10, ForMinutes: 15,
+            Why: "Home upstream is small, and saturating it makes everything else in the house " +
+                 "feel broken — video calls first. Set it just under your real upload speed."),
+
+        new("Downloads piling up", "torrents_downloading", Comparison.Above, 20, ClearThreshold: 10, ForMinutes: 120,
+            Why: "Twenty at once for two hours usually means nothing is finishing."),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

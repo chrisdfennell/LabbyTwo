@@ -79,6 +79,11 @@ builder.Services.AddSingleton<FaviconService>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<SelfUpdater>();
 builder.Services.AddSingleton<DashboardImportService>();
+
+// Not a provider — it answers a question the Settings page asks once, rather than
+// something to monitor — so it is registered by hand rather than discovered.
+builder.Services.AddSingleton<Geocoder>();
+
 builder.Services.AddSingleton<HealthMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthMonitor>());
 builder.Services.AddSingleton<AlertService>();

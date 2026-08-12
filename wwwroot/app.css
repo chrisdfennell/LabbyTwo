@@ -632,6 +632,70 @@ h1[tabindex]:focus { outline: none; }
 .forecast-day.is-today { background: var(--panel-2); }
 .forecast-icon { font-size: 1.15rem; }
 
+/* Hours are narrower than days — no weekday name to fit, just "3pm". */
+.forecast-hours {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(2.75rem, 1fr));
+    gap: .25rem;
+}
+.forecast-hour { text-align: center; line-height: 1.3; }
+
+/* Chance of rain as a shape. Fixed height so the bars share a baseline and the row reads
+   as one chart rather than twelve unrelated ones. */
+.rain-bar {
+    height: 28px;
+    margin: .25rem auto 0;
+    width: 8px;
+    border-radius: 3px;
+    background: var(--panel-2);
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+}
+.rain-bar > span {
+    width: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    min-height: 2px;
+}
+
+/* ---------- weather warnings ----------
+   Bordered on the leading edge rather than filled: a card of solid red blocks is a wall,
+   and the severe one has to stand out from the merely amber. */
+.weather-warning {
+    border-left: 3px solid var(--edge);
+    padding: .35rem .6rem;
+    border-radius: 4px;
+    background: var(--panel-2);
+}
+.weather-warning.is-severe { border-left-color: var(--down); }
+.weather-warning.is-moderate { border-left-color: var(--warn); }
+.weather-warning.is-minor { border-left-color: var(--edge); }
+
+/* ---------- air quality ---------- */
+.aqi-value.is-good { color: var(--up); }
+.aqi-value.is-ok { color: var(--text); }
+.aqi-value.is-warn { color: var(--warn); }
+.aqi-value.is-bad { color: var(--down); }
+
+/* The bands, drawn once as a gradient, with a marker for where today sits. Green through
+   red is the EPA's own colouring, and copying it means the picture needs no key. */
+.aqi-scale {
+    position: relative;
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(to right, #35d07f 0%, #facc15 33%, #ff8a5c 50%, #ff5c6c 67%, #a855f7 100%);
+}
+.aqi-scale > span {
+    position: absolute;
+    top: -3px;
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--text);
+    transform: translateX(-1px);
+}
+
 .bare-layout, .login-wrap {
     min-height: 100vh;
     display: flex;

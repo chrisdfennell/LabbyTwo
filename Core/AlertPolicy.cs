@@ -50,16 +50,17 @@ public sealed record AlertPolicy(TimeOnly QuietFrom, TimeOnly QuietTo, string Qu
     /// <summary>
     /// Whether this alert survives quiet hours. A recovery is deliberately held even in
     /// "down only" mode: being woken to be told something came back is the purest form of
-    /// pointless alert.
+    /// pointless alert. An urgent alert is never held — see <see cref="Alert.Urgent"/>.
     /// </summary>
     public bool Allows(Alert alert, DateTimeOffset at) =>
-        !IsQuiet(at) || (QuietMode != Nothing && alert.Level == AlertLevel.Down);
+        alert.Urgent || !IsQuiet(at) || (QuietMode != Nothing && alert.Level == AlertLevel.Down);
 
     public string Describe() => !QuietHoursOn
         ? "Alerts are sent at any hour."
-        : QuietMode == Nothing
+        : (QuietMode == Nothing
             ? $"Nothing is sent between {QuietFrom:HH\\:mm} and {QuietTo:HH\\:mm}."
-            : $"Between {QuietFrom:HH\\:mm} and {QuietTo:HH\\:mm}, only a service going down is sent.";
+            : $"Between {QuietFrom:HH\\:mm} and {QuietTo:HH\\:mm}, only a service going down is sent.")
+          + " Severe weather warnings are sent whatever the hour.";
 
     /// <summary>
     /// Anything unparseable is treated as "not set", which turns quiet hours off rather

@@ -178,6 +178,16 @@ public sealed class AdGuardProvider(IHttpClientFactory httpFactory) : IConnectio
         new("latency_ms", "Response time", " ms"),
     ];
 
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("Blocking is switched off", "blocking_enabled", Comparison.Below, 1, ForMinutes: 30,
+            Why: "Somebody paused it to get a site working and never turned it back on. Half an " +
+                 "hour, because pausing it for a few minutes is a normal thing to do."),
+
+        new("DNS is answering slowly", "avg_process_ms", Comparison.Above, 200, ClearThreshold: 100, ForMinutes: 15,
+            Why: "Everything in the house feels broken when DNS is slow, and nothing points at DNS."),
+    ];
+
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {
         var baseUrl = connection.Settings.Get("url").TrimEnd('/');

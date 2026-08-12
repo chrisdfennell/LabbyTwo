@@ -182,7 +182,9 @@ monitoring works.
 | **Cloudflare Tunnel** | Whether your tunnels are healthy and how many connectors each has — the outage nobody on the LAN can see. |
 | **OPNsense** | Gateway packet loss and latency, WAN addresses, memory. The router is never "down"; it just starts dropping things. |
 | **Shelly** | Power draw, energy used and temperature, straight off the plug. No cloud, no broker. Gen1 and Gen2 both. |
-| **Weather forecast** | Up to sixteen days of highs, lows and chance of rain from Open-Meteo — no API key, and the half a weather station cannot tell you. |
+| **Weather forecast** | Up to sixteen days of highs, lows, gusts, UV and snow from Open-Meteo, plus the next 48 hours one hour at a time. No API key, and the half a weather station cannot tell you. |
+| **Weather warnings (US)** | Tornado, flood, winter-storm and heat warnings from the National Weather Service, pushed to your alert channels within five minutes — and past quiet hours when they are severe. |
+| **Air quality** | AQI, PM2.5, ozone and dust from Open-Meteo, with the band and the health advice spelled out. No API key. |
 | **SABnzbd** | Queue size, speed, what is left, free disk, and whether it is paused. |
 | **Transmission** | Torrents active and transfer rates. Handles the session-id handshake for you. |
 | **Tdarr** | Transcode and health-check queues, workers busy, space saved. Falling behind looks exactly like working. |
@@ -201,7 +203,8 @@ is worth saying. Four things do:
 
 - **Quiet hours** — between the times you set, only a service actually going down gets
   through, or nothing at all. Recoveries are always held: being woken to be told something
-  came back is the purest kind of pointless alert.
+  came back is the purest kind of pointless alert. A severe weather warning is the one
+  exception and is always sent, because "do not wake me" is the wrong answer to a tornado.
 - **Silences** — "stop telling me about this for an hour", from the connections list or
   `Ctrl+K`, for the hour you spend restarting the thing on purpose.
 - **Dependencies** — a connection can sit *behind* another. While the VPN gateway is down,
@@ -286,9 +289,12 @@ The sidebar is literally a table. Add, rename, reorder, hide, delete. Six kinds 
   is right about that in a way that is baffling when you are staring at the preview.
 - **Git server** — a whole page for one MyPersonalGit server: counts, every repository
   with its commit, pull request and issue tallies, and what is open across all of them.
-- **Weather station** — a whole page for one Ambient Weather station: current readings,
-  radar, today's extremes with sunrise and sunset, seven charts over 24h / 48h / 7d, and
-  the raw readings. Built from the same widgets a dashboard tab can use, arranged for you.
+- **Weather station** — a whole page for the weather where you are: any warnings in force
+  at the top, current readings from your own station, the forecast by day and by hour, air
+  quality, radar, today's extremes with sunrise and sunset, seven charts over 24h / 48h /
+  7d, the raw readings, and how yesterday's forecast scored against your thermometer.
+  Everything except the station's own half works without a station. Built from the same
+  widgets a dashboard tab can use, arranged for you.
 - **Status page** — uptime for everything monitored: 24h/7d/30d percentages, a daily bar
   strip, and a log of every time something went down or came back. Percentages are
   measured from when monitoring actually started, marked `*`, rather than crediting a
@@ -320,6 +326,11 @@ greys out the rest with the reason.
 | Wind | Ambient Weather — a compass dial with speed, gust and bearing |
 | Inside vs outside | Ambient Weather — both temperatures, and whether to open the windows |
 | Weather radar | nothing — a rain radar picture from RainViewer, Windy, NOAA, or a URL of your own |
+| Forecast | Weather forecast — today in detail, then a row of days |
+| Hourly forecast | Weather forecast — the next hours, with rain chance drawn as bars |
+| Weather warnings | Weather warnings — what is in force, in the NWS's own words |
+| Air quality | Air quality — the index, the band, and the pollutants behind it |
+| Forecast vs reality | Weather forecast + a station — yesterday's forecast scored against your own thermometer |
 | NAS overview | QNAP |
 | Plex — now playing | Plex |
 | Jellyfin — now playing | Jellyfin |

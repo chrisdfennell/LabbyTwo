@@ -39,6 +39,25 @@ public static class TestHost
         return services.BuildServiceProvider();
     }
 
+    /// <summary>
+    /// Just enough for the providers themselves: some reach for app settings — the shared
+    /// location, the unit system — so a container that only has logging and an HTTP factory
+    /// can no longer construct the registry. Nothing here touches the disk unless a test
+    /// actually opens the database.
+    /// </summary>
+    public static IServiceCollection AddTestStorage(this IServiceCollection services, string directory)
+    {
+        services.AddSingleton<IHostEnvironment>(new TestEnvironment(directory));
+        services.AddSingleton(Options.Create(new LabbyOptions { DatabasePath = Path.Combine(directory, "test.db") }));
+        services.AddSingleton<Db>();
+        services.AddSingleton<AppSettingsStore>();
+        return services;
+    }
+
+    /// <summary>A temporary directory name, for a test that needs somewhere and not what.</summary>
+    public static string TempDirectory() =>
+        Path.Combine(Path.GetTempPath(), "labbytwo-test-" + Guid.NewGuid().ToString("n"));
+
     /// <summary>A store backed by a real, migrated database in <paramref name="directory"/>.</summary>
     public static ConfigStore ConfigStore(string directory)
     {

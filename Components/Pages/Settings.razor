@@ -12,6 +12,7 @@
 @inject SelfUpdater Updater
 @inject ModuleCatalog Catalog
 @inject DashboardImportService Imports
+@inject Geocoder Places
 @inject IEnumerable<IEndpointExtension> Endpoints
 @inject BackgroundJobRunner Jobs
 @inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
@@ -99,6 +100,57 @@
                     “With secrets” writes every stored password and API key into the file in plain text.
                     Only use it for a backup you keep somewhere safe.
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head"><h2 class="widget-title">Where you are</h2></div>
+            <div class="widget-body">
+                @* One location, because three things wanted the same two numbers and each
+                   asked separately. Searched rather than typed: nobody knows their own
+                   coordinates, and a wrong digit does not fail — it shows you somebody
+                   else's weather. *@
+                <p class="tile-meta">
+                    Used by the forecast, the weather warnings, air quality and the radar, unless one of
+                    them is given its own. Nothing else is sent anywhere — the search asks Open-Meteo for
+                    the coordinates of a place name, and that is the end of it.
+                </p>
+
+                <p class="mb-2"><strong>@_home.Describe()</strong></p>
+
+                <div class="d-flex gap-2 flex-wrap mb-2" style="max-width: 34rem">
+                    <input class="form-control" style="flex: 1 1 14rem" placeholder="Town, city or postcode"
+                           @bind="_placeQuery" @bind:event="oninput"
+                           @onkeydown="@(e => { if (e.Key == "Enter") return SearchPlacesAsync(); return Task.CompletedTask; })" />
+                    <button class="btn btn-outline-secondary" disabled="@_searching" @onclick="SearchPlacesAsync">
+                        @(_searching ? "Searching…" : "Search")
+                    </button>
+                    @if (_home.IsSet)
+                    {
+                        <button class="btn btn-outline-danger" @onclick="ClearLocationAsync">Clear</button>
+                    }
+                </div>
+
+                @if (_placeError is { Length: > 0 } placeError)
+                {
+                    <div class="alert alert-warning py-2">@placeError</div>
+                }
+
+                @if (_places.Count > 0)
+                {
+                    <div class="list-group" style="max-width: 34rem">
+                        @foreach (var place in _places)
+                        {
+                            <button type="button" class="list-group-item list-group-item-action d-flex justify-content-between"
+                                    @onclick="() => ChooseAsync(place)">
+                                <span>@place.Label</span>
+                                <span class="tile-meta">@Geocoder.Format(place.Latitude), @Geocoder.Format(place.Longitude)</span>
+                            </button>
+                        }
+                    </div>
+                }
             </div>
         </div>
     </div>
@@ -461,6 +513,12 @@ docker compose restart labbytwo</code></pre>
     private UpdateChecker.Result? _update;
     private bool _checking;
 
+    private HomeLocation _home = HomeLocation.None;
+    private string _placeQuery = "";
+    private string? _placeError;
+    private bool _searching;
+    private IReadOnlyList<Geocoder.Place> _places = [];
+
     /// <summary>This container's name if we know it, so the copy commands can be pasted as-is.</summary>
     private string ContainerHint => _self?.Self?.Container ?? "labbytwo-labbytwo-1";
 
@@ -545,9 +603,58 @@ docker compose restart labbytwo</code></pre>
         _widgetCount = (await Config.WidgetsAsync()).Count;
         _channelCount = (await Alerts.ChannelsAsync()).Count;
         _statusToken = await AppSettings.GetAsync(PublicStatus.PublicStatusToken);
+        _home = HomeLocation.From(await AppSettings.AllAsync());
 
         // Show a previous result if one was fetched this session, without checking again.
         _update ??= Updates.Last;
+    }
+
+    private async Task SearchPlacesAsync()
+    {
+        _placeError = null;
+        _searching = true;
+        try
+        {
+            _places = await Places.SearchAsync(_placeQuery);
+            if (_places.Count == 0)
+                _placeError = $"Nothing found for “{_placeQuery}”. Try the nearest town, or add the country.";
+        }
+        catch (Exception ex)
+        {
+            _placeError = $"Could not reach the geocoding service: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            _searching = false;
+        }
+    }
+
+    private async Task ChooseAsync(Geocoder.Place place)
+    {
+        await AppSettings.SaveAsync(new Dictionary<string, string>
+        {
+            [HomeLocation.LatitudeKey] = Geocoder.Format(place.Latitude),
+            [HomeLocation.LongitudeKey] = Geocoder.Format(place.Longitude),
+            [HomeLocation.PlaceKey] = place.Label,
+        });
+
+        _places = [];
+        _placeQuery = "";
+        await LoadAsync();
+    }
+
+    private async Task ClearLocationAsync()
+    {
+        // Cleared rather than deleted: connections that set their own coordinates carry on,
+        // and the ones relying on this say so on the Connections page instead of guessing.
+        await AppSettings.SaveAsync(new Dictionary<string, string>
+        {
+            [HomeLocation.LatitudeKey] = "",
+            [HomeLocation.LongitudeKey] = "",
+            [HomeLocation.PlaceKey] = "",
+        });
+
+        await LoadAsync();
     }
 
     /// <summary>

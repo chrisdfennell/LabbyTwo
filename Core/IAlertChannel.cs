@@ -23,6 +23,17 @@ public enum AlertLevel
 
 public sealed record Alert(AlertLevel Level, string Title, string Body)
 {
+    /// <summary>
+    /// Ignores quiet hours. For the handful of things where "do not wake me" is the wrong
+    /// answer — a tornado warning is the reason this exists. It does not override a
+    /// silence or a dependency: those are somebody deliberately muting a specific thing,
+    /// whereas quiet hours are a blanket rule that never knew about this.
+    ///
+    /// An init-only property rather than a fourth positional parameter, so every existing
+    /// <c>new Alert(level, title, body)</c> in a prebuilt plugin still binds.
+    /// </summary>
+    public bool Urgent { get; init; }
+
     public string Emoji => Level switch
     {
         AlertLevel.Down => "🔴",

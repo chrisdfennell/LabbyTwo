@@ -28,6 +28,13 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
         new("latency_ms", "Response time", " ms"),
     ];
 
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("More streams than expected", "stream_count", Comparison.Above, 5, ClearThreshold: 3, ForMinutes: 15,
+            Why: "Worth a look either way: the server is working hard, or somebody is watching " +
+                 "who you did not know had an account."),
+    ];
+
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {
         var stopwatch = Stopwatch.StartNew();

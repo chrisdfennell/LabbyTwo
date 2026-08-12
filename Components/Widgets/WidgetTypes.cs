@@ -463,6 +463,82 @@ public sealed class ForecastWidget : IWidgetType
     public Type Component => typeof(ForecastCard);
 }
 
+public sealed class HourlyForecastWidget : IWidgetType
+{
+    public string Type => "forecast-hourly";
+    public string DisplayName => "Hourly forecast";
+    public string Icon => "🕒";
+    public string Description => "The next few hours — temperature, and how likely rain is in each one.";
+    public IReadOnlyList<string> ProviderTypes => ["forecast"];
+    public int DefaultWidth => 4;
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("hours", "Hours to show", FieldKind.Number, Default: "12",
+            Help: "Up to 48, though a narrow tile wraps them onto several rows."),
+    ];
+
+    public Type Component => typeof(HourlyForecast);
+}
+
+public sealed class WeatherAlertsWidget : IWidgetType
+{
+    public string Type => "weather-warnings";
+    public string DisplayName => "Weather warnings";
+    public string Icon => "⚠️";
+    public string Description => "Active National Weather Service watches and warnings, in their own words.";
+    public IReadOnlyList<string> ProviderTypes => ["nws"];
+    public int DefaultWidth => 4;
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("limit", "Most warnings", FieldKind.Number, Default: "5"),
+        new("show_area", "Show the area affected", FieldKind.Bool, Default: "true"),
+        new("show_instruction", "Show what to do", FieldKind.Bool, Default: "true",
+            Help: "The NWS instruction text — \"move to an interior room on the lowest floor\" and so on."),
+    ];
+
+    public Type Component => typeof(WeatherAlertsCard);
+}
+
+public sealed class AirQualityWidget : IWidgetType
+{
+    public string Type => "air-quality";
+    public string DisplayName => "Air quality";
+    public string Icon => "😷";
+    public string Description => "The index, what band it falls in, and the pollutants behind it.";
+    public IReadOnlyList<string> ProviderTypes => ["air-quality"];
+    public int DefaultWidth => 3;
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("advice", "Show what it means", FieldKind.Bool, Default: "true"),
+    ];
+
+    public Type Component => typeof(AirQualityCard);
+}
+
+public sealed class ForecastAccuracyWidget : IWidgetType
+{
+    public string Type => "forecast-accuracy";
+    public string DisplayName => "Forecast vs reality";
+    public string Icon => "🎯";
+    public string Description =>
+        "Yesterday's forecast against what your own station recorded. Needs a forecast and a weather station.";
+    public IReadOnlyList<string> ProviderTypes => ["forecast"];
+    public int DefaultWidth => 4;
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("station", "Weather station", FieldKind.Connection,
+            Help: "Blank uses the only station you have.") { ProviderFilter = "ambient" },
+
+        new("days", "Days to score", FieldKind.Number, Default: "7"),
+    ];
+
+    public Type Component => typeof(ForecastAccuracy);
+}
+
 public sealed class CompareChartWidget : IWidgetType
 {
     public string Type => "compare-chart";

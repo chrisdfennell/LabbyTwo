@@ -49,20 +49,34 @@ public sealed class WeatherStationTabKind : ITabKind
     public string Kind => "weather-station";
     public string DisplayName => "Weather station";
     public string Icon => "🌦️";
-    public string Description => "A whole page for one Ambient Weather station — readings, radar, today's extremes and history.";
+    public string Description =>
+        "A whole page for the weather where you are — warnings, forecast, radar, your own station and history.";
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("connection", "Weather station", FieldKind.Connection,
-            Help: "Leave blank to use the only Ambient Weather connection you have.")
+            Help: "Optional. Blank uses the only Ambient Weather connection you have; with none, the " +
+                  "page shows the forecast and warnings on their own.")
             { ProviderFilter = "ambient" },
 
         new("forecast", "Forecast", FieldKind.Connection,
             Help: "Optional. Blank uses the only forecast connection you have, and shows nothing if " +
                   "you have none — the station reports what is happening, this what is about to.")
             { ProviderFilter = "forecast" },
-        new("latitude", "Latitude", FieldKind.Text, "39.7392",
-            Help: "Decimal degrees. Used for the radar and for sunrise and sunset, which are computed here rather than fetched."),
-        new("longitude", "Longitude", FieldKind.Text, "-104.9903"),
+
+        new("warnings", "Weather warnings", FieldKind.Connection,
+            Help: "Optional. Watches and warnings appear at the top of the page, above everything else.")
+            { ProviderFilter = "nws" },
+
+        new("air", "Air quality", FieldKind.Connection,
+            Help: "Optional.") { ProviderFilter = "air-quality" },
+
+        new("hourly_hours", "Hours in the hourly strip", FieldKind.Number, Default: "12",
+            Help: "Zero hides it.") { Advanced = true },
+
+        new("latitude", "Latitude", FieldKind.Text,
+            Help: "Only for the radar and for sunrise and sunset, which are computed here rather than " +
+                  "fetched. Blank uses the location set in Settings.") { Advanced = true },
+        new("longitude", "Longitude", FieldKind.Text) { Advanced = true },
         new("radar", "Show radar", FieldKind.Bool, Default: "true"),
         new("radar_source", "Radar source", FieldKind.Select, Default: "rainviewer", Options: RadarSource.Options),
         new("radar_zoom", "Radar zoom", FieldKind.Number, Default: "7"),

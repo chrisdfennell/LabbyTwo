@@ -63,7 +63,19 @@ public sealed class DockerProvider : IConnectionProvider
     [
         new("container_count", "Containers running"),
         new("container_total", "Containers defined"),
+
+        // The difference, reported rather than left to arithmetic: "how many are stopped"
+        // is the number worth an alert, and a rule cannot subtract one metric from another.
+        new("container_stopped", "Containers stopped"),
+
         new("latency_ms", "Response time", " ms"),
+    ];
+
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("Something has stopped", "container_stopped", Comparison.Above, 0, ForMinutes: 5,
+            Why: "A container that exited and did not come back. Five minutes' grace, so an " +
+                 "update recreating one does not count."),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
@@ -82,6 +94,7 @@ public sealed class DockerProvider : IConnectionProvider
                     ["latency_ms"] = stopwatch.Elapsed.TotalMilliseconds,
                     ["container_count"] = running,
                     ["container_total"] = containers.Count,
+                    ["container_stopped"] = containers.Count - running,
                 });
         }
         catch (Exception ex)

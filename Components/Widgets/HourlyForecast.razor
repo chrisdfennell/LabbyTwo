@@ -1,0 +1,77 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject AppSettingsStore AppSettings
+@inject Registry Registry
+
+@* The next few hours, which is the question a daily forecast cannot answer: "89% chance
+   Thursday" tells you nothing about whether to mow the lawn at ten. The bar is the chance
+   of rain, drawn rather than written, because a shape is read at a glance and a column of
+   percentages is not. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a forecast connection.</p>
+}
+else if (Hours.Count == 0)
+{
+    <p class="tile-meta mb-0">No hourly forecast yet — it appears after the next check.</p>
+}
+else
+{
+    <div class="forecast-hours">
+        @foreach (var hour in Hours)
+        {
+            <div class="forecast-hour" title="@Tooltip(hour)">
+                <div class="tile-meta">@(hour == Hours[0] ? "Now" : hour.Label)</div>
+                <div class="forecast-icon">@hour.Icon</div>
+                <div><strong>@Degrees(hour.TempC)</strong></div>
+                <div class="rain-bar" aria-hidden="true">
+                    <span style="height: @(Math.Clamp(hour.RainChance, 0, 100).ToString("0"))%"></span>
+                </div>
+                <div class="tile-meta">@(hour.RainChance > 0 ? $"{hour.RainChance:0}%" : "·")</div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<ForecastProvider.Hour> _hours = [];
+    private string _units = Appearance.Default.UnitSystem;
+
+    private IReadOnlyList<ForecastProvider.Hour> Hours =>
+        [.. _hours.Take(Math.Clamp(Context.Widget.Settings.GetInt("hours", 12), 1, 48))];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+    }
+
+    protected override void OnParametersSet() => Load();
+
+    private void Load() =>
+        _hours = Context.Connection is { } connection
+                 && Registry.Provider(connection.Provider) is ForecastProvider forecast
+            ? forecast.Hours(connection)
+            : [];
+
+    private string Degrees(double celsius) =>
+        Units.Display(celsius, "°C", _units).Value.ToString("F0") + "°";
+
+    private string Tooltip(ForecastProvider.Hour hour)
+    {
+        var (rain, unit) = Units.Display(hour.RainInches, " in", _units);
+        return $"{hour.At:dddd HH:mm} — {WeatherCode.Describe(hour.Code)}, {Degrees(hour.TempC)}, " +
+               $"{hour.RainChance:0}% chance" + (rain > 0 ? $", {rain:0.##}{unit}" : "");
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Load();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

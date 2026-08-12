@@ -56,6 +56,13 @@ public sealed class HttpEndpointProvider(IHttpClientFactory httpFactory) : IConn
 
     public IReadOnlyList<MetricSpec> Metrics => [new("latency_ms", "Response time", " ms")];
 
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("Answering slowly", "latency_ms", Comparison.Above, 5000, ClearThreshold: 2000, ForMinutes: 10,
+            Why: "Up but crawling is the state nothing else catches — the probe succeeds, so the " +
+                 "tile stays green while the thing is unusable."),
+    ];
+
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {
         var url = connection.Settings.Get("url");

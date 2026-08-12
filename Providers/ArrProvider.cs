@@ -34,6 +34,13 @@ public abstract class ArrProviderBase(IHttpClientFactory httpFactory) : IConnect
         new("latency_ms", "Response time", " ms"),
     ];
 
+    public IReadOnlyList<SuggestedRule> SuggestedRules =>
+    [
+        new("Queue is stuck", "queue_count", Comparison.Above, 25, ClearThreshold: 10, ForMinutes: 180,
+            Why: "A queue this long for three hours is usually one item failing to import and " +
+                 "everything behind it waiting — not a busy evening."),
+    ];
+
     public sealed record QueueItem(string Title, string Status, double PercentDone, string TimeLeft);
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
