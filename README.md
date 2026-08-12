@@ -310,7 +310,12 @@ greys out the rest with the reason.
 |---|---|
 | Service tile | any connection — status dot, response time, 1h sparkline, 24h uptime |
 | Metric | any connection — one number, big |
+| Gauge | any connection — one reading as a bar, with a warning mark: how full, how charged, how hot |
 | Chart | any connection — any recorded metric over time |
+| Chart across connections | nothing — one metric from several connections on one axis: CPU on every host |
+| Total across connections | nothing — one metric summed, averaged or maxed: free space across both NASes |
+| Uptime | any connection — the percentage, with a bar per day behind it so the figure has a shape |
+| Recent changes | any connection, or nothing to watch everything — what went down or came back |
 | Status summary | nothing — how many connections are up/down |
 | Active alerts | nothing — which threshold rules are breached, and by how much |
 | Search | nothing — a search box for any engine, or your own SearXNG |
@@ -318,10 +323,13 @@ greys out the rest with the reason.
 | Greeting | nothing — good morning, and the date |
 | Text / Markdown | nothing |
 | Embedded page | nothing — an iframe in a card |
+| Camera | nothing — a still image or MJPEG stream, loaded by your browser |
+| Action button | nothing — a button that calls a URL: an n8n flow, a Home Assistant scene |
 | Clock | nothing |
 | Weather station | Ambient Weather — current conditions |
 | Weather — today's extremes | Ambient Weather — high/low, peak gust, rain, max UV, peak solar, sunrise and sunset |
 | Readings table | any connection — the raw recorded numbers, foldable |
+| Readings list | any connection — every reading it produces, filterable by prefix |
 | Weather — today | Ambient Weather — high, low, where now sits between them, rain, hourly trend |
 | Wind | Ambient Weather — a compass dial with speed, gust and bearing |
 | Inside vs outside | Ambient Weather — both temperatures, and whether to open the windows |
@@ -334,7 +342,8 @@ greys out the rest with the reason.
 | NAS overview | QNAP |
 | Plex — now playing | Plex |
 | Jellyfin — now playing | Jellyfin |
-| Sonarr / Radarr queue | Sonarr, Radarr |
+| Download queue | Sonarr, Radarr — what is downloading right now, with progress |
+| What's on this week | Sonarr, Radarr — upcoming episodes and films, grouped by day |
 | Containers | Docker |
 | Git — summary | MyPersonalGit — repository, PR and issue counts, and what was touched last |
 | Git — repositories | MyPersonalGit — the repository table |
@@ -359,6 +368,14 @@ reverse proxy with a certificate if you want that.
 
 ### Weather and radar
 
+**Settings → Where you are** holds one location for the whole install, and the forecast,
+the weather warnings, air quality and the radar all fall back to it unless a particular
+connection is given its own. It is *searched* rather than typed — a town, city or postcode
+goes to Open-Meteo's geocoder and comes back as coordinates — because nobody knows their
+own latitude, and a wrong digit does not fail in any visible way. It quietly shows you
+somebody else's weather, which is a worse outcome than an error, and used to be able to
+happen in four places independently.
+
 The Ambient Weather integration turns every reading the station sends into an ordinary
 metric, so charts, tiles and alert rules all work on it with no weather-specific code.
 On top of that there are four cards: current conditions, today's high and low with the
@@ -373,6 +390,7 @@ from somebody else's map rather than from your lab:
 | Source | Coverage | Kind |
 |---|---|---|
 | **RainViewer** | Worldwide | Interactive map |
+| **RainViewer — Europe** | Worldwide, centred on your coordinates | Interactive map |
 | **Windy** | Worldwide | Interactive map |
 | **NOAA / NWS** | United States, per radar site | Animated image |
 | **NOAA — whole US** | United States | Animated image |
@@ -426,7 +444,7 @@ sees the same thing and a backup carries it.
 This is the part that matters if you want to extend it. A provider declares its own
 settings fields and knows how to probe itself. Nothing else in the app changes — not the
 forms, not the picker, not the monitor, not the charts. **There is no registration
-step**: every class implementing one of the four extension interfaces is found by
+step**: every class implementing one of the six extension interfaces is found by
 scanning at startup.
 
 ```csharp
@@ -502,13 +520,17 @@ of that name, which is the supported way to fix a provider you disagree with.
 Plugin code runs unsandboxed inside the LabbyTwo process, which can read the database and
 the keyring. Install plugins you would trust with your credentials.
 
-[`examples/`](examples) has seven that build and run, and most of them fill a real gap
+[`examples/`](examples) has twelve that build and run, and most of them fill a real gap
 rather than only demonstrating one: **Gluetun** (is the VPN tunnel actually up, and exiting
 where you think), **Calendar** (any `.ics` feed, as a widget and a whole agenda page),
-**Chores** (recurring jobs, storing their own data in a table of their own), **Who's home**
-(pings devices and charts each one), plus Syncthing, Paperless-ngx and a Dashy importer.
-Between them they cover every extension point — copy whichever is closest to what you
-want and change the middle.
+**Google Calendar** (the same but writable, so an event added on the wall tablet is on
+everyone's phone), **Chores** (recurring jobs, storing their own data in a table of their
+own), **Renewals** (domains and certificates, with an expiry that can raise a real alert),
+**Drop** (a shared shelf for files between devices, swept on a timer), **NAS files**
+(browse and download a QNAP you already monitor), **Who's home** (pings devices and charts
+each one), plus Syncthing, Paperless-ngx, a Dashy importer and a one-file disk-space
+provider to start from. Between them they cover every extension point — copy whichever is
+closest to what you want and change the middle.
 
 ---
 

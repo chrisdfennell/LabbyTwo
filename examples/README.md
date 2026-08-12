@@ -1,6 +1,6 @@
 # Example plugins
 
-Eleven plugins that build, load and do something worth having. They are meant to be
+Twelve plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
