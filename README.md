@@ -728,20 +728,40 @@ You get three kinds of tag:
 
 | Tag | Is | Pushed by |
 |---|---|---|
-| `you/labbytwo:latest` | the newest **release** | pushing a `v*` tag |
-| `you/labbytwo:v1.0.0` | that release, pinned for ever | pushing a `v*` tag |
+| `you/labbytwo:latest` | the newest **release** | the release workflow |
+| `you/labbytwo:v1.0.0` | that release, pinned for ever | the release workflow |
 | `you/labbytwo:main` | the newest commit on main | pushing to `main` |
 
 `:latest` deliberately does *not* follow main. Anything pulling it — Watchtower most of
 all — should get the version that was released, not whichever commit landed last.
 
-Cutting a release is therefore `git tag -a v1.1.0 -m '…' && git push origin v1.1.0`, plus
-a GitHub release so `install.sh` can find it: the installer asks the API for
-`releases/latest`, and a tag with no release attached is invisible to it.
-
 Make the repository **public** on Docker Hub unless you want to configure registry
 credentials in Watchtower as well — a private image that nothing can pull fails silently,
 once a day, forever.
+
+### Cutting a release
+
+**Actions → Release → Run workflow**, type `v1.1.0`, press the button. That is the whole
+thing:
+
+1. runs the same tests the branch runs — the release workflow *calls* `ci.yml` rather than
+   keeping a copy of it, so a release cannot skip a check that main enforces,
+2. builds and pushes `linux/amd64` and `linux/arm64` as `:v1.1.0` and `:latest`,
+3. creates the tag, and the GitHub release with notes written from the commit subjects
+   since the last one.
+
+In that order on purpose. A red test or a failed image build leaves nothing published and
+no tag pointing at code that never built — the worst it can leave behind is an image
+nobody references, which is a great deal better than a release that does not work.
+
+The GitHub release is the part that matters to installs: `install.sh` asks the API for
+`releases/latest`, so **a tag with no release attached is invisible to it**. Pushing a
+`v*` tag by hand also starts the workflow, and it uses your tag rather than making one.
+
+A version with a suffix — `v1.1.0-rc1` — is marked a pre-release and does *not* get
+`:latest`, so a release candidate is never handed to everybody. Tick **draft** to write
+the notes properly before anyone sees them; the release stays invisible, and so does it to
+`install.sh`, until you publish it.
 
 Then point your install at it. Put this in `docker-compose.override.yml`, **not** in
 `docker-compose.yml`:

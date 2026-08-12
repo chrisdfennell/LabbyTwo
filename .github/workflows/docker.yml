@@ -1,11 +1,11 @@
 name: Build and push Docker images
 
+# Main only. Releases are built and pushed by release.yml, which owns the whole sequence
+# — tests, then images, then the tag — so that a tag never exists without an image behind
+# it. A `tags:` trigger here as well would build every release twice and race with it.
 on:
   push:
     branches: [main]
-    # A release is only a release once there is an image for it — install.sh builds from
-    # source, but the pull-an-image and Watchtower paths need one published under the tag.
-    tags: ['v*']
   # Pull requests build but never publish, which gives dependency updates a compile check.
   pull_request:
     branches: [main]
@@ -58,24 +58,10 @@ jobs:
           # being pushed.
           echo "image=${DOCKERHUB_USERNAME:-local}/labbytwo" >> "$GITHUB_OUTPUT"
 
-          # On a tag, the version is that tag exactly — which is what Settings compares
-          # against the newest release. On main it is a describe, so it carries both the
-          # release it is counting from and the commit, and reads as ahead rather than as
-          # a release it is not.
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME}"
-          else
-            version="$(git describe --tags --always --long)"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-          # :latest should mean the newest *release*, not the newest commit — otherwise
-          # everyone pulling it, Watchtower included, is silently tracking main.
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "moving=latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "moving=main" >> "$GITHUB_OUTPUT"
-          fi
+          # A describe rather than a bare sha, so the stamp carries both the release it is
+          # counting from and the commit it is at — v1.0.0-3-gabc1234. That is what tells
+          # Settings this build is ahead of the last release rather than behind it.
+          echo "version=$(git describe --tags --always --long)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -85,8 +71,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             LABBYTWO_VERSION=${{ steps.meta.outputs.version }}
+          # :main, never :latest. :latest is the newest release and is pushed by
+          # release.yml — anything pulling it should not be moved onto main by a merge.
           tags: |
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.moving }}
+            ${{ steps.meta.outputs.image }}:main
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

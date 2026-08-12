@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # So the release workflow can run exactly these checks rather than a copy of them that
+  # drifts. A release that skipped a test the branch runs would be the worst kind.
+  workflow_call:
 
 jobs:
   test:

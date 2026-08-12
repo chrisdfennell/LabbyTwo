@@ -1,0 +1,251 @@
+name: Release
+
+# Cutting a release, in one button.
+#
+#   Actions → Release → Run workflow → type v1.1.0
+#
+# It runs the tests, builds and pushes the images, then creates the tag and the release
+# notes. In that order on purpose: a red test or a failed image build leaves nothing
+# published and no tag pointing at code that never built. The worst outcome here is an
+# image nobody references, which is a great deal better than a release that does not work.
+#
+# You can also just push a v* tag by hand and it picks that up instead of making its own.
+#
+# The tag this workflow pushes does not set it off again: GitHub deliberately raises no
+# events for pushes made with GITHUB_TOKEN, which is what stops the loop.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. v1.1.0'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as a pre-release'
+        type: boolean
+        default: false
+      draft:
+        description: 'Create as a draft, to edit the notes before anyone sees them'
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+# The default token is read-only on many repositories, and this one has to write a tag
+# and a release.
+permissions:
+  contents: write
+
+jobs:
+  # Everything that can be known before anything is built, so a typo fails in ten seconds
+  # rather than after a seven-minute arm64 build.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      previous: ${{ steps.plan.outputs.previous }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Needs every tag to find the previous one and to check this one is new.
+          fetch-depth: 0
+
+      - id: plan
+        env:
+          # Through the environment rather than interpolated into the script: a version
+          # string is user input, and user input does not belong in a shell body.
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${INPUT_VERSION}"
+          fi
+
+          # "1.1.0" is what people type; the tags all start with v.
+          case "$version" in v*) ;; *) version="v$version" ;; esac
+
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::\"$version\" is not a version like v1.2.3 or v1.2.3-rc1."
+            exit 1
+          fi
+
+          # Re-tagging silently would move a release somebody may already be running.
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] \
+             && git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            echo "::error::Tag $version already exists. Pick another version, or delete the tag first."
+            exit 1
+          fi
+
+          # Newest tag that is not this one, for the range the notes cover. Empty on the
+          # very first release, which the notes step handles.
+          previous="$(git tag --sort=-v:refname | grep -vx "$version" | head -1 || true)"
+
+          # A suffix means a pre-release whether or not the box was ticked — v1.1.0-rc1 is
+          # not a thing anyone should be offered as the newest stable version.
+          prerelease="$INPUT_PRERELEASE"
+          case "$version" in *-*) prerelease=true ;; esac
+          [ -n "$prerelease" ] || prerelease=false
+
+          {
+            echo "version=$version"
+            echo "previous=$previous"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Releasing \`$version\`"
+            echo
+            echo "- previous release: ${previous:-none, this is the first}"
+            echo "- pre-release: $prerelease"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The same checks the branch runs, not a copy of them.
+  test:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [prepare, test]
+    runs-on: ubuntu-latest
+
+    # A step's `if:` cannot read the secrets context, so mirror the one we test into env.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 matters here: a good share of home labs run on a Raspberry Pi or an ARM NAS.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Say whether this run will publish
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ]; then
+            echo "Publishing \`$VERSION\` to Docker Hub." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No DOCKERHUB_USERNAME secret, so the image is built as a check and not pushed." \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "The release itself will still be created." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: docker/login-action@v3
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Built here rather than inline below, because build-push-action splits its tags on
+      # newlines and commas — not spaces — so a conditional folded into that field
+      # produces one nonsense tag rather than two good ones.
+      - name: Work out the tags
+        id: meta
+        env:
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          # Forks and unconfigured clones have no secret, and buildx rejects a tag
+          # starting with "/" even when nothing is being pushed.
+          image="${DOCKERHUB_USERNAME:-local}/labbytwo"
+
+          {
+            echo "tags<<TAGS"
+            echo "$image:$VERSION"
+
+            # :latest is the newest *release*, never the newest commit — main publishes
+            # :main instead. Anything pulling :latest, Watchtower most of all, should get
+            # the version that was released rather than whatever landed an hour ago.
+            #
+            # A pre-release is not latest either. It gets its own tag and nothing else,
+            # or ticking the box would ship a release candidate to everybody.
+            if [ "$PRERELEASE" != "true" ]; then
+              echo "$image:latest"
+            fi
+
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ env.DOCKERHUB_USERNAME != '' }}
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            LABBYTWO_VERSION=${{ needs.prepare.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: [prepare, test, publish]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PREVIOUS: ${{ needs.prepare.outputs.previous }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Write the notes
+        run: |
+          set -euo pipefail
+          {
+            if [ -n "$PREVIOUS" ]; then
+              echo "## What changed since $PREVIOUS"
+              echo
+              # Subject lines only. The bodies here run to paragraphs, and the point of a
+              # release note is the list you can scan.
+              git log --no-merges --pretty='- %s' "$PREVIOUS..HEAD"
+              echo
+              echo "**Full diff:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${VERSION}"
+            else
+              echo "The first release."
+            fi
+
+            echo
+            echo "## Installing"
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh -o install.sh"
+            echo "less install.sh      # it runs Docker. Read it first."
+            echo "bash install.sh"
+            echo '```'
+            echo
+            echo "The installers fetch the newest release, so this one, from now on."
+            echo "To follow main instead: \`LABBY_CHANNEL=main bash install.sh\`."
+          } > notes.md
+
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Annotated rather than lightweight, so the tag records who cut it and when.
+      # Skipped when a tag push is what started this, because then it already exists.
+      - name: Tag it
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "LabbyTwo $VERSION"
+          git push origin "$VERSION"
+
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          flags=""
+          [ "${{ needs.prepare.outputs.prerelease }}" = "true" ] && flags="$flags --prerelease"
+          [ "${{ inputs.draft }}" = "true" ] && flags="$flags --draft"
+
+          # shellcheck disable=SC2086
+          gh release create "$VERSION" --title "$VERSION" --notes-file notes.md $flags
