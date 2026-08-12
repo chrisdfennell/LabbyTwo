@@ -14,6 +14,10 @@
 
 .EXAMPLE
     .\install.ps1 -Port 5151 -Dir D:\labbytwo
+
+.EXAMPLE
+    # Follow main instead of the newest release — for a fix that is merged but not released.
+    .\install.ps1 -Channel main
 #>
 [CmdletBinding()]
 param(
@@ -21,9 +25,20 @@ param(
     # know whether to ask.
     [string]$Dir    = '',
     [int]$Port      = 5150,
-    [string]$Branch = 'main',
+
+    # By default this installs the newest tagged release, so a fresh install gets a version
+    # somebody decided was ready rather than whatever landed on main an hour ago.
+    [ValidateSet('release', 'main')]
+    [string]$Channel = '',
+
+    [string]$Branch = '',
     [string]$Repo   = 'https://github.com/chrisdfennell/LabbyTwo.git'
 )
+
+# Asking for a branch is asking to track it, so it wins over the default channel without
+# anyone having to pass both.
+if (-not $Channel) { $Channel = if ($Branch) { 'main' } else { 'release' } }
+if (-not $Branch)  { $Branch  = 'main' }
 
 $ErrorActionPreference = 'Stop'
 $DefaultDir = Join-Path $HOME 'labbytwo'
@@ -129,11 +144,33 @@ else {
 
 # ---- get the source ---------------------------------------------------------------
 
+# The tag of the newest published release, or empty if there are none.
+function Get-LatestTag {
+    $ownerRepo = ($Repo -replace '\.git$', '') -replace '.*github\.com[:/]', ''
+    try {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$ownerRepo/releases/latest" `
+                                     -Headers @{ 'User-Agent' = 'LabbyTwo' } -TimeoutSec 20
+        return $release.tag_name
+    }
+    catch { return '' }
+}
+
+$ReleaseTag = ''
+if ($Channel -eq 'release') {
+    $ReleaseTag = Get-LatestTag
+    if (-not $ReleaseTag) {
+        Warn "No published release found, so this will track $Branch instead."
+        Note "That is normal for a fork, or before the first release is cut."
+        $Channel = 'main'
+    }
+    else {
+        Say "Newest release is $ReleaseTag"
+    }
+}
+
 if (Test-Path (Join-Path $Dir '.git')) {
     Say "Updating the checkout in $Dir"
     git -C $Dir remote set-url origin $Repo
-    git -C $Dir fetch --quiet origin $Branch
-    if ($LASTEXITCODE -ne 0) { Die "Could not reach $Repo." }
 
     # Refuse rather than clobber: someone may be running a patched copy on purpose.
     git -C $Dir diff --quiet
@@ -143,16 +180,32 @@ if (Test-Path (Join-Path $Dir '.git')) {
         Die "$Dir has uncommitted changes. Commit, stash or discard them, then run this again."
     }
 
-    git -C $Dir checkout --quiet $Branch
-    git -C $Dir merge --quiet --ff-only "origin/$Branch"
-    if ($LASTEXITCODE -ne 0) {
-        Die "$Dir has local commits that are not on origin/$Branch. Sort that out and re-run."
+    if ($Channel -eq 'release') {
+        # --force, because a tag moved after being published would otherwise fail the
+        # fetch and leave the install stuck on the old one with no explanation.
+        git -C $Dir fetch --quiet --tags --force origin
+        if ($LASTEXITCODE -ne 0) { Die "Could not reach $Repo." }
+        git -C $Dir checkout --quiet --detach $ReleaseTag
+        if ($LASTEXITCODE -ne 0) {
+            Die "Could not check out $ReleaseTag. Delete $Dir and re-run to start clean."
+        }
+        Note "now at $ReleaseTag - $(git -C $Dir log --oneline -1)"
     }
-    Note (git -C $Dir log --oneline -1)
+    else {
+        git -C $Dir fetch --quiet origin $Branch
+        if ($LASTEXITCODE -ne 0) { Die "Could not reach $Repo." }
+        git -C $Dir checkout --quiet $Branch
+        git -C $Dir merge --quiet --ff-only "origin/$Branch"
+        if ($LASTEXITCODE -ne 0) {
+            Die "$Dir has local commits that are not on origin/$Branch. Sort that out and re-run."
+        }
+        Note (git -C $Dir log --oneline -1)
+    }
 }
 else {
     Say "Cloning into $Dir"
-    git clone --quiet --branch $Branch $Repo $Dir
+    $ref = if ($Channel -eq 'release') { $ReleaseTag } else { $Branch }
+    git clone --quiet --branch $ref $Repo $Dir
     if ($LASTEXITCODE -ne 0) { Die "Clone failed." }
 }
 
@@ -212,10 +265,23 @@ if (-not $ours) {
 
 # ---- build and start --------------------------------------------------------------
 
-# Stamp the build with its commit so Settings can tell whether this install is behind.
-$version = (git -C $Dir rev-parse --short=12 HEAD 2>$null)
-if ($LASTEXITCODE -ne 0 -or -not $version) { $version = 'dev' }
-$env:LABBYTWO_VERSION = $version.Trim()
+# Stamp the build so Settings can tell whether this install is behind.
+#
+# On the release channel that is the tag, exactly, and it is compared against the newest
+# release. On main it is a `git describe` — v1.0.0-3-gabc1234, meaning three commits past
+# v1.0.0 — which names both the release it counts from and the commit it is at, and is
+# what tells Settings to compare against main rather than against the last release.
+if ($Channel -eq 'release' -and $ReleaseTag) {
+    $version = $ReleaseTag
+}
+else {
+    $version = (git -C $Dir describe --tags --always --long 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $version) {
+        $version = (git -C $Dir rev-parse --short=12 HEAD 2>$null)
+    }
+    if ($LASTEXITCODE -ne 0 -or -not $version) { $version = 'dev' }
+}
+$env:LABBYTWO_VERSION = "$version".Trim()
 Note "building $($env:LABBYTWO_VERSION)"
 
 Say "Building the image — the first run takes a few minutes"

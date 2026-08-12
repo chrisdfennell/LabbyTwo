@@ -11,7 +11,17 @@
 #
 #   LABBY_DIR=/opt/labbytwo  where to keep the checkout   (skips the prompt)
 #   LABBY_PORT=5150          port to serve on             (default 5150)
-#   LABBY_BRANCH=main        branch to track              (default main)
+#   LABBY_CHANNEL=release    release | main               (default release)
+#   LABBY_BRANCH=main        branch, when tracking main   (default main)
+#
+# By default this installs the newest tagged release, so a fresh install gets a version
+# somebody decided was ready rather than whatever landed on main an hour ago. To follow
+# main instead — for a fix that is merged but not yet released:
+#
+#   LABBY_CHANNEL=main bash install.sh
+#
+# Setting LABBY_BRANCH to anything implies the main channel, since a branch and a release
+# are two different things to be on.
 
 set -euo pipefail
 
@@ -20,6 +30,19 @@ DEFAULT_DIR="$HOME/labbytwo"
 DIR="${LABBY_DIR:-}"
 BRANCH="${LABBY_BRANCH:-main}"
 PORT="${LABBY_PORT:-5150}"
+
+# Asking for a branch is asking to track it, so it wins over the default channel without
+# anyone having to set both.
+if [ -n "${LABBY_BRANCH:-}" ]; then
+    CHANNEL="${LABBY_CHANNEL:-main}"
+else
+    CHANNEL="${LABBY_CHANNEL:-release}"
+fi
+
+case "$CHANNEL" in
+    release|main) ;;
+    *) printf 'LABBY_CHANNEL must be "release" or "main", not "%s".\n' "$CHANNEL" >&2; exit 1 ;;
+esac
 
 # Colour only when this is a terminal, so piping to a file or a log stays readable.
 if [ -t 1 ]; then
@@ -68,6 +91,15 @@ api_commit_sha() {
     json="$(fetch_stdout "https://api.github.com/repos/$owner_repo/commits/$BRANCH" || true)"
     sha="$(printf '%s' "$json" | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{12\}\).*//p' | head -1)"
     printf '%s' "${sha:-dev}"
+}
+
+# The tag of the newest published release, or empty if there are none. Used to decide what
+# to check out, and on a host with no git, what to download.
+api_latest_tag() {
+    local owner_repo json
+    owner_repo="$(printf '%s' "${REPO_URL%.git}" | sed 's|.*github.com[:/]||')"
+    json="$(fetch_stdout "https://api.github.com/repos/$owner_repo/releases/latest" || true)"
+    printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
 fetch_stdout() {   # fetch_stdout <url>
@@ -227,7 +259,11 @@ fi
 install_from_tarball() {
     local url tmp
     # Derive the archive URL from the clone URL so LABBY_REPO still works for forks.
-    url="${REPO_URL%.git}/archive/refs/heads/$BRANCH.tar.gz"
+    if [ "$CHANNEL" = "release" ] && [ -n "$RELEASE_TAG" ]; then
+        url="${REPO_URL%.git}/archive/refs/tags/$RELEASE_TAG.tar.gz"
+    else
+        url="${REPO_URL%.git}/archive/refs/heads/$BRANCH.tar.gz"
+    fi
     tmp="$(mktemp -d 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/labbytwo.$$")"
     mkdir -p "$tmp"
     # shellcheck disable=SC2064
@@ -250,23 +286,50 @@ install_from_tarball() {
     trap - EXIT
 }
 
+# Which release to install. Asked once, up front, because both the git and the tarball
+# path below need the answer and the no-git path cannot work it out locally.
+RELEASE_TAG=""
+if [ "$CHANNEL" = "release" ]; then
+    RELEASE_TAG="$(api_latest_tag || true)"
+    if [ -z "$RELEASE_TAG" ]; then
+        warn "No published release found, so this will track $BRANCH instead."
+        note "That is normal for a fork, or before the first release is cut."
+        CHANNEL="main"
+    else
+        say "Newest release is $RELEASE_TAG"
+    fi
+fi
+
 if [ "$HAVE_GIT" = "1" ] && [ -d "$DIR/.git" ]; then
     say "Updating the checkout in $DIR"
     git -C "$DIR" remote set-url origin "$REPO_URL"
-    git -C "$DIR" fetch --quiet origin "$BRANCH"
 
     # Refuse rather than clobber: someone may be running a patched copy on purpose.
     if ! git -C "$DIR" diff --quiet || ! git -C "$DIR" diff --cached --quiet; then
         die "$DIR has uncommitted changes. Commit, stash or discard them, then run this again."
     fi
 
-    git -C "$DIR" checkout --quiet "$BRANCH"
-    git -C "$DIR" merge --quiet --ff-only "origin/$BRANCH" \
-        || die "$DIR has local commits that are not on origin/$BRANCH. Sort that out and re-run."
-    note "now at $(git -C "$DIR" log --oneline -1)"
+    if [ "$CHANNEL" = "release" ]; then
+        # --force, because a tag that was moved after being published would otherwise
+        # fail the fetch and leave the install stuck on the old one with no explanation.
+        git -C "$DIR" fetch --quiet --tags --force origin
+        git -C "$DIR" checkout --quiet --detach "$RELEASE_TAG" \
+            || die "Could not check out $RELEASE_TAG. Delete $DIR and re-run to start clean."
+        note "now at $RELEASE_TAG ($(git -C "$DIR" log --oneline -1))"
+    else
+        git -C "$DIR" fetch --quiet origin "$BRANCH"
+        git -C "$DIR" checkout --quiet "$BRANCH"
+        git -C "$DIR" merge --quiet --ff-only "origin/$BRANCH" \
+            || die "$DIR has local commits that are not on origin/$BRANCH. Sort that out and re-run."
+        note "now at $(git -C "$DIR" log --oneline -1)"
+    fi
 elif [ "$HAVE_GIT" = "1" ] && [ ! -f "$DIR/LabbyTwo.csproj" ]; then
     say "Cloning into $DIR"
-    git clone --quiet --branch "$BRANCH" "$REPO_URL" "$DIR"
+    if [ "$CHANNEL" = "release" ]; then
+        git clone --quiet --branch "$RELEASE_TAG" "$REPO_URL" "$DIR"
+    else
+        git clone --quiet --branch "$BRANCH" "$REPO_URL" "$DIR"
+    fi
 else
     # Either there is no git, or there is a tarball install already here to refresh.
     if [ -f "$DIR/LabbyTwo.csproj" ]; then
@@ -349,8 +412,17 @@ fi
 
 # Stamp the build with the commit it came from, so Settings can say whether this install
 # is behind. Without it every build calls itself "dev" and can compare against nothing.
-if [ "$HAVE_GIT" = "1" ] && [ -d "$DIR/.git" ]; then
-    LABBYTWO_VERSION="$(git -C "$DIR" rev-parse --short=12 HEAD 2>/dev/null || echo dev)"
+#
+# On the release channel that is the tag, exactly, so Settings can compare it against the
+# newest release. On main it is a `git describe` — v1.0.0-3-gabc1234, meaning three commits
+# past v1.0.0 — which names both the release it is counting from and the commit it is at,
+# and is what tells Settings to compare against main rather than against the last release.
+if [ "$CHANNEL" = "release" ] && [ -n "$RELEASE_TAG" ]; then
+    LABBYTWO_VERSION="$RELEASE_TAG"
+elif [ "$HAVE_GIT" = "1" ] && [ -d "$DIR/.git" ]; then
+    LABBYTWO_VERSION="$(git -C "$DIR" describe --tags --always --long 2>/dev/null \
+        || git -C "$DIR" rev-parse --short=12 HEAD 2>/dev/null \
+        || echo dev)"
 else
     # A tarball carries no history, so ask the API what the tip of the branch is. It was
     # downloaded moments ago, so that is what this is.

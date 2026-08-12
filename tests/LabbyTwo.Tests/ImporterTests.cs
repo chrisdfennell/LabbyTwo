@@ -220,7 +220,8 @@ public class ImporterTests
         var path = Path.Combine(Path.GetTempPath(), $"heimdall-test-{Guid.NewGuid():N}.sqlite");
         try
         {
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString()))
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Pooling = false }.ToString()))
             {
                 connection.Open();
                 var cmd = connection.CreateCommand();
@@ -237,12 +238,10 @@ public class ImporterTests
                     """;
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
             return File.ReadAllBytes(path);
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             if (File.Exists(path))
                 File.Delete(path);
         }
@@ -281,19 +280,18 @@ public class ImporterTests
         byte[] bytes;
         try
         {
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString()))
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Pooling = false }.ToString()))
             {
                 connection.Open();
                 var cmd = connection.CreateCommand();
                 cmd.CommandText = "CREATE TABLE something_else (id INTEGER)";
                 cmd.ExecuteNonQuery();
             }
-            SqliteConnection.ClearAllPools();
             bytes = File.ReadAllBytes(path);
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             if (File.Exists(path))
                 File.Delete(path);
         }

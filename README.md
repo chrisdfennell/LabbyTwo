@@ -65,6 +65,31 @@ To skip the prompt — for a script, a cron job, or CI — set the directory up 
 `LABBY_DIR=/opt/labbytwo bash install.sh`, or `.\install.ps1 -Dir D:\labbytwo`. Add
 `LABBY_PORT=5151` / `-Port 5151` if 5150 is taken.
 
+### Releases, or main
+
+It installs the **newest tagged release** by default, so a fresh install gets a version
+somebody decided was ready rather than whatever landed on `main` an hour ago. To follow
+`main` instead — for a fix that is merged but not released yet:
+
+```bash
+LABBY_CHANNEL=main bash install.sh      # or  .\install.ps1 -Channel main
+```
+
+Whichever you pick, the build is stamped with what it is, and **Settings → Updates**
+compares against the right thing: a release install against the newest release, a `main`
+install against the tip of `main`. A build tracking main is deliberately *ahead* of the
+last release, and reporting that as "behind" would be backwards.
+
+| | Version shown in Settings | Compared against |
+|---|---|---|
+| Release channel | `v1.0.0` | the newest published release |
+| Main channel | `v1.0.0-3-gabc1234` — three commits past v1.0.0 | the tip of `main` |
+| Built by hand | `not stamped` | nothing; there is nothing to compare |
+
+Published images follow the same split: `:latest` is the newest **release**, `:main` is
+the newest commit, and every release also gets its own `:v1.0.0` tag. If you pull images
+rather than building, `:latest` will not quietly move you onto main.
+
 **Changing the Compose setup?** Put it in `docker-compose.override.yml` rather than
 editing `docker-compose.yml` — Compose merges it automatically, it is gitignored, and
 updates leave it alone. `docker-compose.override.yml.example` covers the usual cases:
@@ -320,7 +345,7 @@ greys out the rest with the reason.
 | Active alerts | nothing — which threshold rules are breached, and by how much |
 | Search | nothing — a search box for any engine, or your own SearXNG |
 | Bookmarks | nothing — a list of links, with each site's own icon fetched for it |
-| Greeting | nothing — good morning, and the date |
+| Greeting | nothing — good morning, and the date. The wording of each part of the day is yours to change |
 | Text / Markdown | nothing |
 | Embedded page | nothing — an iframe in a card |
 | Camera | nothing — a still image or MJPEG stream, loaded by your browser |
@@ -680,10 +705,11 @@ Four ways, in order of how much you want to be involved.
 | **The button in Settings** | press it | be there |
 | **Watchtower** | nothing | nothing |
 
-**Settings → Updates** compares the commit this image was built from against the tip of
-`main` and tells you whether you are behind, what the newest change was, and links to the
-diff. Nothing is contacted until you press the button — LabbyTwo does not phone home, and
-that includes not quietly checking on page load to decide what to render.
+**Settings → Updates** compares this build against the newest release — or against the tip
+of `main` if that is what it is tracking, as above — and tells you whether you are behind,
+what the newest change was, and links to the diff. Nothing is contacted until you press the
+button — LabbyTwo does not phone home, and that includes not quietly checking on page load
+to decide what to render.
 
 ### Publishing images from CI
 
@@ -698,9 +724,24 @@ push and skips the publish step until you give it somewhere to push to.
 3. Push to `main`. The run's summary says whether it published; a fork or an unconfigured
    clone still builds, it just does not push.
 
-You get `you/labbytwo:latest` and a tag per commit. Make the repository **public** on
-Docker Hub unless you want to configure registry credentials in Watchtower as well — a
-private image that nothing can pull fails silently, once a day, forever.
+You get three kinds of tag:
+
+| Tag | Is | Pushed by |
+|---|---|---|
+| `you/labbytwo:latest` | the newest **release** | pushing a `v*` tag |
+| `you/labbytwo:v1.0.0` | that release, pinned for ever | pushing a `v*` tag |
+| `you/labbytwo:main` | the newest commit on main | pushing to `main` |
+
+`:latest` deliberately does *not* follow main. Anything pulling it — Watchtower most of
+all — should get the version that was released, not whichever commit landed last.
+
+Cutting a release is therefore `git tag -a v1.1.0 -m '…' && git push origin v1.1.0`, plus
+a GitHub release so `install.sh` can find it: the installer asks the API for
+`releases/latest`, and a tag with no release attached is invisible to it.
+
+Make the repository **public** on Docker Hub unless you want to configure registry
+credentials in Watchtower as well — a private image that nothing can pull fails silently,
+once a day, forever.
 
 Then point your install at it. Put this in `docker-compose.override.yml`, **not** in
 `docker-compose.yml`:

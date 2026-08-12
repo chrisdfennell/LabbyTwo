@@ -112,6 +112,16 @@ public sealed class GreetingWidget : IWidgetType
     [
         new("name", "Your name", FieldKind.Text, Help: "Optional — blank just says “Good morning”."),
         new("show_date", "Show the date", FieldKind.Bool, Default: "true"),
+
+        // The wording itself, one field per part of the day. Defaults are what it has
+        // always said, so a card that predates these is unchanged until somebody types
+        // over one. Advanced, because most people want the name box and nothing else.
+        new("morning", "Say, from 05:00", FieldKind.Text, GreetingCard.DefaultMorning,
+            Help: "Write {name} anywhere in it to place the name yourself; leave it out and " +
+                  "the name is added on the end as usual.") { Advanced = true },
+        new("afternoon", "From 12:00", FieldKind.Text, GreetingCard.DefaultAfternoon) { Advanced = true },
+        new("evening", "From 18:00", FieldKind.Text, GreetingCard.DefaultEvening) { Advanced = true },
+        new("night", "From 22:00", FieldKind.Text, GreetingCard.DefaultNight) { Advanced = true },
     ];
     public Type Component => typeof(GreetingCard);
 }

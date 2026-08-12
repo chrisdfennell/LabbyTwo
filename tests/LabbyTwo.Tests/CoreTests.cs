@@ -1,3 +1,5 @@
+using System.Text.Json;
+using LabbyTwo.Components.Widgets;
 using LabbyTwo.Core;
 using LabbyTwo.Providers;
 using LabbyTwo.Services;
@@ -752,6 +754,99 @@ public class UpdateCheckerTests
         // answer worse than saying nothing.
         var failed = new UpdateChecker.Result("abc123", null, null, null, null, "no route");
         Assert.False(failed.Known);
+    }
+
+    [Fact]
+    public void BetweenTwoReleasesTheCompareLinkIsAFixedRange()
+    {
+        // Not "...main": the point of being on a release is that the range is stable.
+        var result = new UpdateChecker.Result("v1.0.0", "v1.1.0", true, "x", null, null);
+        Assert.Equal("https://github.com/chrisdfennell/LabbyTwo/compare/v1.0.0...v1.1.0", result.CompareUrl);
+    }
+
+    [Theory]
+    [InlineData("v1.0.0", UpdateChecker.Channel.Release)]
+    [InlineData("v1.10.2", UpdateChecker.Channel.Release)]
+    [InlineData("1.0.0", UpdateChecker.Channel.Release)]
+    // A describe is a commit that happens to know which release it came after. Reading it
+    // as a release would report an install that is deliberately ahead as merely behind.
+    [InlineData("v1.0.0-3-gabc1234", UpdateChecker.Channel.Commit)]
+    [InlineData("abc123456789", UpdateChecker.Channel.Commit)]
+    [InlineData("dev", UpdateChecker.Channel.Unstamped)]
+    [InlineData("", UpdateChecker.Channel.Unstamped)]
+    [InlineData(null, UpdateChecker.Channel.Unstamped)]
+    public void TheShapeOfTheStampSaysWhatItShouldBeComparedAgainst(string? stamp, UpdateChecker.Channel expected)
+        => Assert.Equal(expected, UpdateChecker.ChannelOf(stamp));
+
+    [Theory]
+    [InlineData("v1.0.0-3-gabc1234", "abc1234")]
+    [InlineData("abc123456789", "abc123456789")]
+    [InlineData("v1.0.0", null)]
+    [InlineData("dev", null)]
+    public void TheCommitIsFoundWhicheverShapeTheStampIs(string stamp, string? expected)
+        => Assert.Equal(expected, UpdateChecker.CommitOf(stamp));
+
+    [Fact]
+    public void AReleaseIsComparedByNameAndTheVPrefixDoesNotCount()
+    {
+        var json = JsonDocument.Parse("""
+            {"tag_name": "v1.0.0", "name": "v1.0.0", "published_at": "2026-08-12T10:00:00Z",
+             "body": "Weather warnings, and a grid that reflows."}
+            """);
+
+        var same = UpdateChecker.ReadRelease("1.0.0", json.RootElement);
+        Assert.False(same.Behind);
+        Assert.Equal("v1.0.0", same.Latest);
+
+        // The release's own name repeats the tag, so the summary falls back to the notes.
+        Assert.Equal("Weather warnings, and a grid that reflows.", same.Summary);
+
+        var older = UpdateChecker.ReadRelease("v0.9.0", json.RootElement);
+        Assert.True(older.Behind);
+    }
+
+    [Fact]
+    public void ARepositoryWithNoReleasesYetIsNotAFailedCheck()
+    {
+        // GitHub answers 404 for /releases/latest until the first one is cut, and that is
+        // a fact about the project rather than something being wrong with the install.
+        var json = JsonDocument.Parse("""{"message": "Not Found"}""");
+        var result = UpdateChecker.ReadRelease("v1.0.0", json.RootElement);
+        Assert.False(result.Known);
+        Assert.NotNull(result.Error);
+    }
+}
+
+public class GreetingTests
+{
+    [Theory]
+    [InlineData(0, "night")]
+    [InlineData(4, "night")]
+    [InlineData(5, "morning")]
+    [InlineData(11, "morning")]
+    [InlineData(12, "afternoon")]
+    [InlineData(17, "afternoon")]
+    [InlineData(18, "evening")]
+    [InlineData(21, "evening")]
+    [InlineData(22, "night")]
+    [InlineData(23, "night")]
+    public void EachHourPicksItsOwnWording(int hour, string expected)
+        => Assert.Equal(expected, GreetingCard.PartOfDay(hour).Key);
+
+    [Fact]
+    public void TheNameGoesOnTheEndUnlessThePhrasePlacesIt()
+    {
+        Assert.Equal("Good morning, Chris", GreetingCard.Compose("Good morning", "Chris"));
+        Assert.Equal("Morning Chris — kettle?", GreetingCard.Compose("Morning {name} — kettle?", "Chris"));
+    }
+
+    [Fact]
+    public void APhraseWithNoNameToPutInItIsNotLeftWithTheGapOrThePunctuation()
+    {
+        // The widget's name field is optional, and "Evening, ." is worse than "Evening".
+        Assert.Equal("Good evening", GreetingCard.Compose("Good evening", ""));
+        Assert.Equal("Evening", GreetingCard.Compose("Evening, {name}", ""));
+        Assert.Equal("Evening", GreetingCard.Compose("Evening {name}", ""));
     }
 }
 

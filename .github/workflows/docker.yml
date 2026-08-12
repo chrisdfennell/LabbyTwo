@@ -3,6 +3,9 @@ name: Build and push Docker images
 on:
   push:
     branches: [main]
+    # A release is only a release once there is an image for it — install.sh builds from
+    # source, but the pull-an-image and Watchtower paths need one published under the tag.
+    tags: ['v*']
   # Pull requests build but never publish, which gives dependency updates a compile check.
   pull_request:
     branches: [main]
@@ -54,7 +57,25 @@ jobs:
           # placeholder — buildx rejects a tag beginning with "/" even when nothing is
           # being pushed.
           echo "image=${DOCKERHUB_USERNAME:-local}/labbytwo" >> "$GITHUB_OUTPUT"
-          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+
+          # On a tag, the version is that tag exactly — which is what Settings compares
+          # against the newest release. On main it is a describe, so it carries both the
+          # release it is counting from and the commit, and reads as ahead rather than as
+          # a release it is not.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="$(git describe --tags --always --long)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # :latest should mean the newest *release*, not the newest commit — otherwise
+          # everyone pulling it, Watchtower included, is silently tracking main.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "moving=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "moving=main" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -65,7 +86,7 @@ jobs:
           build-args: |
             LABBYTWO_VERSION=${{ steps.meta.outputs.version }}
           tags: |
-            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.moving }}
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

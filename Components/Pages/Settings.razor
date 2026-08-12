@@ -169,8 +169,21 @@
                 {
                     <p class="tile-meta mb-0">
                         Nothing is contacted until you press the button — LabbyTwo does not phone home on
-                        its own. The check asks GitHub for the newest commit and compares it with the one
-                        this image was built from.
+                        its own.
+                        @if (Channel == UpdateChecker.Channel.Release)
+                        {
+                            <text>
+                                This install is on a release, so the check asks GitHub for the newest
+                                published release and compares it with this one.
+                            </text>
+                        }
+                        else
+                        {
+                            <text>
+                                This install tracks <code>main</code>, so the check asks GitHub for the
+                                newest commit and compares it with the one this image was built from.
+                            </text>
+                        }
                     </p>
                 }
                 else if (_update.Error is { Length: > 0 } error)
@@ -180,7 +193,11 @@
                 else if (_update.Behind == false)
                 {
                     <p class="mb-0"><span class="text-success">Up to date.</span>
-                        <span class="tile-meta">Running the newest commit on main.</span></p>
+                        <span class="tile-meta">
+                            @(Channel == UpdateChecker.Channel.Release
+                                ? "Running the newest release."
+                                : "Running the newest commit on main.")
+                        </span></p>
                 }
                 else
                 {
@@ -550,6 +567,10 @@ docker compose restart labbytwo</code></pre>
     private ConfigTransfer.ImportResult? _importResult;
 
     private static string Version => UpdateChecker.Installed;
+
+    /// <summary>Whether this build came from a release or from main, which changes what
+    /// "up to date" is measured against and so what the page should say.</summary>
+    private static UpdateChecker.Channel Channel => UpdateChecker.ChannelOf(Version);
 
     private string Size
     {

@@ -12,6 +12,48 @@
     private DateTimeOffset _now = DateTimeOffset.Now;
     private Timer? _timer;
 
+    // The wording, in one place, because the widget's own field list offers these as the
+    // defaults and two copies of "Good afternoon" would eventually disagree.
+    public const string DefaultMorning = "Good morning";
+    public const string DefaultAfternoon = "Good afternoon";
+    public const string DefaultEvening = "Good evening";
+    public const string DefaultNight = "Good night";
+
+    /// <summary>Which setting key applies at a given hour, and what it says if unset.</summary>
+    public static (string Key, string Fallback) PartOfDay(int hour) => hour switch
+    {
+        < 5 => ("night", DefaultNight),
+        < 12 => ("morning", DefaultMorning),
+        < 18 => ("afternoon", DefaultAfternoon),
+        < 22 => ("evening", DefaultEvening),
+        _ => ("night", DefaultNight),
+    };
+
+    /// <summary>
+    /// The finished line. A phrase mentioning {name} places it itself, which is the only
+    /// way to write "Evening, Chris — the kettle is on" rather than having the name
+    /// stapled to the end of it.
+    /// </summary>
+    public static string Compose(string phrase, string name)
+    {
+        if (phrase.Contains("{name}", StringComparison.OrdinalIgnoreCase))
+        {
+            // A blank name would otherwise leave the comma and spacing of a sentence
+            // written around a word that is not there.
+            var filled = phrase.Replace("{name}", name, StringComparison.OrdinalIgnoreCase);
+            return name.Length > 0 ? filled : Tidy(phrase);
+        }
+
+        return name.Length > 0 ? $"{phrase}, {name}" : phrase;
+    }
+
+    /// <summary>Drop a {name} nobody filled in, and the punctuation left hanging by it.</summary>
+    private static string Tidy(string phrase) =>
+        phrase.Replace(", {name}", "", StringComparison.OrdinalIgnoreCase)
+              .Replace(" {name}", "", StringComparison.OrdinalIgnoreCase)
+              .Replace("{name}", "", StringComparison.OrdinalIgnoreCase)
+              .Trim();
+
     private string Name => Context.Widget.Settings.Get("name");
     private bool ShowDate => Context.Widget.Settings.GetBool("show_date", true);
 
@@ -19,15 +61,9 @@
     {
         get
         {
-            var part = _now.Hour switch
-            {
-                < 5 => "Good night",
-                < 12 => "Good morning",
-                < 18 => "Good afternoon",
-                < 22 => "Good evening",
-                _ => "Good night",
-            };
-            return Name is { Length: > 0 } name ? $"{part}, {name}" : part;
+            var (key, fallback) = PartOfDay(_now.Hour);
+            var phrase = Context.Widget.Settings.Get(key);
+            return Compose(phrase.Length > 0 ? phrase : fallback, Name);
         }
     }
 

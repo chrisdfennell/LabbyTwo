@@ -34,9 +34,6 @@ public sealed class HeimdallImporter : IDashboardImporter
         }
         finally
         {
-            // The connection is pooled, so the handle can outlive the using block and
-            // Windows will refuse the delete. Clearing the pool first releases it.
-            SqliteConnection.ClearAllPools();
             try
             {
                 File.Delete(temp);
@@ -54,6 +51,16 @@ public sealed class HeimdallImporter : IDashboardImporter
         {
             DataSource = path,
             Mode = SqliteOpenMode.ReadOnly,
+
+            // Unpooled, so the handle closes with the using block below and the temp file
+            // can be deleted — Windows refuses to delete a file SQLite still has open.
+            //
+            // This used to call SqliteConnection.ClearAllPools() in the finally instead,
+            // which worked but is process-wide: it also drops the pool for LabbyTwo's own
+            // database, so importing a Heimdall file pulled connections out from under
+            // whatever the probe loop and any open page were doing at that moment. One
+            // throwaway read of somebody's upload has no business touching that.
+            Pooling = false,
         }.ToString());
 
         try
