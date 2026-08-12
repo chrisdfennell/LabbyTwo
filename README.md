@@ -382,7 +382,19 @@ On top of that there are four cards: current conditions, today's high and low wi
 current reading placed between them, a wind compass, and an inside-vs-outside comparison
 that tells you whether opening the windows would actually help.
 
-![Weather cards: today's range, a wind compass, inside versus outside, and radar](docs/images/weather.png)
+![Weather cards: warnings, today's range, a wind compass, inside versus outside, the forecast, air quality and radar](docs/images/weather.png)
+
+Those are cards you place yourself. The **Weather station tab kind** is the same widgets
+arranged for you — warnings at the top, your own readings, the forecast by day and by
+hour, air quality, radar, today's extremes, then seven charts over 24h / 48h / 7d and
+yesterday's forecast scored against your thermometer.
+
+<details>
+<summary>The whole weather page</summary>
+
+![The weather station tab: warnings, current readings, forecast, hourly strip, air quality, radar and history charts](docs/images/weather-station.png)
+
+</details>
 
 The **radar** card is separate and needs no connection at all, because rain radar comes
 from somebody else's map rather than from your lab:
