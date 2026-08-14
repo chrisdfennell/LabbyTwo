@@ -75,6 +75,30 @@ public interface IConnectionProvider
     /// Implementations should not throw — return a failed <see cref="ProbeResult"/>.
     /// </summary>
     Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct);
+
+    /// <summary>
+    /// Buttons this provider offers — restart the NAS, disable blocking for ten minutes.
+    /// Empty for the great majority, which only watch. See <see cref="ProviderAction"/>
+    /// for why an action belongs on the provider rather than on a card holding its own
+    /// copy of the password.
+    /// </summary>
+    IReadOnlyList<ProviderAction> Actions => [];
+
+    /// <summary>
+    /// Actions for one configured instance. Override where the answer depends on how the
+    /// connection was set up — a NAS with no MAC address recorded cannot be woken, and
+    /// offering the button anyway only teaches people the button does not work.
+    /// </summary>
+    IReadOnlyList<ProviderAction> ActionsFor(Connection connection) => Actions;
+
+    /// <summary>
+    /// Runs one of them. <paramref name="input"/> holds whatever
+    /// <see cref="ProviderAction.Fields"/> asked for, empty when it asked for nothing.
+    /// Like <see cref="ProbeAsync"/>, prefer a failed <see cref="ActionResult"/> to an
+    /// exception — the runner catches either, but only one of them can explain itself.
+    /// </summary>
+    Task<ActionResult> RunActionAsync(Connection connection, ProviderAction action, SettingsBag input, CancellationToken ct)
+        => Task.FromResult(ActionResult.Failed($"{DisplayName} does not know how to run “{action.Id}”."));
 }
 
 /// <summary>

@@ -1,0 +1,31 @@
+@inject Registry Registry
+
+@* The buttons a connection brings with it. Unlike the Action card — which is a bare HTTP
+   call you configure by hand — this one needs no setup at all: it asks the provider what
+   it can do and shows that, with the credentials the connection already has. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (!HasActions)
+{
+    <p class="tile-meta mb-0">
+        @ProviderName has no controls. Use an Action card to call something over HTTP instead.
+    </p>
+}
+else
+{
+    <ProviderActions Connection="Context.Connection" />
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private bool HasActions => Context.Connection is { } connection
+        && Registry.Provider(connection.Provider)?.ActionsFor(connection).Count > 0;
+
+    private string ProviderName => Context.Connection is { } connection
+        ? Registry.Provider(connection.Provider)?.DisplayName ?? connection.Provider
+        : "";
+}

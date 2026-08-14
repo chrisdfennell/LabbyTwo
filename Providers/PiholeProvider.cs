@@ -112,6 +112,78 @@ public sealed class PiholeProvider(IHttpClientFactory httpFactory) : IConnection
         }
     }
 
+    // ---------- Controls ----------
+
+    /// <summary>
+    /// The two buttons anybody actually wants on a Pi-hole. Disabling blocking is the one
+    /// thing a household does to it, and doing it from here beats the alternative — which
+    /// is finding the admin page on a phone while somebody complains that a site is broken.
+    /// </summary>
+    public IReadOnlyList<ProviderAction> Actions =>
+    [
+        new("disable", "Pause blocking", "⏸️")
+        {
+            Description = "Stops blocking for a while, then resumes on its own.",
+            Fields =
+            [
+                new("minutes", "For how long", FieldKind.Select, Default: "5", Options:
+                [
+                    new SelectOption("1", "1 minute"),
+                    new SelectOption("5", "5 minutes"),
+                    new SelectOption("30", "30 minutes"),
+                    new SelectOption("0", "Until I turn it back on"),
+                ]),
+            ],
+            // No confirmation: it is reversible, it expires by itself, and the whole value
+            // of the button is that it is faster than the admin page.
+            Confirms = false,
+        },
+        new("enable", "Resume blocking", "▶️") { Confirms = false },
+    ];
+
+    /// <summary>
+    /// Both of these need the API token even though the summary does not, so the buttons
+    /// stay hidden until there is one rather than failing at the moment they are pressed.
+    /// </summary>
+    public IReadOnlyList<ProviderAction> ActionsFor(Connection connection) =>
+        connection.Settings.Get("token") is { Length: > 0 } ? Actions : [];
+
+    public async Task<ActionResult> RunActionAsync(
+        Connection connection, ProviderAction action, SettingsBag input, CancellationToken ct)
+    {
+        var baseUrl = connection.Settings.Get("url").TrimEnd('/');
+        var token = connection.Settings.Get("token");
+        if (baseUrl.Length == 0 || token.Length == 0)
+            return ActionResult.Failed("This needs both a base URL and an API token.");
+
+        var minutes = Math.Clamp(input.GetInt("minutes", 5), 0, 24 * 60);
+        var (query, message) = action.Id switch
+        {
+            // Zero seconds means indefinitely to Pi-hole, which is also what the option says.
+            "disable" => ($"disable={minutes * 60}",
+                minutes == 0 ? "Blocking is off until you turn it back on." : $"Blocking is off for {minutes} minutes."),
+            "enable" => ("enable", "Blocking is back on."),
+            _ => ("", ""),
+        };
+
+        if (query.Length == 0)
+            return ActionResult.Failed($"No Pi-hole action called “{action.Id}”.");
+
+        var http = httpFactory.CreateClient(ProviderHttp.ClientName);
+        using var response = await http.GetAsync(
+            $"{baseUrl}/admin/api.php?{query}&auth={Uri.EscapeDataString(token)}", ct);
+
+        if (!response.IsSuccessStatusCode)
+            return ActionResult.Failed($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
+
+        // A bad token is answered with 200 and an empty array rather than an error, so the
+        // request looks fine and blocking carries on regardless.
+        var payload = await response.Content.ReadAsStringAsync(ct);
+        return payload.Contains("status", StringComparison.OrdinalIgnoreCase)
+            ? ActionResult.Done(message)
+            : ActionResult.Failed("Pi-hole ignored that — the API token is probably wrong.");
+    }
+
     /// <summary>Pi-hole quotes some numbers and formats others with thousands separators.</summary>
     private static double? Number(JsonElement root, string name)
     {

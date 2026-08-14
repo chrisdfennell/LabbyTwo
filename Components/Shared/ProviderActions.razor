@@ -1,0 +1,129 @@
+@inject ActionRunner Runner
+
+@* Every button that does something to a connection is drawn here, once. A provider
+   declares ProviderActions and writes no markup — the same bargain FieldSpec already
+   makes for settings — so the confirmation, the "are you sure", the busy state and the
+   result message behave identically whether the button is on the Connections page or on
+   somebody's dashboard. *@
+
+@if (_actions.Count > 0)
+{
+    <div class="@(Compact ? "d-flex gap-1 flex-wrap" : "d-grid gap-2")">
+        @foreach (var action in _actions)
+        {
+            <button type="button"
+                    class="@ButtonClass(action)"
+                    disabled="@(_busy is not null)"
+                    title="@action.Description"
+                    @onclick="() => StartAsync(action)">
+                @if (_busy == action.Id)
+                {
+                    <span>Working…</span>
+                }
+                else
+                {
+                    <span>@action.Icon @action.Label</span>
+                }
+            </button>
+        }
+    </div>
+}
+
+@if (_pending is { } pending)
+{
+    <Modal Title="@($"{pending.Label} — {Connection.Name}")" Size="sm" OnClose="Cancel">
+        <ChildContent>
+            @if (pending.Fields.Count > 0)
+            {
+                <SettingsForm Fields="pending.Fields" Values="_input" />
+            }
+            <p class="mb-0">
+                @(pending.ConfirmMessage
+                  ?? pending.Description
+                  ?? $"This runs against {Connection.Name} straight away.")
+            </p>
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="Cancel">Cancel</button>
+            <button class="btn btn-sm @(pending.Dangerous ? "btn-danger" : "btn-primary")"
+                    @onclick="() => RunAsync(pending)">
+                @pending.Label
+            </button>
+        </Footer>
+    </Modal>
+}
+
+@if (_result is { Length: > 0 })
+{
+    <div class="tile-meta mt-2 @(_failed ? "text-danger" : "text-success")">@_result</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Connection Connection { get; set; } = default!;
+
+    /// <summary>Small buttons in a row, for a table cell. Off means full-width, for a card.</summary>
+    [Parameter] public bool Compact { get; set; }
+
+    /// <summary>Raised after anything actually ran, so a list can redraw its status.</summary>
+    [Parameter] public EventCallback Ran { get; set; }
+
+    private string ButtonClass(ProviderAction action) =>
+        string.Join(' ', "btn", Compact ? "btn-sm" : "",
+            action.Dangerous ? "btn-outline-danger" : "btn-outline-secondary");
+
+    private IReadOnlyList<ProviderAction> _actions = [];
+    private ProviderAction? _pending;
+    private SettingsBag _input = new();
+    private string? _busy;
+    private string _result = "";
+    private bool _failed;
+
+    protected override void OnParametersSet() => _actions = Runner.ActionsFor(Connection);
+
+    private async Task StartAsync(ProviderAction action)
+    {
+        _result = "";
+
+        // Anything with a question to ask stops here even when it needs no confirming —
+        // the dialog is where the question gets asked.
+        if (action.NeedsConfirming || action.Fields.Count > 0)
+        {
+            _input = Defaults(action);
+            _pending = action;
+            return;
+        }
+
+        await RunAsync(action);
+    }
+
+    /// <summary>
+    /// The form edits a bag, so it has to start as one. Prefilled from the specs rather
+    /// than left empty, or a dialog dismissed without touching anything would send blanks
+    /// where the action documented a default.
+    /// </summary>
+    private static SettingsBag Defaults(ProviderAction action)
+    {
+        var values = new SettingsBag();
+        foreach (var field in action.Fields.Where(f => f.Default is { Length: > 0 }))
+            values[field.Key] = field.Default!;
+        return values;
+    }
+
+    private void Cancel() => _pending = null;
+
+    private async Task RunAsync(ProviderAction action)
+    {
+        _pending = null;
+        _busy = action.Id;
+        _result = "";
+        StateHasChanged();
+
+        var result = await Runner.RunAsync(Connection, action, _input);
+
+        _busy = null;
+        _failed = !result.Ok;
+        _result = result.Message;
+
+        await Ran.InvokeAsync();
+    }
+}

@@ -44,7 +44,21 @@ else
                 <div>@($"{temp:0}°C")</div>
             </div>
         }
+        @if (_info.Fans.Count > 0)
+        {
+            <div>
+                <div class="tile-meta">@(_info.Fans.Count == 1 ? "Fan" : "Slowest fan")</div>
+                @* A stopped fan is the failure worth showing, so the slowest is the one
+                   that gets the space — an average would hide it behind the others. *@
+                <div class="@(SlowestFan < 200 ? "text-danger" : "")">@($"{SlowestFan:0} rpm")</div>
+            </div>
+        }
     </div>
+
+    @if (_firmware is { Length: > 0 })
+    {
+        <div class="tile-meta mb-3">⬆️ Firmware @_firmware is available.</div>
+    }
 
     @foreach (var volume in _volumes)
     {
@@ -58,6 +72,33 @@ else
             </div>
         </div>
     }
+
+    @* Physical drives, under the volumes they make up. This is the reading that arrives
+       before the array notices, so it is worth the space even when everything is fine —
+       a healthy list is how you know the check is actually running. *@
+    @if (_disks.Count > 0 && ShowDisks)
+    {
+        <div class="mt-3">
+            <div class="tile-meta mb-1">Disks</div>
+            @foreach (var disk in _disks)
+            {
+                <div class="d-flex align-items-center gap-2">
+                    <span class="status-dot @(disk.IsFailing ? "status-down" : "status-up")"></span>
+                    <span class="text-truncate" title="@disk.Model">@disk.Slot</span>
+                    <span class="tile-meta ms-auto flex-none">
+                        @if (disk.IsFailing)
+                        {
+                            <span class="text-danger">@disk.Health</span>
+                        }
+                        @if (disk.TempC is { } diskTemp)
+                        {
+                            <span class="ms-2">@($"{diskTemp:0}°C")</span>
+                        }
+                    </span>
+                </div>
+            }
+        </div>
+    }
 }
 
 @code {
@@ -65,7 +106,14 @@ else
 
     private QnapProvider.SystemInfo? _info;
     private IReadOnlyList<QnapProvider.VolumeInfo> _volumes = [];
+    private IReadOnlyList<QnapProvider.DiskInfo> _disks = [];
+    private string? _firmware;
     private string? _error;
+
+    /// <summary>On by default — a card that hides a failing drive is worse than no card.</summary>
+    private bool ShowDisks => Context.Widget.Settings.GetBool("show_disks", true);
+
+    private double SlowestFan => _info is { Fans.Count: > 0 } ? _info.Fans.Min(fan => fan.Rpm) : 0;
 
     private string MemoryText => _info is { TotalMemoryMb: > 0, FreeMemoryMb: not null }
         ? $"{(_info.TotalMemoryMb.Value - _info.FreeMemoryMb.Value) / 1024:0.0} / {_info.TotalMemoryMb.Value / 1024:0.0} GB"
@@ -96,10 +144,12 @@ else
         // trips per card where one would do, and the extra two are the ones that timed out
         // on a busy NAS and reported "Operation canceled" on a machine that was perfectly
         // fine. The card now redraws from the probe, which it already waits for anyway.
-        if (Qnap.Latest(Context.Connection) is { } latest)
+        if (Qnap.LatestSnapshot(Context.Connection) is { } latest)
         {
             _info = latest.Info;
             _volumes = latest.Volumes;
+            _disks = latest.Disks;
+            _firmware = latest.AvailableFirmware;
             _error = null;
             return;
         }
@@ -111,6 +161,18 @@ else
             _info = await Qnap.SystemInfoAsync(Context.Connection, CancellationToken.None);
             _volumes = await Qnap.VolumesAsync(Context.Connection, CancellationToken.None);
             _error = null;
+
+            // SMART is the slowest of the three and the least urgent to have on a first
+            // render, so it is allowed to be missing here rather than costing the card its
+            // whole display when a busy NAS takes too long over it.
+            try
+            {
+                _disks = await Qnap.DisksAsync(Context.Connection, CancellationToken.None);
+            }
+            catch
+            {
+                _disks = [];
+            }
         }
         catch (Exception ex)
         {
