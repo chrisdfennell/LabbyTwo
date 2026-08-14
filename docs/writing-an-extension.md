@@ -167,6 +167,54 @@ public IReadOnlyList<SuggestedRule> SuggestedRules =>
   `HistoryStore.LatestAsync` gives the last recorded value of every metric; every card
   that shows a current reading uses it.
 
+### Giving a provider buttons
+
+A provider can also *do* things. Declare them and implement one method; you write no UI at
+all, and the buttons appear next to **Test** on the Connections page and on the Controls
+card:
+
+```csharp
+public IReadOnlyList<ProviderAction> Actions =>
+[
+    new("restart", "Restart", "🔁")
+    {
+        Description = "Reboots it. Anything it serves goes with it.",
+        ConfirmMessage = "Everything running on the NAS stops. It normally comes back in a few minutes.",
+        Dangerous = true,
+        Disrupts = TimeSpan.FromMinutes(15),
+    },
+];
+
+public async Task<ActionResult> RunActionAsync(
+    Connection connection, ProviderAction action, SettingsBag input, CancellationToken ct)
+{
+    if (action.Id != "restart")
+        return ActionResult.Failed($"No action called “{action.Id}”.");
+
+    // …the request, using this connection's own credentials…
+    return ActionResult.Done("Restarting.");
+}
+```
+
+- **`Disrupts`** is how long the thing is expected to be unreachable afterwards. Set it and
+  the runner silences the connection for that long, so a reboot you asked for does not page
+  you — and lifts the silence again if the action failed, because a machine that is really
+  down still has to be able to say so. Leave it null and the runner re-probes instead, so
+  the tile catches up immediately.
+- **`Confirms` is on by default** and `Dangerous` cannot turn it off. Turn it off only for
+  something whose worst case is having to press it again.
+- **Give a dangerous action a `ConfirmMessage`.** "Are you sure?" is not information. The
+  dialog is the last place anybody can be told the shares go away too.
+- **`Fields`** are asked for before the action runs — how many minutes, which container —
+  using the same `FieldSpec` list and the same form component as everything else. They
+  arrive as the `input` bag.
+- **Override `ActionsFor(connection)`** to hide what cannot work on this particular
+  instance. `QnapProvider` hides Wake on LAN until there is a MAC address; `PiholeProvider`
+  hides both of its controls until there is an API token. A button that cannot work is
+  indistinguishable from a broken one.
+- **Return, do not throw** — same as `ProbeAsync`. The runner catches either, but only one
+  of them can explain itself.
+
 ---
 
 ## A widget

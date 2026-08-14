@@ -327,9 +327,14 @@ public sealed class NasWidget : IWidgetType
     public string Type => "nas";
     public string DisplayName => "NAS overview";
     public string Icon => "💾";
-    public string Description => "Model, uptime, CPU, memory and volume usage from a QNAP.";
+    public string Description => "Model, uptime, CPU, memory, fans, volume usage and SMART health from a QNAP.";
     public IReadOnlyList<string> ProviderTypes => ["qnap"];
     public int DefaultWidth => 6;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show_disks", "List the physical disks", FieldKind.Bool, Default: "true",
+            Help: "SMART health and temperature per drive, under the volumes. Turn it off on a NAS with a lot of bays."),
+    ];
     public Type Component => typeof(NasCard);
 }
 
@@ -686,6 +691,29 @@ public sealed class ActionWidget : IWidgetType
         ]),
     ];
     public Type Component => typeof(ActionCard);
+}
+
+/// <summary>
+/// The buttons a connection already knows how to offer. Where the Action card is a URL
+/// you assemble yourself, this one is configured entirely by choosing the connection —
+/// the provider supplies the actions, the wording and the credentials.
+/// </summary>
+public sealed class ControlsWidget : IWidgetType
+{
+    public string Type => "controls";
+    public string DisplayName => "Controls";
+    public string Icon => "🎛️";
+    public string Description =>
+        "Whatever the connected thing can be told to do — restart the NAS, pause blocking. " +
+        "No URL to write: it uses the credentials the connection already has.";
+
+    // "*" rather than a list of providers that have actions today. A plugin shipping a
+    // provider with buttons of its own should get this card for free, and the card says so
+    // itself when the connection turns out to have nothing to offer.
+    public IReadOnlyList<string> ProviderTypes => ["*"];
+
+    public int DefaultWidth => 3;
+    public Type Component => typeof(ControlsCard);
 }
 
 public sealed class AggregateWidget : IWidgetType

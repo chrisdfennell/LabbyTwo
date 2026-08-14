@@ -29,7 +29,12 @@ public class FieldSpecConventionTests
     private static IEnumerable<(string Owner, FieldSpec Field)> EveryField(Registry registry) =>
         registry.Providers.SelectMany(p => p.Fields.Select(f => (p.DisplayName, f)))
             .Concat(registry.Widgets.SelectMany(w => w.Fields.Select(f => (w.DisplayName, f))))
-            .Concat(registry.TabKinds.SelectMany(k => k.Fields.Select(f => (k.DisplayName, f))));
+            .Concat(registry.TabKinds.SelectMany(k => k.Fields.Select(f => (k.DisplayName, f))))
+            // What an action asks for before it runs is rendered by the same form component
+            // as everything else, so it is held to the same conventions — and this is the
+            // form somebody fills in while about to do something irreversible.
+            .Concat(registry.Providers.SelectMany(p => p.Actions.SelectMany(a =>
+                a.Fields.Select(f => ($"{p.DisplayName} · {a.Label}", f)))));
 
     [Fact]
     public void NothingAsksSomebodyToTypeAConnectionId()

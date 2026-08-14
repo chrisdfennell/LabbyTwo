@@ -118,6 +118,11 @@ else
                                         </div>
                                     }
                                 }
+                                @* Controls sit next to Test rather than inside the editor:
+                                   restarting the NAS is something you do while looking at
+                                   the list that just told you it needed restarting. *@
+                                <ProviderActions Connection="connection" Compact="true" Ran="LoadAsync" />
+
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(connection)">Edit</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = connection">✕</button>
                             </div>

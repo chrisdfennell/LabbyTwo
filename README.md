@@ -189,8 +189,8 @@ monitoring works.
 | **Immich** | Photos and videos in the library, what it takes on disk, and how full that disk is. |
 | **Nextcloud** | Users, files, shares, free space and load, from the Server info app. |
 | **MyPersonalGit** | A self-hosted [MyPersonalGit](https://github.com/chrisdfennell/MyPersonalGit) server — repositories, open pull requests, open issues and stars. Token auth. |
-| **Pi-hole** | Queries and blocks today, block percentage, and whether blocking is switched on. |
-| **QNAP NAS** | Model, firmware, uptime, CPU, memory, temperatures, volume usage. |
+| **Pi-hole** | Queries and blocks today, block percentage, and whether blocking is switched on. **Pauses and resumes blocking**, given an API token. |
+| **QNAP NAS** | Model, firmware, uptime, CPU, memory, temperatures, fan speeds, volume usage, SMART health per drive, and whether a firmware update is waiting. **Restarts, shuts down and wakes the NAS.** |
 | **Ambient Weather** | Every reading the station sends — indoor/outdoor temperature, wind, rain, pressure, UV. |
 | **Sonarr** / **Radarr** / **Lidarr** / **Readarr** | Version, reachability, and download queue depth. |
 | **Prowlarr** | Version and reachability for your indexer manager. |
@@ -220,6 +220,40 @@ monitoring works.
 | **Navidrome** | Albums, songs, and who is playing something right now. |
 | **Email (SMTP)** | *Alert channel.* Any SMTP server. The one that needs nothing else installed. |
 | **IFTTT** | *Alert channel.* Fires an applet, so an alert can turn a light on rather than only say something. |
+
+### Controls — the ones that do something back
+
+Most providers only read. A few can also be told to do something, and where they can, the
+buttons appear on their own: next to **Test** on the Connections page, and on a **Controls**
+card if you want them on a dashboard. There is nothing to configure — the action runs
+through the connection, with the credentials it already has, which is the difference
+between this and the Action button card (that one is a URL you assemble yourself).
+
+Today that means:
+
+| Connection | Can be told to |
+|---|---|
+| **QNAP NAS** | Restart · shut down · wake on LAN |
+| **Pi-hole** | Pause blocking for a while · resume blocking |
+
+Three things happen around every one of them, so no provider has to remember them:
+
+- **It asks first.** On by default, and anything marked dangerous cannot opt out — a
+  dashboard button is a button a child leaning on a wall tablet can press.
+- **It stops the alert you caused.** Restarting the NAS silences that connection for
+  fifteen minutes, and shutting it down until tomorrow. The monitor has no way to tell a
+  reboot you asked for from an outage, and being paged about a machine you personally
+  turned off is how people learn to ignore alerts. If the request fails, the silence is
+  lifted again — a machine that is genuinely down still has to be able to say so.
+- **It only offers what can work.** Wake on LAN does not appear until you have put a MAC
+  address on the connection, and Pi-hole's controls stay hidden until it has an API token.
+  A button that cannot work is worse than no button: it is indistinguishable from a broken
+  one.
+
+Wake on LAN is the one with a wrinkle. It broadcasts a magic packet from wherever LabbyTwo
+is running, so a container on a bridge network will not reach your LAN — that one needs
+host or macvlan networking. Enable it on the NAS first, under Control Panel → System →
+Power.
 
 ### Alerts you can leave switched on
 
@@ -356,6 +390,7 @@ greys out the rest with the reason.
 | Embedded page | nothing — an iframe in a card |
 | Camera | nothing — a still image or MJPEG stream, loaded by your browser |
 | Action button | nothing — a button that calls a URL: an n8n flow, a Home Assistant scene |
+| Controls | any connection that has any — the buttons the provider itself offers, using credentials it already has |
 | Clock | nothing |
 | Weather station | Ambient Weather — current conditions |
 | Weather — today's extremes | Ambient Weather — high/low, peak gust, rain, max UV, peak solar, sunrise and sunset |

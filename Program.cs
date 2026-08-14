@@ -84,6 +84,11 @@ builder.Services.AddSingleton<DashboardImportService>();
 // something to monitor — so it is registered by hand rather than discovered.
 builder.Services.AddSingleton<Geocoder>();
 
+// One place every action button goes through, so the timeout, the log line and the
+// silence that stops a reboot you asked for from paging you happen once rather than in
+// every card that grows a button.
+builder.Services.AddSingleton<ActionRunner>();
+
 builder.Services.AddSingleton<HealthMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthMonitor>());
 builder.Services.AddSingleton<AlertService>();
