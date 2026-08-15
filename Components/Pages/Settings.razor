@@ -12,6 +12,7 @@
 @inject SelfUpdater Updater
 @inject ModuleCatalog Catalog
 @inject DashboardImportService Imports
+@inject ShareTransfer Share
 @inject Geocoder Places
 @inject IEnumerable<IEndpointExtension> Endpoints
 @inject BackgroundJobRunner Jobs
@@ -322,6 +323,91 @@
     </div>
 
     <div class="col-12">
+        @* A tab or a card somebody sent you. Separate from the whole-config import above
+           because the two do opposite things: that one restores your install by id, this
+           one takes a copy of somebody else's page and gives it new ids, so importing the
+           same file twice gives you two rather than silently overwriting the first. *@
+        <div class="widget mb-3">
+            <div class="widget-head">
+                <h2 class="widget-title">Import a tab or a card</h2>
+            </div>
+            <div class="widget-body">
+                <p class="tile-meta">
+                    A file somebody exported from their dashboard. Export your own from
+                    <a href="settings/tabs">Tabs</a>, or from <strong>Edit layout</strong> on any dashboard
+                    for a single card. Credentials never travel — a card that watched something gets
+                    matched to the equivalent connection here, and says so when it cannot.
+                </p>
+
+                <InputFile class="form-control mb-2" accept=".json" OnChange="OnShareChosenAsync" disabled="@_sharing" />
+
+                @if (_shareError is { Length: > 0 })
+                {
+                    <div class="alert alert-danger py-2 mb-0">@_shareError</div>
+                }
+
+                @if (_sharePlan is { } plan)
+                {
+                    <div class="panel p-3">
+                        <div class="d-flex align-items-baseline gap-2 flex-wrap mb-2">
+                            <strong>@plan.Summary</strong>
+                            @if (plan.Share.From is { Length: > 0 } from)
+                            {
+                                <span class="tile-meta">from @from</span>
+                            }
+                        </div>
+
+                        @* Everything it will do, before it does any of it. *@
+                        @if (plan.Notes.Count > 0)
+                        {
+                            <ul class="small mb-2">
+                                @foreach (var note in plan.Notes)
+                                {
+                                    <li>@note</li>
+                                }
+                            </ul>
+                        }
+                        else
+                        {
+                            <p class="tile-meta">Everything it needs is here. Nothing to sort out afterwards.</p>
+                        }
+
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-primary" @onclick="ApplyShareAsync" disabled="@_sharing">
+                                @(_sharing ? "Importing…" : "Import it")
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _sharePlan = null"
+                                    disabled="@_sharing">Cancel</button>
+                        </div>
+                    </div>
+                }
+
+                @if (_shareResult is { } done)
+                {
+                    <div class="alert alert-success py-2 mb-0">
+                        @if (done.TabSlug is { Length: > 0 } slug)
+                        {
+                            <text>Added, with @done.Widgets card@(done.Widgets == 1 ? "" : "s").</text>
+                            <a href="@($"t/{slug}")">Open it</a>
+                        }
+                        else
+                        {
+                            <text>Card added.</text>
+                        }
+                        @if (done.Notes.Count > 0)
+                        {
+                            <ul class="mb-0 mt-2 small">
+                                @foreach (var note in done.Notes)
+                                {
+                                    <li>@note</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
         <div class="widget">
             <div class="widget-head">
                 <h2 class="widget-title">Import configuration</h2>
@@ -695,6 +781,60 @@ docker compose restart labbytwo</code></pre>
     {
         await AppSettings.SaveAsync(PublicStatus.PublicStatusToken, "");
         await LoadAsync();
+    }
+
+    private ShareTransfer.Plan? _sharePlan;
+    private ShareTransfer.Result? _shareResult;
+    private string? _shareError;
+    private bool _sharing;
+
+    /// <summary>
+    /// Reads the file and works out what it would do. Nothing is written here — the plan
+    /// is shown first, because "adds a tab whose six cards are pointed at nothing" is
+    /// worth knowing while it is still a decision.
+    /// </summary>
+    private async Task OnShareChosenAsync(InputFileChangeEventArgs e)
+    {
+        _shareError = null;
+        _sharePlan = null;
+        _shareResult = null;
+
+        try
+        {
+            // A shared tab is small. The cap is a guard against a mistaken drag, not a
+            // real limit.
+            await using var stream = e.File.OpenReadStream(2 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+
+            _sharePlan = await Share.PlanAsync(ShareTransfer.Read(json));
+        }
+        catch (Exception ex)
+        {
+            _shareError = ex.GetBaseException().Message;
+        }
+    }
+
+    private async Task ApplyShareAsync()
+    {
+        if (_sharePlan is not { } plan)
+            return;
+
+        _sharing = true;
+        try
+        {
+            _shareResult = await Share.ApplyAsync(plan);
+            _sharePlan = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _shareError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _sharing = false;
+        }
     }
 
     private async Task ImportAsync()

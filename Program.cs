@@ -75,6 +75,7 @@ builder.Services.AddSingleton<NotesStore>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
+builder.Services.AddSingleton<ShareTransfer>();
 builder.Services.AddSingleton<FaviconService>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<SelfUpdater>();
@@ -180,6 +181,35 @@ var export = app.MapGet("/api/export", async (ConfigTransfer transfer, Cancellat
         $"labbytwo-config{suffix}-{DateTimeOffset.Now:yyyy-MM-dd}.json");
 });
 
+// One tab, or one card, as a file to hand somebody. Downloads rather than component
+// renders for the same reason the whole-config export is: a browser saving a file is not
+// something a Blazor circuit can do.
+var shareTab = app.MapGet("/api/share/tab", async (ShareTransfer share, string id, CancellationToken ct) =>
+{
+    try
+    {
+        var (json, name) = await share.ExportTabAsync(id, ct);
+        return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", name);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.NotFound(ex.Message);
+    }
+});
+
+var shareWidget = app.MapGet("/api/share/widget", async (ShareTransfer share, string id, CancellationToken ct) =>
+{
+    try
+    {
+        var (json, name) = await share.ExportWidgetAsync(id, ct);
+        return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", name);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.NotFound(ex.Message);
+    }
+});
+
 var backup = app.MapGet("/api/backup", async (Db db, CancellationToken ct) =>
 {
     var temp = Path.Combine(Path.GetTempPath(), $"labbytwo-{Guid.NewGuid():N}.db");
@@ -195,6 +225,8 @@ if (authEnabled)
 {
     export.RequireAuthorization();
     backup.RequireAuthorization();
+    shareTab.RequireAuthorization();
+    shareWidget.RequireAuthorization();
     // The icon endpoint fetches a URL the caller supplies. That is the same reach a
     // connection already has, but it should not be available to an unauthenticated
     // caller on an install that has a login.
