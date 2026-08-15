@@ -82,8 +82,11 @@ else
                                 <span class="ms-2">@state.At.ToString("HH:mm:ss")</span>
                             }
                         </td>
-                        <td class="text-end">
-                            <div class="d-flex gap-1 justify-content-end">
+                        @* text-nowrap so the table gives this column the width its buttons
+                           need rather than the message column taking it, and align-items
+                           so nothing here stretches to match a taller neighbour. *@
+                        <td class="text-end text-nowrap">
+                            <div class="d-flex gap-1 justify-content-end align-items-center">
                                 @if (!IsAlertChannel(connection))
                                 {
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(connection)">Test</button>

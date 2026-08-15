@@ -57,7 +57,7 @@ public sealed class HealthMonitor(
     /// a restart does not leave one blank for a quarter of an hour.
     /// </summary>
     public bool IsDue(Connection connection, DateTimeOffset now) => IsDue(
-        registry.Provider(connection.Provider)?.MinimumInterval ?? TimeSpan.Zero,
+        registry.Provider(connection.Provider)?.MinimumIntervalFor(connection) ?? TimeSpan.Zero,
         State(connection.Id)?.At,
         now,
         TimeSpan.FromSeconds(Math.Clamp(options.Value.ProbeSeconds, 5, 3600)));
