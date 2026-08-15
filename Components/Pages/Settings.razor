@@ -520,6 +520,7 @@ docker compose restart labbytwo</code></pre>
 {
     <ConfirmDialog Title="Update LabbyTwo now?"
                    Message="@($"A one-off Watchtower container will pull the newest image and recreate {_self?.Self?.Container}. LabbyTwo will disappear for a few seconds. Nothing in the database is touched.")"
+                   ConfirmText="Update now"
                    OnCancel="() => _confirmUpdate = false"
                    OnConfirm="StartUpdateAsync" />
 }
