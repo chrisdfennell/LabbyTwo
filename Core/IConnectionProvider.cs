@@ -43,6 +43,18 @@ public interface IConnectionProvider
     /// </summary>
     TimeSpan MinimumInterval => TimeSpan.Zero;
 
+    /// <summary>
+    /// The same question for one configured instance, for the few providers where the
+    /// answer is the user's rather than the integration's. A speed test is the case that
+    /// forced it: how often it is worth running depends on the connection being measured,
+    /// and every six hours on fibre and once a day on metered LTE are both right answers.
+    ///
+    /// Additive with a default implementation, like <see cref="MetricsFor"/> and
+    /// <see cref="ActionsFor"/> — a plugin compiled against an older LabbyTwo keeps
+    /// working and simply gets its flat <see cref="MinimumInterval"/>.
+    /// </summary>
+    TimeSpan MinimumIntervalFor(Connection connection) => MinimumInterval;
+
     IReadOnlyList<FieldSpec> Fields { get; }
 
     /// <summary>

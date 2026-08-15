@@ -8,7 +8,11 @@
 
 @if (_actions.Count > 0)
 {
-    <div class="@(Compact ? "d-flex gap-1 flex-wrap" : "d-grid gap-2")">
+    @* Compact is the connections table, where wrapping was actively harmful: the cell has
+       no minimum width, so one long probe message elsewhere in the table squeezed this
+       column until Restart and Shut down stacked, and the row's other buttons stretched
+       tall to match. On one line the cell asks the table for the width it needs instead. *@
+    <div class="@(Compact ? "d-flex gap-1 text-nowrap" : "d-grid gap-2")">
         @foreach (var action in _actions)
         {
             <button type="button"

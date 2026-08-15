@@ -185,6 +185,7 @@ monitoring works.
 | **Frigate NVR** | Cameras alive, detection rate, detector speed, recordings disk. A camera at zero frames is a silent failure nothing else notices. |
 | **Tailscale** | Devices on the tailnet, how many are online, and the nearest node-key expiry. |
 | **Synology NAS** | DSM system info, temperature, CPU and memory load, and volume usage. |
+| **Internet speed test** | Runs its own download, upload and latency test on a schedule you set. Nothing to install, no API key, and the same metric names as Speedtest Tracker — so a chart or an alert rule survives switching between them. |
 | **Speedtest Tracker** | Latest download, upload, ping and jitter — plus how old that result is, which is what catches a scheduler that has stopped. |
 | **Immich** | Photos and videos in the library, what it takes on disk, and how full that disk is. |
 | **Nextcloud** | Users, files, shares, free space and load, from the Server info app. |
