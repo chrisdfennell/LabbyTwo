@@ -208,6 +208,13 @@ jobs:
       # half-loads — discovery keeps the types that resolve and silently drops the rest,
       # which surfaces much later as a tab kind that throws when somebody opens it.
       # Settings compares this stamp against the running build and says so instead.
+      # Before the loop, and deliberately without -warnaserror. NuGet's audit warnings are
+      # raised during *restore*, so building with warnings as errors and no prior restore
+      # fails as "RestoreTask returned false but did not log an error" — an MSB4181 with
+      # nothing else in the log, forty milliseconds in. ci.yml never sees it because it
+      # restores first, which is what this is copying.
+      - run: dotnet restore
+
       - name: Package the plugins
         run: |
           set -euo pipefail
@@ -217,12 +224,15 @@ jobs:
             name="$(basename "$plugin")"
             echo "::group::$name"
 
+            # Same split as above: restore quietly, then compile with warnings as errors.
+            dotnet restore "$plugin"
+
             # The whole output folder, not just the plugin's own DLL. Some of them carry
             # dependencies the host does not ship — the terminal plugin needs SSH.NET and
             # BouncyCastle beside it — and there is no NuGet restore at runtime to fetch
             # them. Zipping the directory is what makes "unzip into data/plugins" true
             # for every plugin rather than most of them.
-            dotnet build "$plugin" --configuration Release \
+            dotnet build "$plugin" --configuration Release --no-restore \
               -p:InformationalVersion="$VERSION" -warnaserror
 
             (cd "$plugin/bin/Release/net10.0" && zip -qr "$GITHUB_WORKSPACE/dist/$name-$VERSION.zip" . \
