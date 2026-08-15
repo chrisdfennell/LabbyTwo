@@ -1,0 +1,37 @@
+@* How much of everything there is. Gathered by metric name rather than by provider, so a
+   library server this app has never heard of counts too, as long as it reports a number
+   with a name we recognise. *@
+
+<MediaSection Empty="No library connected.">
+    <ChildContent Context="stack">
+        @if (stack.Libraries.Count == 0)
+        {
+            <p class="tile-meta mb-0">Nothing has reported a library count yet.</p>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap gap-4">
+                @foreach (var library in stack.Libraries)
+                {
+                    foreach (var (label, value) in library.Counts)
+                    {
+                        <div>
+                            <div class="tile-meta">@(ShowSource ? $"{library.Name} · {label}" : label)</div>
+                            <div class="h5 mb-0">@value.ToString("#,##0")</div>
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </ChildContent>
+</MediaSection>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    /// <summary>
+    /// On by default: two servers both reporting "Items" are indistinguishable without it,
+    /// and a number you cannot attribute is worse than no number.
+    /// </summary>
+    private bool ShowSource => Context.Widget.Settings.GetBool("show_source", true);
+}

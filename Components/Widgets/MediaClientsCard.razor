@@ -1,0 +1,29 @@
+@* SABnzbd, NZBGet, qBittorrent and Transmission side by side. They disagree about which
+   numbers they publish, so each line is assembled from whatever that one actually reports. *@
+
+<MediaSection Empty="No download client connected.">
+    <ChildContent Context="stack">
+        @if (stack.Clients.Count == 0)
+        {
+            <p class="tile-meta mb-0">No download client connected.</p>
+        }
+        else
+        {
+            @foreach (var client in stack.Clients)
+            {
+                <div class="d-flex align-items-center gap-2">
+                    @* Paused reads as down on purpose. It is the failure that looks exactly
+                       like working — nothing is broken, the queue simply never moves. *@
+                    <span class="status-dot @(client.Paused ? "status-down" : "status-up")"
+                          title="@(client.Paused ? "Paused" : "Running")"></span>
+                    <span class="text-truncate">@client.Name</span>
+                    <span class="tile-meta ms-auto flex-none">@MediaFormat.ClientLine(client)</span>
+                </div>
+            }
+        }
+    </ChildContent>
+</MediaSection>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+}

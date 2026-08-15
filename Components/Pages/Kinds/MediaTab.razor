@@ -1,0 +1,341 @@
+@implements IDisposable
+@inject MediaStack Stack
+@inject HealthMonitor Health
+@inject Registry Registry
+
+@* A whole page for the media stack, rather than twenty widgets to arrange by hand — the
+   same argument the weather station tab makes.
+
+   Every panel below is an ordinary widget, bound here by hand. Nothing on this page is
+   exclusive to it: each section can be dropped on any dashboard from the widget picker,
+   and this tab is only those widgets already arranged. A page you cannot rebuild
+   yourself is a page that has to be extended by whoever wrote it.
+
+   What it covers is decided by the category each provider already declares, so every
+   *arr, media server, download client and library you have connected is here without
+   this file naming any of them.
+
+   Ordered by what you came to find out: what needs doing, what is playing, what is
+   arriving, what is stuck, and only then how big everything is. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "🍿" : Tab.Icon) @Tab.Name</h1>
+        @if (Subtitle is { Length: > 0 } text)
+        {
+            <p class="subtitle">@text</p>
+        }
+        else if (_snapshot.Any)
+        {
+            <p class="subtitle">@Summary</p>
+        }
+    </div>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshAsync">Refresh</button>
+</div>
+
+@if (!_loaded)
+{
+    <p class="tile-meta">Reading the stack…</p>
+}
+else if (!_snapshot.Any)
+{
+    <div class="empty-state">
+        <p class="mb-1">Nothing media-related is connected yet.</p>
+        <p class="tile-meta mb-3">
+            This page gathers every connection whose integration calls itself Media or Downloads —
+            Sonarr, Radarr, Plex, Jellyfin, SABnzbd, Tdarr and the rest. Add one and it appears here
+            on its own.
+        </p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    </div>
+}
+else
+{
+    @* Above everything, like the weather page puts warnings: a page that buries the one
+       thing that needs doing under a library count has the priorities backwards. *@
+    @if (_snapshot.NeedsAttention.Count > 0)
+    {
+        <div class="widget mb-4">
+            <div class="widget-head"><h2 class="widget-title">Needs a look</h2></div>
+            <div class="widget-body">
+                @Section("media-attention")
+            </div>
+        </div>
+    }
+
+    @if (ShowNowPlaying)
+    {
+        <div class="widget mb-4">
+            <div class="widget-head">
+                <h2 class="widget-title">Now playing</h2>
+                <span class="tile-meta">@NowPlayingCount</span>
+            </div>
+            <div class="widget-body">
+                @Section("media-now-playing")
+            </div>
+        </div>
+    }
+
+    @if (CalendarDays > 0)
+    {
+        <div class="widget mb-4">
+            <div class="widget-head">
+                <h2 class="widget-title">Coming up</h2>
+                <span class="tile-meta">next @CalendarDays days</span>
+            </div>
+            <div class="widget-body">
+                @Section("media-upcoming", ("days", CalendarDays.ToString()), ("limit", UpcomingLimit.ToString()))
+            </div>
+        </div>
+    }
+
+    @if (ShowPipeline)
+    {
+        <div class="row g-3 mb-4">
+            <div class="col-12 col-xl-7">
+                <div class="widget h-100">
+                    <div class="widget-head">
+                        <h2 class="widget-title">In the queue</h2>
+                        <span class="tile-meta">@_snapshot.Queue.Count</span>
+                    </div>
+                    <div class="widget-body">
+                        @Section("media-queue", ("limit", QueueLimit.ToString()), ("show_source", "true"))
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-xl-5">
+                <div class="widget h-100">
+                    <div class="widget-head"><h2 class="widget-title">Download clients</h2></div>
+                    <div class="widget-body">
+                        @Section("media-clients")
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (ShowLibrary)
+    {
+        <div class="widget mb-4">
+            <div class="widget-head"><h2 class="widget-title">Library</h2></div>
+            <div class="widget-body">
+                @Section("media-library")
+            </div>
+        </div>
+    }
+
+    @if (ShowGraphs)
+    {
+        @if (ActivityCharts.Count > 0)
+        {
+            <div class="page-head">
+                <h2 class="h5 mb-0">Activity</h2>
+                <div class="d-flex gap-1">
+                    @foreach (var (label, hours) in Ranges)
+                    {
+                        var choice = hours;
+                        <button class="btn btn-sm @(_hours == choice ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="() => _hours = choice">@label</button>
+                    }
+                </div>
+            </div>
+
+            <div class="row g-3">
+                @foreach (var chart in ActivityCharts)
+                {
+                    <div class="col-12 col-xl-6">
+                        <div class="widget h-100">
+                            <div class="widget-head"><h2 class="widget-title">@chart.Title</h2></div>
+                            <div class="widget-body">
+                                @Chart(chart.Metric, _hours)
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+
+        @* A separate window, because a library grows over months and would be a flat line
+           on the same axis as tonight's streams. *@
+        @if (GrowthCharts.Count > 0)
+        {
+            <div class="page-head mt-3">
+                <h2 class="h5 mb-0">Library growth</h2>
+                <span class="tile-meta">last @GrowthDays days</span>
+            </div>
+
+            <div class="row g-3">
+                @foreach (var chart in GrowthCharts)
+                {
+                    <div class="col-12 col-xl-6">
+                        <div class="widget h-100">
+                            <div class="widget-head"><h2 class="widget-title">@chart.Title</h2></div>
+                            <div class="widget-body">
+                                @Chart(chart.Metric, GrowthDays * 24)
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private MediaStack.Snapshot _snapshot = MediaStack.Snapshot.Empty;
+    private IReadOnlySet<string> _recorded = new HashSet<string>();
+    private bool _loaded;
+    private int _hours = 24;
+
+    private static readonly (string Label, int Hours)[] Ranges = [("24h", 24), ("48h", 48), ("7d", 168)];
+
+    private sealed record ChartSpec(string Title, string Metric);
+
+    /// <summary>
+    /// Every chart worth offering, filtered against what has actually been recorded — so
+    /// this list can name metrics from services you do not run without putting an empty
+    /// axis on your page, and a chart appears on its own the day you add the service.
+    /// </summary>
+    private static readonly ChartSpec[] PossibleActivityCharts =
+    [
+        new("Streams", "stream_count"),
+        new("Transcoding", "transcode_count"),
+        new("Streaming bandwidth", "bandwidth_mbps"),
+        // Two names for one idea: SABnzbd reports MB/s as speed_mbps, the torrent clients
+        // and NZBGet report download_mbps. Charting them together would put two different
+        // units on one scale, so they stay apart and each says which it is.
+        new("Download speed (MB/s)", "speed_mbps"),
+        new("Download speed", "download_mbps"),
+        new("Upload speed", "upload_mbps"),
+        new("Queue depth", "queue_count"),
+        new("Waiting to transcode", "queue_transcode"),
+        new("Requests pending", "requests_pending"),
+    ];
+
+    private static readonly ChartSpec[] PossibleGrowthCharts =
+    [
+        new("Series", "series"),
+        new("Films", "movies"),
+        new("Items", "items"),
+        new("Books", "books"),
+        new("Albums", "albums"),
+        new("Songs", "songs"),
+        new("Photos", "photos"),
+    ];
+
+    private List<ChartSpec> ActivityCharts =>
+        [.. PossibleActivityCharts.Where(chart => _recorded.Contains(chart.Metric))];
+
+    private List<ChartSpec> GrowthCharts =>
+        [.. PossibleGrowthCharts.Where(chart => _recorded.Contains(chart.Metric)).Take(4)];
+
+    private string? Subtitle => Tab.Settings.Get("subtitle") is { Length: > 0 } text ? text : null;
+    private int CalendarDays => Math.Clamp(Tab.Settings.GetInt("calendar_days", 7), 0, 60);
+    private int UpcomingLimit => Math.Clamp(Tab.Settings.GetInt("upcoming_limit", 12), 1, 100);
+    private int QueueLimit => Math.Clamp(Tab.Settings.GetInt("queue_limit", 8), 1, 100);
+    private int GrowthDays => Math.Clamp(Tab.Settings.GetInt("growth_days", 30), 1, 365);
+    private bool ShowNowPlaying => Tab.Settings.GetBool("show_now_playing", true);
+    private bool ShowPipeline => Tab.Settings.GetBool("show_pipeline", true);
+    private bool ShowLibrary => Tab.Settings.GetBool("show_library", true);
+    private bool ShowGraphs => Tab.Settings.GetBool("show_graphs", true);
+
+    private string Summary
+    {
+        get
+        {
+            var parts = new List<string> { $"{_snapshot.Connections} connected" };
+            if (_snapshot.NowPlaying.Count > 0)
+                parts.Add($"{_snapshot.NowPlaying.Count} streaming");
+            if (_snapshot.Queue.Count > 0)
+                parts.Add($"{_snapshot.Queue.Count} downloading");
+            if (_snapshot.Down.Count > 0)
+                parts.Add($"{_snapshot.Down.Count} down");
+            return string.Join(" · ", parts);
+        }
+    }
+
+    private string NowPlayingCount => _snapshot.NowPlaying.Count switch
+    {
+        0 => "idle",
+        var n when _snapshot.Transcoding > 0 => $"{n} · {_snapshot.Transcoding} transcoding",
+        var n => $"{n}",
+    };
+
+    /// <summary>
+    /// Renders one panel by looking the widget up in the registry, rather than naming a
+    /// component type directly.
+    ///
+    /// That indirection is the point: this page can only show something that is also in
+    /// the widget picker, so "every section here is one you could have placed yourself"
+    /// is enforced by how the page is built instead of by somebody remembering. It also
+    /// means a plugin replacing a media widget — last registration wins — replaces it
+    /// here too, which would not happen if this file said typeof(MediaQueueCard).
+    /// </summary>
+    private RenderFragment Section(string type, params (string Key, string Value)[] settings) => builder =>
+    {
+        if (Registry.WidgetType(type) is not { } widget)
+            return;
+
+        var bag = new SettingsBag();
+        foreach (var (key, value) in settings)
+            bag[key] = value;
+
+        builder.OpenComponent<DynamicComponent>(0);
+        builder.AddComponentParameter(1, nameof(DynamicComponent.Type), widget.Component);
+        builder.AddComponentParameter(2, nameof(DynamicComponent.Parameters),
+            new Dictionary<string, object>
+            {
+                ["Context"] = new WidgetContext(new Widget { Type = type, Settings = bag }, null),
+            });
+        builder.CloseComponent();
+    };
+
+    /// <summary>
+    /// The compare chart gathers its own connections by metric, which is exactly what this
+    /// page wants — one line per service reporting it, with no connection to bind. It is
+    /// an ordinary registered widget too, so it goes through the same lookup.
+    /// </summary>
+    private RenderFragment Chart(string metric, int hours) =>
+        Section("compare-chart",
+            ("metric", metric),
+            ("hours", hours.ToString()),
+            ("height", "150"),
+            ("limit", "8"));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// The page reads the stack itself only for its headings and for which charts to draw;
+    /// the panels each read it too, and share the same cached gather.
+    /// </summary>
+    private async Task LoadAsync()
+    {
+        _snapshot = await Stack.ReadAsync(CalendarDays);
+        _recorded = await Stack.RecordedMetricsAsync();
+        _loaded = true;
+    }
+
+    /// <summary>
+    /// Drops the cache and lets every panel hear about it, so Refresh refreshes the whole
+    /// page rather than only its heading.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        Stack.Invalidate();
+        await LoadAsync();
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

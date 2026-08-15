@@ -89,6 +89,10 @@ builder.Services.AddSingleton<Geocoder>();
 // every card that grows a button.
 builder.Services.AddSingleton<ActionRunner>();
 
+// Gathers every Media and Downloads connection for the media tab. Registered by hand
+// rather than discovered: it answers a page's question, it is not itself an extension.
+builder.Services.AddSingleton<MediaStack>();
+
 builder.Services.AddSingleton<HealthMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthMonitor>());
 builder.Services.AddSingleton<AlertService>();

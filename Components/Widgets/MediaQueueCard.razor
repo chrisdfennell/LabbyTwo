@@ -1,0 +1,41 @@
+@* Every *arr's queue on one list. What you actually want to know is "is anything stuck",
+   and that question is about the stack rather than about Sonarr. *@
+
+<MediaSection Empty="No *arr connected.">
+    <ChildContent Context="stack">
+        @if (stack.Queue.Count == 0)
+        {
+            <p class="tile-meta mb-0">Nothing downloading.</p>
+        }
+        else
+        {
+            @foreach (var item in stack.Queue.Take(Limit))
+            {
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between gap-2 tile-meta">
+                        <span class="text-truncate" title="@item.Title">@item.Title</span>
+                        <span class="flex-none">@(item.TimeLeft is { Length: > 0 } left ? left : item.Status)</span>
+                    </div>
+                    <div class="usage-bar">
+                        <span style="width:@MediaFormat.Percent(item.PercentDone)%"></span>
+                    </div>
+                    @if (ShowSource)
+                    {
+                        <div class="tile-meta">@item.Source</div>
+                    }
+                </div>
+            }
+            @if (stack.Queue.Count > Limit)
+            {
+                <div class="tile-meta">+@(stack.Queue.Count - Limit) more</div>
+            }
+        }
+    </ChildContent>
+</MediaSection>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 100);
+    private bool ShowSource => Context.Widget.Settings.GetBool("show_source");
+}

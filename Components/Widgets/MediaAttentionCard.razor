@@ -1,0 +1,39 @@
+@* The things worth doing something about, as opposed to the numbers that merely describe
+   how the stack is. Paused downloaders, missing subtitles, requests waiting for approval,
+   and anything the monitor says is not answering. *@
+
+<MediaSection Empty="Nothing media-related is connected yet.">
+    <ChildContent Context="stack">
+        @{
+            var shown = stack.NeedsAttention.Where(item => !BadOnly || item.Bad).ToList();
+        }
+        @if (shown.Count == 0)
+        {
+            <p class="tile-meta mb-0">Nothing needs a look.</p>
+        }
+        else
+        {
+            @foreach (var item in shown.Take(Limit))
+            {
+                <div class="d-flex align-items-center gap-2">
+                    <span class="status-dot @(item.Bad ? "status-down" : "status-unknown")"></span>
+                    <span class="text-truncate">@item.Source</span>
+                    <span class="tile-meta ms-auto text-end">@item.Message</span>
+                </div>
+            }
+            @if (shown.Count > Limit)
+            {
+                <div class="tile-meta mt-2">+@(shown.Count - Limit) more</div>
+            }
+        }
+    </ChildContent>
+</MediaSection>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 10), 1, 100);
+
+    /// <summary>Off by default — "12 items want subtitles" is worth seeing before it is a problem.</summary>
+    private bool BadOnly => Context.Widget.Settings.GetBool("bad_only");
+}

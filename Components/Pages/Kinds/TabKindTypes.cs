@@ -84,6 +84,41 @@ public sealed class WeatherStationTabKind : ITabKind
     public Type Component => typeof(WeatherStationTab);
 }
 
+/// <summary>
+/// The media stack on one page. Unlike the weather tab, this names no connections: a media
+/// stack is many-of-each — Sonarr *and* Radarr *and* Lidarr — so eighteen dropdowns would
+/// be a worse form than no form. It gathers by the category each provider already declares
+/// instead, which also means a plugin calling itself Media joins without this file changing.
+/// </summary>
+public sealed class MediaTabKind : ITabKind
+{
+    public string Kind => "media";
+    public string DisplayName => "Media stack";
+    public string Icon => "🍿";
+    public string Description =>
+        "A whole page for the *arrs and everything around them — what is playing, what is due, " +
+        "what is downloading, and how it all trends.";
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("subtitle", "Subtitle", FieldKind.Text, Help: "Optional. Blank shows a live summary instead."),
+        new("calendar_days", "Days of calendar", FieldKind.Number, Default: "7",
+            Help: "How far ahead to read the *arr calendars. Zero hides the section."),
+        new("show_now_playing", "Show what is playing", FieldKind.Bool, Default: "true"),
+        new("show_pipeline", "Show the queue and download clients", FieldKind.Bool, Default: "true"),
+        new("show_library", "Show library counts", FieldKind.Bool, Default: "true"),
+        new("show_graphs", "Show the graphs", FieldKind.Bool, Default: "true"),
+
+        new("upcoming_limit", "Most releases to list", FieldKind.Number, Default: "12") { Advanced = true },
+        new("queue_limit", "Most queue items to list", FieldKind.Number, Default: "8") { Advanced = true },
+        new("growth_days", "Days on the growth graphs", FieldKind.Number, Default: "30",
+            Help: "A library moves over months, so it gets a longer window than the activity graphs.")
+            { Advanced = true },
+    ];
+
+    public Type Component => typeof(MediaTab);
+}
+
 public sealed class GitTabKind : ITabKind
 {
     public string Kind => "git";

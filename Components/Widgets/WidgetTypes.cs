@@ -716,6 +716,106 @@ public sealed class ControlsWidget : IWidgetType
     public Type Component => typeof(ControlsCard);
 }
 
+// ---- The media stack ---------------------------------------------------------------
+// Every section of the Media tab is one of these, and the tab is nothing but them
+// arranged for you. That is deliberate: a page you cannot rebuild yourself is a page
+// that has to be extended by whoever wrote it, which is the thing this app exists not
+// to be. Each binds to no connection and gathers every Media and Downloads connection
+// instead, so there is nothing to configure and nothing to point at the wrong thing.
+
+public sealed class MediaNowPlayingWidget : IWidgetType
+{
+    public string Type => "media-now-playing";
+    public string DisplayName => "Media — now playing";
+    public string Icon => "▶️";
+    public string Description =>
+        "Everything streaming, across every media server at once. No connection to pick.";
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("limit", "Most to list", FieldKind.Number, Default: "6"),
+        new("show_source", "Show the device and server", FieldKind.Bool, Default: "true"),
+    ];
+    public Type Component => typeof(MediaNowPlayingCard);
+}
+
+public sealed class MediaUpcomingWidget : IWidgetType
+{
+    public string Type => "media-upcoming";
+    public string DisplayName => "Media — coming up";
+    public string Icon => "📅";
+    public string Description =>
+        "Every *arr calendar merged and sorted by date, with what you already have marked.";
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("days", "Days ahead", FieldKind.Number, Default: "7"),
+        new("limit", "Most to list", FieldKind.Number, Default: "12"),
+        new("hide_have", "Hide what you already have", FieldKind.Bool, Default: "false",
+            Help: "Off by default — something already downloaded is still what is on tonight."),
+    ];
+    public Type Component => typeof(MediaUpcomingCard);
+}
+
+public sealed class MediaQueueWidget : IWidgetType
+{
+    public string Type => "media-queue";
+    public string DisplayName => "Media — the queue";
+    public string Icon => "⏬";
+    public string Description =>
+        "Every *arr's download queue on one list, so \"is anything stuck\" is one glance.";
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("limit", "Most to list", FieldKind.Number, Default: "8"),
+        new("show_source", "Say which *arr each came from", FieldKind.Bool, Default: "false"),
+    ];
+    public Type Component => typeof(MediaQueueCard);
+}
+
+public sealed class MediaClientsWidget : IWidgetType
+{
+    public string Type => "media-clients";
+    public string DisplayName => "Media — download clients";
+    public string Icon => "🚚";
+    public string Description =>
+        "SABnzbd, NZBGet, qBittorrent and Transmission side by side — speed, what is left, free disk.";
+    public int DefaultWidth => 3;
+    public Type Component => typeof(MediaClientsCard);
+}
+
+public sealed class MediaLibraryWidget : IWidgetType
+{
+    public string Type => "media-library";
+    public string DisplayName => "Media — library size";
+    public string Icon => "🗂️";
+    public string Description =>
+        "How much of everything there is, gathered from every library server that reports a count.";
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show_source", "Say which server each count is from", FieldKind.Bool, Default: "true"),
+    ];
+    public Type Component => typeof(MediaLibraryCard);
+}
+
+public sealed class MediaAttentionWidget : IWidgetType
+{
+    public string Type => "media-attention";
+    public string DisplayName => "Media — needs a look";
+    public string Icon => "🔧";
+    public string Description =>
+        "Paused downloaders, missing subtitles, requests waiting, and anything not answering.";
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("limit", "Most to list", FieldKind.Number, Default: "10"),
+        new("bad_only", "Only actual problems", FieldKind.Bool, Default: "false",
+            Help: "Off by default — \"12 items want subtitles\" is worth seeing before it becomes a problem."),
+    ];
+    public Type Component => typeof(MediaAttentionCard);
+}
+
 public sealed class AggregateWidget : IWidgetType
 {
     public string Type => "aggregate";
