@@ -385,6 +385,18 @@ public sealed class SnapshotEndpoints(ConfigStore config) : IEndpointExtension
 - **A minimal API endpoint is not a Razor component.** It has no circuit, no
   `StateHasChanged`, and no antiforgery token unless you ask for one; a `POST` that binds
   form data needs `.DisableAntiforgery()` or a token of its own.
+- **A WebSocket needs a pipeline, and you can build one.** LabbyTwo never calls
+  `UseWebSockets()`, and by the time `Map` runs the application pipeline is built, so there
+  is no middleware left to add. `CreateApplicationBuilder()` gives you a pipeline scoped to
+  one endpoint instead — which is how SignalR gets the upgrade for its hubs without the host
+  arranging it either. Everything mapped this way still inherits the group's login.
+
+```csharp
+var pipeline = routes.CreateApplicationBuilder();
+pipeline.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+pipeline.Run(AttachAsync);
+routes.Map("/attach", pipeline.Build());
+```
 
 `QnapFilesPlugin` in [`examples/`](../examples) is the worked version: a tab kind that
 lists a NAS folder, and an endpoint next to it that serves the file the listing links to.
@@ -483,14 +495,15 @@ docker compose restart labbytwo
 Settings → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
 
-## Eleven that work
+## Thirteen that work
 
-[`examples/`](../examples) has eleven plugins that build and run, covering every extension
+[`examples/`](../examples) has thirteen plugins that build and run, covering every extension
 point on this page. Start from whichever is closest to what you are writing:
 
 | If you are writing | Read |
 |---|---|
 | A provider for an HTTP API | `SyncthingPlugin` — API key, metrics, a suggested rule, errors as sentences |
+| A provider that checks it is *correct*, not only up | `GluetunPlugin` — an expected country, and a zero that is a failure |
 | A provider with no dependencies | `ExamplePlugin` — one file, free space on a path |
 | A provider whose metrics depend on its settings | `PresencePlugin` — `MetricsFor(connection)` |
 | A provider *and* a widget | `PaperlessPlugin` — the Razor SDK, `_Imports.razor`, injecting your own provider |
@@ -501,6 +514,7 @@ point on this page. Start from whichever is closest to what you are writing:
 | Anything with OAuth | `GoogleCalendarPlugin` — consent, refresh tokens, and a callback endpoint |
 | Data that should raise alerts | `RenewalsPlugin` — a tab kind paired with a provider, so a date can page you |
 | Work on a timer | `DropPlugin` — a tab kind, an endpoint and a background job in one DLL |
+| Something that streams, or that acts rather than watches | `TerminalPlugin` — a WebSocket from an endpoint, a third-party library shipped beside the DLL, and a permission boundary that is checked where it matters |
 
 ### The rules
 

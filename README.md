@@ -630,8 +630,10 @@ of that name, which is the supported way to fix a provider you disagree with.
 Plugin code runs unsandboxed inside the LabbyTwo process, which can read the database and
 the keyring. Install plugins you would trust with your credentials.
 
-[`examples/`](examples) has twelve that build and run, and most of them fill a real gap
-rather than only demonstrating one: **Gluetun** (is the VPN tunnel actually up, and exiting
+[`examples/`](examples) has thirteen that build and run, and most of them fill a real gap
+rather than only demonstrating one: **Terminal** (a real shell on a tab — SSH to a host or
+into a running container, with a pty, so `htop` and `vim` work), **Gluetun** (is the VPN
+tunnel actually up, and exiting
 where you think), **Calendar** (any `.ics` feed, as a widget and a whole agenda page),
 **Google Calendar** (the same but writable, so an event added on the wall tablet is on
 everyone's phone), **Chores** (recurring jobs, storing their own data in a table of their
@@ -983,6 +985,10 @@ whole setup.
 .NET 10, Blazor Server, and SQLite. Charts and sparklines are server-rendered SVG, so
 there is no charting library and no JavaScript beyond Blazor's own and one keyboard
 shortcut.
+
+That is a claim about LabbyTwo, not about everything you can install into it — a plugin is
+a separate DLL and may bring whatever it needs. The Terminal example vendors xterm.js,
+because a terminal emulator is the one thing here that genuinely cannot be server-rendered.
 
 ## Licence
 
