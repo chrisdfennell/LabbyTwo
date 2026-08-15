@@ -1,0 +1,50 @@
+@* Everything streaming, across every media server at once — which is the question, since
+   nobody cares whether tonight's film is coming out of Plex or Jellyfin. *@
+
+<MediaSection Empty="No media server connected.">
+    <ChildContent Context="stack">
+        @if (stack.NowPlaying.Count == 0)
+        {
+            <p class="tile-meta mb-0">Nothing is streaming.</p>
+        }
+        else
+        {
+            @foreach (var stream in stack.NowPlaying.Take(Limit))
+            {
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between gap-2">
+                        <span class="text-truncate">
+                            <strong>@stream.User</strong>
+                            <span class="ms-2">@stream.Item</span>
+                        </span>
+                        <span class="tile-meta flex-none">
+                            @if (stream.Transcoding)
+                            {
+                                <span class="text-warning" title="Transcoding">⚡</span>
+                            }
+                            @($"{stream.PercentDone:0}%")
+                        </span>
+                    </div>
+                    <div class="usage-bar">
+                        <span style="width:@MediaFormat.Percent(stream.PercentDone)%"></span>
+                    </div>
+                    @if (ShowSource && stream.Detail is { Length: > 0 })
+                    {
+                        <div class="tile-meta">@stream.Detail · @stream.Source</div>
+                    }
+                </div>
+            }
+            @if (stack.NowPlaying.Count > Limit)
+            {
+                <div class="tile-meta">+@(stack.NowPlaying.Count - Limit) more</div>
+            }
+        }
+    </ChildContent>
+</MediaSection>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 6), 1, 50);
+    private bool ShowSource => Context.Widget.Settings.GetBool("show_source", true);
+}

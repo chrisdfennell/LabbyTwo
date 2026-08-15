@@ -1,0 +1,45 @@
+@* The *arr calendars merged and sorted by date. The existing "What's on this week" card
+   binds to one Sonarr or Radarr; this is the same question asked of everything at once,
+   which is what you want when you run four of them. *@
+
+<MediaSection CalendarDays="Days" Empty="No *arr connected.">
+    <ChildContent Context="stack">
+        @{
+            var shown = stack.Upcoming.Where(r => !HideHave || !r.HaveIt).Take(Limit).ToList();
+        }
+        @if (shown.Count == 0)
+        {
+            <p class="tile-meta mb-0">Nothing scheduled.</p>
+        }
+        else
+        {
+            @foreach (var day in shown.GroupBy(r => r.When.Date))
+            {
+                <div class="tile-meta mt-2">@MediaFormat.DayLabel(day.Key)</div>
+                @foreach (var release in day)
+                {
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="status-dot @(release.HaveIt ? "status-up" : "status-unknown")"
+                              title="@(release.HaveIt ? "Already downloaded" : "Not here yet")"></span>
+                        <span class="text-truncate" title="@release.Title">@release.Title</span>
+                        <span class="tile-meta ms-auto flex-none text-truncate" style="max-width:14rem"
+                              title="@release.Detail">@release.Detail</span>
+                    </div>
+                }
+            }
+        }
+    </ChildContent>
+</MediaSection>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 60);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 12), 1, 100);
+
+    /// <summary>
+    /// Off by default, matching the single-connection card: something already downloaded
+    /// is still what is on tonight.
+    /// </summary>
+    private bool HideHave => Context.Widget.Settings.GetBool("hide_have");
+}

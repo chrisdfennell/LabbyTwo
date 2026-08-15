@@ -1,0 +1,63 @@
+@implements IDisposable
+@inject MediaStack Stack
+@inject HealthMonitor Health
+
+@* The loading half of every media widget, written once. Each card below is then only its
+   own markup, which is what keeps "the tab" and "a card you placed yourself" the same
+   code rather than two implementations that drift.
+
+   Every one of these gathers the whole stack rather than binding to a connection, so a
+   card works the moment it is dropped on a tab — there is nothing to configure and no
+   way to point it at the wrong thing. MediaStack caches for a few seconds, so six of
+   them on one page cost one round of requests. *@
+
+@if (!_loaded)
+{
+    <p class="tile-meta mb-0">Reading the stack…</p>
+}
+else if (!_snapshot.Any)
+{
+    <p class="tile-meta mb-0">@Empty</p>
+}
+else
+{
+    @ChildContent(_snapshot)
+}
+
+@code {
+    /// <summary>Given the gathered stack; returns this card's markup.</summary>
+    [Parameter, EditorRequired] public RenderFragment<MediaStack.Snapshot> ChildContent { get; set; } = default!;
+
+    /// <summary>Zero when this card has no interest in the calendar, which skips reading it.</summary>
+    [Parameter] public int CalendarDays { get; set; }
+
+    [Parameter] public string Empty { get; set; } = "Nothing media-related is connected yet.";
+
+    private MediaStack.Snapshot _snapshot = MediaStack.Snapshot.Empty;
+    private bool _loaded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnChanged;
+        Stack.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _snapshot = await Stack.ReadAsync(CalendarDays);
+        _loaded = true;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Health.Updated -= OnChanged;
+        Stack.Changed -= OnChanged;
+    }
+}

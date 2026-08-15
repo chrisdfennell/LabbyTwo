@@ -344,7 +344,7 @@ being delivered — there is no separate notification settings screen.
 
 ### Tabs — what's in the nav
 
-The sidebar is literally a table. Add, rename, reorder, hide, delete. Six kinds ship:
+The sidebar is literally a table. Add, rename, reorder, hide, delete. Seven kinds ship:
 
 - **Dashboard** — a grid of widgets.
 - **Embedded page** — a full-height iframe of another app's web UI. One tab kind covers
@@ -360,6 +360,13 @@ The sidebar is literally a table. Add, rename, reorder, hide, delete. Six kinds 
   7d, the raw readings, and how yesterday's forecast scored against your thermometer.
   Everything except the station's own half works without a station. Built from the same
   widgets a dashboard tab can use, arranged for you.
+- **Media stack** — a whole page for the *arrs and everything around them: what needs a
+  look, what is streaming across every media server at once, every *arr calendar merged
+  and sorted by date, the download queues on one list, your download clients side by side,
+  library counts, and graphs of streams, transcoding, throughput, queue depth and library
+  growth. It names no connections — it gathers every one whose integration calls itself
+  Media or Downloads, so the eighth *arr you add appears on it by itself. Built from the
+  same widgets a dashboard tab can use, arranged for you.
 - **Status page** — uptime for everything monitored: 24h/7d/30d percentages, a daily bar
   strip, and a log of every time something went down or came back. Percentages are
   measured from when monitoring actually started, marked `*`, rather than crediting a
@@ -391,6 +398,12 @@ greys out the rest with the reason.
 | Camera | nothing — a still image or MJPEG stream, loaded by your browser |
 | Action button | nothing — a button that calls a URL: an n8n flow, a Home Assistant scene |
 | Controls | any connection that has any — the buttons the provider itself offers, using credentials it already has |
+| Media — now playing | nothing — everything streaming, across every media server at once |
+| Media — coming up | nothing — every *arr calendar merged and sorted, with what you already have marked |
+| Media — the queue | nothing — every *arr's download queue on one list |
+| Media — download clients | nothing — SABnzbd, NZBGet, qBittorrent and Transmission side by side |
+| Media — library size | nothing — counts from every library server that reports one |
+| Media — needs a look | nothing — paused downloaders, missing subtitles, requests waiting, anything not answering |
 | Clock | nothing |
 | Weather station | Ambient Weather — current conditions |
 | Weather — today's extremes | Ambient Weather — high/low, peak gust, rain, max UV, peak solar, sunrise and sunset |
@@ -461,6 +474,25 @@ yesterday's forecast scored against your thermometer.
 ![The weather station tab: warnings, current readings, forecast, hourly strip, air quality, radar and history charts](docs/images/weather-station.png)
 
 </details>
+
+### The media stack
+
+The same bargain, for the *arrs. Six cards you can place anywhere — **now playing**,
+**coming up**, **the queue**, **download clients**, **library size** and **needs a look** —
+and a **Media stack tab kind** that is those six arranged for you with the graphs
+underneath.
+
+None of them binds to a connection. Every one gathers each connection whose provider
+declares itself Media or Downloads, which is what makes "now playing" mean *across Plex
+and Jellyfin* and "the queue" mean *across all four \*arrs*, and what means adding Lidarr
+tomorrow changes nothing anywhere — it simply turns up. A plugin declaring
+`Category => "Media"` joins the page having never heard of it.
+
+The tab renders each panel by looking the widget up in the registry rather than naming a
+component, so nothing can appear there that you could not also have placed yourself. The
+graphs work the same way: the page lists every chart worth offering and draws only the
+ones your stack has actually recorded, so a chart appears on its own the day you add the
+service that reports it, and you never get an empty axis for a service you do not run.
 
 The **radar** card is separate and needs no connection at all, because rain radar comes
 from somebody else's map rather than from your lab:
