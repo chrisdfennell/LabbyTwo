@@ -1,0 +1,191 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject TerminalEndpoints Terminals
+@inject NavigationManager Nav
+@inject IOptions<LabbyOptions> Options
+
+@* What you can open on the left, the shell on the right. The list is plain links rather
+   than buttons on purpose: a terminal page has to work on a tablet that has just come
+   back from sleep with no circuit, and a link works before any JavaScript does. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "🖥️" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_targets.Count == 0)
+            {
+                <text>Nothing to open a shell on yet.</text>
+            }
+            else if (_selected is null)
+            {
+                @($"{_targets.Count} to choose from")
+            }
+            else
+            {
+                @_selectedTitle
+            }
+        </p>
+    </div>
+</div>
+
+@if (!Options.Value.Auth.Enabled)
+{
+    <div class="alert alert-warning">
+        <strong>This page will not open a shell while LabbyTwo has no login.</strong>
+        Anyone who can reach the dashboard would get one too. Set <code>LABBY_AUTH_PASSWORD</code>
+        in your <code>.env</code> and run <code>docker compose up -d</code>.
+    </div>
+}
+
+@if (_error.Length > 0)
+{
+    <div class="alert alert-warning py-2">@_error</div>
+}
+
+<div class="row g-3">
+    <div class="col-12 col-lg-3">
+        <div class="widget">
+            <div class="widget-body p-0">
+                @if (_targets.Count == 0)
+                {
+                    <div class="p-3 tile-meta">
+                        Add an <strong>SSH host</strong> connection, or a <strong>Docker</strong> one with the
+                        socket mounted, and what you can reach appears here.
+                    </div>
+                }
+                else
+                {
+                    <div class="list-group list-group-flush">
+                        @foreach (var target in _targets)
+                        {
+                            var current = target.Id == _selected?.Id;
+                            <a class="list-group-item list-group-item-action @(current ? "active" : "")"
+                               href="@Link(target.Id)" @key="target.Id">
+                                <div class="d-flex align-items-center gap-2">
+                                    <span>@target.Icon</span>
+                                    <span class="flex-grow-1 text-truncate">@target.Name</span>
+                                </div>
+                                @if (target.Note.Length > 0)
+                                {
+                                    <div class="tile-meta text-truncate">@target.Note</div>
+                                }
+                            </a>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-9">
+        @if (_selected is null)
+        {
+            <div class="empty-state">
+                <h2 class="h6">Pick something on the left</h2>
+                <p class="mb-0">
+                    The shell opens here. It closes itself after
+                    @(_policy.IdleMinutes > 0 ? $"{_policy.IdleMinutes} minutes" : "no amount of time")
+                    with nothing typed.
+                </p>
+            </div>
+        }
+        else
+        {
+            @* Its own document, not a component. Blazor owns the DOM inside a component
+               and would discard the emulator on the next diff; a frame also gets the
+               keyboard to itself, which a terminal rather needs. *@
+            <iframe class="w-100 border rounded"
+                    style="height: calc(100vh - 15rem); min-height: 22rem;"
+                    title="@_selectedTitle"
+                    src="@TerminalEndpoints.ConsoleUrl(_selected, tabId: Tab.Id)"
+                    @key="_selected.Id"></iframe>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private sealed record Option(string Id, string Name, string Icon, string Note);
+
+    private TerminalPolicy _policy = new();
+    private List<Option> _targets = [];
+    private TerminalTarget? _selected;
+    private string _selectedTitle = "";
+    private string _error = "";
+
+    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _policy = TerminalPolicy.ForTab(Tab.Settings);
+        _targets = [];
+        _error = "";
+
+        try
+        {
+            if (_policy.AllowSsh)
+            {
+                foreach (var connection in await Config.ConnectionsAsync())
+                {
+                    if (!connection.Enabled ||
+                        !string.Equals(connection.Provider, "ssh", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    _targets.Add(new Option(
+                        TerminalTarget.Of(connection).Id,
+                        connection.Name,
+                        string.IsNullOrWhiteSpace(connection.Icon) ? "⌨️" : connection.Icon,
+                        connection.Settings.Get("username") + "@" + connection.Settings.Get("host")));
+                }
+            }
+
+            foreach (var (docker, container, status) in await Terminals.ContainersAsync(_policy, default))
+                _targets.Add(new Option(TerminalTarget.Of(docker, container).Id, container, "🐳", status));
+        }
+        catch (Exception ex)
+        {
+            // A widget that throws takes the circuit down and the rest of the dashboard
+            // with it. Listing what can be reached is allowed to fail; saying so is not.
+            _error = $"Could not list everything: {ex.GetBaseException().Message}";
+        }
+
+        Select();
+    }
+
+    /// <summary>
+    /// The chosen target, checked against the same policy the socket will check it
+    /// against — so the frame is never opened on something that would then be refused.
+    /// </summary>
+    private void Select()
+    {
+        _selected = null;
+        _selectedTitle = "";
+
+        var query = QueryHelpers.ParseQuery(Nav.ToAbsoluteUri(Nav.Uri).Query);
+        if (!query.TryGetValue("target", out var raw))
+            return;
+
+        if (TerminalTarget.Parse(raw) is not { } target || !_policy.Allows(target))
+            return;
+
+        if (_targets.FirstOrDefault(t => t.Id == target.Id) is not { } option)
+            return;
+
+        _selected = target;
+        _selectedTitle = option.Name;
+    }
+
+    private string Link(string targetId) =>
+        $"/t/{Uri.EscapeDataString(Tab.Slug)}?target={Uri.EscapeDataString(targetId)}";
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => InvokeAsync(() =>
+    {
+        Select();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

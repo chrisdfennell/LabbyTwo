@@ -1,6 +1,6 @@
 # Example plugins
 
-Twelve plugins that build, load and do something worth having. They are meant to be
+Thirteen plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
@@ -10,6 +10,7 @@ same way yours will.
 
 | Plugin | Adds | What it is for |
 |---|---|---|
+| [TerminalPlugin](LabbyTwo.TerminalPlugin) | provider + widget + tab kind + endpoint | A real shell in the dashboard — SSH to a host, or into a running container. |
 | [GluetunPlugin](LabbyTwo.GluetunPlugin) | provider | Whether your VPN tunnel is up, which country it exits from, and the forwarded port. |
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
 | [GoogleCalendarPlugin](LabbyTwo.GoogleCalendarPlugin) | provider + widget + tab kind + endpoint | A Google calendar you can write to — month, week and list views, and adding events. |
@@ -42,6 +43,98 @@ can see, plus the reason for anything that failed to load. A plugin that does no
 not load, and that page says why.
 
 Plugins are scanned once, at startup. Installing or updating one needs a restart.
+
+**One of them has dependencies of its own.** The Terminal plugin uses SSH.NET, which
+LabbyTwo does not ship, and there is no NuGet restore at runtime — so copy *everything* its
+build produced, not only its own DLL:
+
+```bash
+docker cp bin/Release/net10.0/. labbytwo-labbytwo-1:/app/data/plugins/
+```
+
+---
+
+## Terminal — a shell, in the dashboard
+
+Half of what anyone does with a home lab ends in a shell. This puts one on a tab: pick a
+machine or a running container on the left, and there it is — a real pty, so `htop`, `vim`
+and `tmux` work rather than nearly working.
+
+It is here because it is the example of the extension points *combining*. A provider holds
+the credentials, a tab kind renders the page, a widget puts one shell on a dashboard, and an
+endpoint carries the bytes — and no other arrangement of those four would work:
+
+- **The endpoint is a WebSocket**, which is not something LabbyTwo set up. The host never
+  calls `UseWebSockets()`, and a plugin cannot add middleware to a pipeline that is already
+  built. It can build a pipeline of its own though — `routes.CreateApplicationBuilder()`
+  gives one scoped to a single endpoint, which is the same trick SignalR uses to make
+  Blazor work without the host calling it either.
+- **The page is served whole and framed**, rather than rendered by the component. Blazor
+  owns the DOM inside a component and will discard on the next diff anything JavaScript put
+  there — and a terminal is nothing but DOM that JavaScript put there. A frame also gets
+  the keyboard to itself, which a terminal rather needs.
+- **xterm.js is vendored**, not fetched from a CDN. A dashboard for a home lab is routinely
+  what you open when the internet is the broken part. It is served out of the assembly as
+  an embedded resource, so installing the plugin is still copying DLLs.
+
+### The two ends
+
+**SSH** is an ordinary connection — host, username, and a password or a key file — so the
+credentials are encrypted with everything else's and the machine appears on the status page
+next to the services running on it. The probe is a real login that also reads `/proc`, so
+load, memory and uptime are chartable and alertable without a second integration.
+
+It probes every five minutes rather than every thirty seconds, and that is the point of
+`MinimumInterval`: a probe here is a *login*, and a login is a line in `auth.log`. Asking
+2,880 times a day turns the one file you read after a break-in into noise.
+
+The key is a **path**, not a box to paste a key into. LabbyTwo's encrypted fields are one
+line and a PEM is not — and a key that stays a file on your disk is a key that is not in the
+database at all. Mount it read-only and point at it.
+
+Host keys are trust-on-first-use, done by hand and in the open. Leave the fingerprint field
+empty and the first key is accepted and *printed by Test connection*; paste it back in and a
+key that changes afterwards stops the connection dead, with a message that names the new
+fingerprint and says what the two explanations are.
+
+**Containers** need nothing new: it reads the socket the Docker provider already uses.
+`docker exec` is the one thing here that cannot be done with an `HttpClient` — Docker
+answers `/exec/{id}/start` with `101 UPGRADED` and hands the connection over as a raw duplex
+stream, and `HttpClient` has nowhere to give you that socket back. So the request is written
+by hand and the headers read off the stream until the blank line, after which the same
+stream is the terminal.
+
+The default shell is worth reading before you change it:
+
+```
+/bin/sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'
+```
+
+The obvious spelling — `exec bash || exec sh` — does not work. POSIX says a non-interactive
+shell exits when `exec` cannot find the command, so on an image without bash the `||` is
+never reached and the terminal opens and closes again in the same instant. `command -v`
+tests without replacing the process.
+
+### What stops it being a hole in your dashboard
+
+This is the most dangerous thing in `examples/`, and it is built accordingly.
+
+- **It will not open at all without a login.** LabbyTwo's password being optional is right
+  for a dashboard and not right for this: without one, a terminal is a root shell for
+  everyone on the LAN. There is no setting to turn the requirement off — the page and the
+  socket both refuse and say why.
+- **The tab is the boundary, not the list.** The picker on the page is a convenience; the
+  target arrives in a query string, and anyone who can open the page can edit it. So every
+  attach carries the id of the tab or card it came from, the policy is read back out of the
+  database, and *that* decides. A tab narrowed to one container really is narrowed to one
+  container.
+- **It closes itself.** Thirty minutes idle by default. A forgotten browser tab is a live
+  shell, and the tablet on the kitchen wall is exactly where one gets forgotten.
+- **Every session is logged at `Information`** with who opened it, on what, and for how
+  long — legible in `docker compose logs` without anyone having turned anything on first.
+
+None of that changes the fact that a plugin runs unsandboxed and this one deliberately hands
+out shells. It is the example to read before writing anything that acts rather than watches.
 
 ---
 

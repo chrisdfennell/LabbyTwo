@@ -1,0 +1,41 @@
+@inject IOptions<LabbyOptions> Options
+
+@* One shell, fixed to one target. Everything that decides which is on the widget row,
+   which is what the socket reads — so the card cannot be repointed by whoever is looking
+   at the dashboard. *@
+
+@if (!Options.Value.Auth.Enabled)
+{
+    <div class="tile-meta">
+        Set <code>LABBY_AUTH_PASSWORD</code> before this will open. A terminal on a dashboard
+        with no login is a shell for anyone who can reach it.
+    </div>
+}
+else if (_target is null)
+{
+    <div class="tile-meta">
+        Pick a connection in this card's settings — an SSH host, or a Docker connection with a
+        container named.
+    </div>
+}
+else
+{
+    <iframe class="w-100 border rounded"
+            style="height: @(_rows * 1.25 + 3)rem;"
+            title="@Context.Widget.Title"
+            src="@TerminalEndpoints.ConsoleUrl(_target, widgetId: Context.Widget.Id)"
+            @key="_target.Id"></iframe>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private TerminalTarget? _target;
+    private int _rows = 18;
+
+    protected override void OnParametersSet()
+    {
+        _target = TerminalPolicy.ForWidget(Context.Widget.Settings).PinnedTarget;
+        _rows = Math.Clamp(Context.Widget.Settings.GetInt("rows", 18), 5, 100);
+    }
+}

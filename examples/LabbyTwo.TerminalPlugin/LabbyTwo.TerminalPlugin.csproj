@@ -1,0 +1,44 @@
+<!-- Razor SDK: this plugin ships a tab kind and a widget as well as its endpoints. -->
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- A class library does not normally copy its NuGet dependencies to bin, because
+         whatever consumes it restores them. Nothing restores anything at runtime here:
+         installing this plugin is copying files into a folder, so the build output has to
+         be the complete set. With this on, `cp bin/Release/net10.0/*.dll` into
+         data/plugins is right rather than being right minus the SSH library. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The host does not ship this one, so unlike YamlDotNet or Markdig it is a real
+         dependency: Renci.SshNet.dll has to be copied into data/plugins beside this
+         plugin, because there is no NuGet restore at runtime. See the README.
+
+         2026.0.0 rather than the 2025 line on purpose — the earlier releases carry
+         GHSA-q939-rpr3-3284, and NuGet says so out loud on restore. -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- xterm.js, vendored rather than fetched from a CDN. A dashboard for a home lab is
+         routinely the thing you open when the internet is the broken part, and a terminal
+         that needs jsdelivr to be reachable before it can show you why your router is
+         down is a terminal that is never there when it matters. Served by
+         TerminalEndpoints out of the assembly, so there is no static-asset plumbing and
+         nothing to copy alongside the DLL. -->
+    <EmbeddedResource Include="assets/xterm.js" LogicalName="terminal.xterm.js" />
+    <EmbeddedResource Include="assets/xterm.css" LogicalName="terminal.xterm.css" />
+    <EmbeddedResource Include="assets/addon-fit.js" LogicalName="terminal.addon-fit.js" />
+    <EmbeddedResource Include="assets/console.js" LogicalName="terminal.console.js" />
+  </ItemGroup>
+
+</Project>
