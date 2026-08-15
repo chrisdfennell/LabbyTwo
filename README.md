@@ -622,10 +622,33 @@ cp bin/Release/net10.0/MyLabbyPlugin.dll /path/to/labbytwo-data/plugins/
 docker compose restart labbytwo
 ```
 
+**You do not have to build the bundled ones at all.** Every release attaches a ready-made
+zip of each plugin in [`examples/`](examples), built and stamped for that exact version, so
+installing one needs no .NET:
+
+```bash
+unzip LabbyTwo.TerminalPlugin-v1.2.1.zip -d plugins/
+docker cp plugins/. labbytwo-labbytwo-1:/app/data/plugins/
+docker compose restart labbytwo
+```
+
+Unzip the whole archive rather than picking out the DLL with the plugin's name on it — some
+carry dependencies beside them, and there is no NuGet restore at runtime.
+
+Take the zip from the release you are running. A plugin built against a different LabbyTwo
+does not fail cleanly: it *half*-loads, keeping the types that still resolve and dropping
+the rest, so a tab kind can appear in the picker and then throw when opened. Settings now
+compares the two versions and says so instead of leaving you to find out that way.
+
 **Settings → Plugins** lists what loaded and what each one contributed, and reports the
 reason for anything that did not — a plugin built against an older LabbyTwo says so
 rather than vanishing. A plugin declaring a key that already exists replaces the built-in
 of that name, which is the supported way to fix a provider you disagree with.
+
+**Written one worth sharing?** Open a pull request adding it to `examples/`. CI builds every
+plugin in there on every pull request, and the release workflow publishes a zip of each, so
+a merged plugin becomes installable by everyone from the next release.
+[`examples/README.md`](examples/README.md) says what one needs to be merged.
 
 Plugin code runs unsandboxed inside the LabbyTwo process, which can read the database and
 the keyring. Install plugins you would trust with your credentials.

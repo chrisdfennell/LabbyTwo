@@ -198,6 +198,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Built here rather than copied out of the test job, so what is attached to the
+      # release is stamped with the release's own version. That stamp is the whole point:
+      # a plugin DLL is compiled against one LabbyTwo, and one built against another
+      # half-loads — discovery keeps the types that resolve and silently drops the rest,
+      # which surfaces much later as a tab kind that throws when somebody opens it.
+      # Settings compares this stamp against the running build and says so instead.
+      - name: Package the plugins
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          for plugin in examples/*/; do
+            name="$(basename "$plugin")"
+            echo "::group::$name"
+
+            # The whole output folder, not just the plugin's own DLL. Some of them carry
+            # dependencies the host does not ship — the terminal plugin needs SSH.NET and
+            # BouncyCastle beside it — and there is no NuGet restore at runtime to fetch
+            # them. Zipping the directory is what makes "unzip into data/plugins" true
+            # for every plugin rather than most of them.
+            dotnet build "$plugin" --configuration Release \
+              -p:InformationalVersion="$VERSION" -warnaserror
+
+            (cd "$plugin/bin/Release/net10.0" && zip -qr "$GITHUB_WORKSPACE/dist/$name-$VERSION.zip" . \
+              -x '*.pdb' '*.staticwebassets.*')
+            echo "::endgroup::"
+          done
+
+          ls -lh dist >> "$GITHUB_STEP_SUMMARY"
+
       - name: Write the notes
         run: |
           set -euo pipefail
@@ -213,6 +247,23 @@ jobs:
             else
               echo "The first release."
             fi
+
+            echo
+            echo "## Plugins"
+            echo
+            echo "Every bundled plugin is attached below, built for **this** version and"
+            echo "ready to use without installing .NET. Unzip one into your plugins folder"
+            echo "and restart:"
+            echo
+            echo '```bash'
+            echo "unzip LabbyTwo.TerminalPlugin-${VERSION}.zip -d plugins/"
+            echo "docker cp plugins/. labbytwo-labbytwo-1:/app/data/plugins/"
+            echo "docker compose restart labbytwo"
+            echo '```'
+            echo
+            echo "Unzip the whole archive, not just the one DLL — some carry dependencies"
+            echo "beside them. Settings → Plugins lists what loaded, and warns if a plugin"
+            echo "was built for a different version than the one you are running."
 
             echo
             echo "## Installing"
@@ -247,5 +298,6 @@ jobs:
           [ "${{ needs.prepare.outputs.prerelease }}" = "true" ] && flags="$flags --prerelease"
           [ "${{ inputs.draft }}" = "true" ] && flags="$flags --draft"
 
+          # The zips are trailing arguments: gh attaches each one as a release asset.
           # shellcheck disable=SC2086
-          gh release create "$VERSION" --title "$VERSION" --notes-file notes.md $flags
+          gh release create "$VERSION" --title "$VERSION" --notes-file notes.md $flags dist/*.zip

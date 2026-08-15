@@ -495,6 +495,39 @@ docker compose restart labbytwo
 Settings → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
 
+### Publishing it
+
+A bare DLL is a poor way to hand somebody a plugin: it only works on the LabbyTwo it was
+built against, and nothing about the file says which one that was. So the release workflow
+stamps every plugin it publishes with that release's version and attaches it as a zip, and
+`ModuleCatalog` holds the stamp up against the running build.
+
+Do the same for one of your own and your users get the same warning:
+
+```bash
+dotnet build -c Release -p:InformationalVersion=v1.2.1
+```
+
+Zip the whole `bin/Release/net10.0` folder rather than the one DLL. If your plugin has a
+dependency the host does not ship, that folder is the only place it exists and there is no
+NuGet restore at the far end — and a class library does not copy its NuGet dependencies to
+`bin` by default, on the reasonable assumption that whatever consumes it will restore them.
+Nothing consumes this. So:
+
+```xml
+<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+```
+
+The stamp is deliberately a warning rather than a refusal. A plugin usually does keep
+working across a release, and refusing to load one that would have been fine is worse than
+the thing being warned about — a partial load is survivable and merely baffling.
+
+**To have it published here instead**, open a pull request adding it to
+[`examples/`](../examples). CI builds every directory in there on every pull request with
+warnings as errors, and each release attaches a zip of each one, so a merged plugin is
+installable by everybody from the next release. [`examples/README.md`](../examples/README.md)
+lists what one needs to be merged.
+
 ## Thirteen that work
 
 [`examples/`](../examples) has thirteen plugins that build and run, covering every extension
