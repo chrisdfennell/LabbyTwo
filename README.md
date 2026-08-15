@@ -347,7 +347,9 @@ being delivered — there is no separate notification settings screen.
 
 ### Tabs — what's in the nav
 
-The sidebar is literally a table. Add, rename, reorder, hide, delete. Seven kinds ship:
+The sidebar is literally a table. Add, rename, reorder, hide, delete — and **Sort** puts a
+nav that grew in no particular order into one, A–Z or by kind. **Duplicate** makes another
+tab like this one, cards and bindings and all. Seven kinds ship:
 
 - **Dashboard** — a grid of widgets.
 - **Embedded page** — a full-height iframe of another app's web UI. One tab kind covers
@@ -409,6 +411,7 @@ greys out the rest with the reason.
 | Media — download clients | nothing — SABnzbd, NZBGet, qBittorrent and Transmission side by side |
 | Media — library size | nothing — counts from every library server that reports one |
 | Media — needs a look | nothing — paused downloaders, missing subtitles, requests waiting, anything not answering |
+| Internet speed | Internet speed test, Speedtest Tracker — download, upload, ping and jitter together, and how old the result is |
 | Clock | nothing |
 | Weather station | Ambient Weather — current conditions |
 | Weather — today's extremes | Ambient Weather — high/low, peak gust, rain, max UV, peak solar, sunrise and sunset |

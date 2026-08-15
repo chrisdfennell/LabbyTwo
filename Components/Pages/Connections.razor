@@ -12,7 +12,24 @@
         <h1>🔌 Connections</h1>
         <p class="subtitle">Everything LabbyTwo talks to. Widgets bind to these.</p>
     </div>
-    <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add connection</button>
+    <div class="d-flex gap-2 align-items-center">
+        @* This page is the longest in the app and only ever grows. Twenty connections in,
+           finding one means reading the whole table. *@
+        @if (_connections.Count > 6)
+        {
+            <input type="search" class="form-control form-control-sm" style="width: 12rem"
+                   placeholder="Filter…" aria-label="Filter connections"
+                   @bind="_filter" @bind:event="oninput" />
+
+            <button class="btn btn-sm @(_downOnly ? "btn-warning" : "btn-outline-secondary")"
+                    title="Only the ones that are down" @onclick="() => _downOnly = !_downOnly">Down only</button>
+
+            <button class="btn btn-sm btn-outline-secondary" disabled="@_testing" @onclick="TestAllAsync">
+                @(_testing ? $"Testing… {_tested}/{_toTest}" : "Test all")
+            </button>
+        }
+        <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add connection</button>
+    </div>
 </div>
 
 @if (_connections.Count == 0)
@@ -24,7 +41,20 @@
 }
 else
 {
+    @if (Shown.Count == 0)
+    {
+        <div class="empty-state">
+            <p class="mb-2">Nothing matches that.</p>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ClearFilter">Clear the filter</button>
+        </div>
+    }
+    else
+    {
     <div class="panel">
+        @if (Shown.Count != _connections.Count)
+        {
+            <div class="tile-meta px-3 pt-2">Showing @Shown.Count of @_connections.Count.</div>
+        }
         <table class="table table-hover align-middle mb-0">
             <thead>
                 <tr>
@@ -36,7 +66,7 @@ else
                 </tr>
             </thead>
             <tbody>
-                @foreach (var connection in _connections)
+                @foreach (var connection in Shown)
                 {
                     var state = Health.State(connection.Id);
                     <tr>
@@ -135,6 +165,7 @@ else
             </tbody>
         </table>
     </div>
+    }
 }
 
 @if (_picking)
@@ -259,6 +290,77 @@ else
     }
 
     private async Task RefreshAsync(Connection connection) => await Health.RefreshAsync(connection);
+
+    private string _filter = "";
+    private bool _downOnly;
+    private bool _testing;
+    private int _tested, _toTest;
+
+    /// <summary>
+    /// Name, provider and what the last probe said — all three, because you look for a
+    /// connection by whichever of them you happen to remember, and "qnap" should find the
+    /// NAS whether that is its name or its type.
+    /// </summary>
+    private IReadOnlyList<Connection> Shown
+    {
+        get
+        {
+            var rows = _connections.AsEnumerable();
+
+            if (_downOnly)
+                rows = rows.Where(c => Health.State(c.Id) is { IsUp: false });
+
+            if (_filter.Trim() is { Length: > 0 } needle)
+            {
+                rows = rows.Where(c =>
+                    c.Name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                    || ProviderName(c).Contains(needle, StringComparison.OrdinalIgnoreCase)
+                    || c.Provider.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                    || (Health.State(c.Id)?.Message ?? "").Contains(needle, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return [.. rows];
+        }
+    }
+
+    private void ClearFilter()
+    {
+        _filter = "";
+        _downOnly = false;
+    }
+
+    /// <summary>
+    /// Re-probe the lot. Worth a button for the moment after a NAS reboot or a network
+    /// change, when the question is "what came back" and the alternative is twenty clicks.
+    ///
+    /// Sequential on purpose. The monitor's own sweep runs these in parallel because it is
+    /// a background job nobody is watching; this one is a person waiting, and twenty
+    /// simultaneous probes at a NAS that has just come up is how you get twenty timeouts.
+    /// </summary>
+    private async Task TestAllAsync()
+    {
+        var targets = Shown.Where(c => c.Enabled && Registry.Provider(c.Provider) is { IsMonitored: true }).ToList();
+        if (targets.Count == 0)
+            return;
+
+        _testing = true;
+        _tested = 0;
+        _toTest = targets.Count;
+
+        try
+        {
+            foreach (var connection in targets)
+            {
+                await Health.RefreshAsync(connection);
+                _tested++;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
 
     private async Task DeleteAsync()
     {

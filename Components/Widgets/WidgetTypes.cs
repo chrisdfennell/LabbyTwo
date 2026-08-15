@@ -392,6 +392,21 @@ public sealed class ContainerListWidget : IWidgetType
     public Type Component => typeof(ContainerList);
 }
 
+/// <summary>
+/// Both speed tests at once. They report the same metric names on purpose, so one card
+/// serves whichever you run — and keeps working if you switch.
+/// </summary>
+public sealed class SpeedTestWidget : IWidgetType
+{
+    public string Type => "speedtest";
+    public string DisplayName => "Internet speed";
+    public string Icon => "📶";
+    public string Description => "Download, upload, ping and jitter from a speed test, and how old the result is.";
+    public IReadOnlyList<string> ProviderTypes => ["speedtest", "speedtest-tracker"];
+    public int DefaultWidth => 3;
+    public Type Component => typeof(SpeedTest);
+}
+
 public sealed class GitSummaryWidget : IWidgetType
 {
     public string Type => "git-summary";

@@ -4,6 +4,7 @@
 @inject ConfigStore Config
 @inject Registry Registry
 @inject NavigationManager Nav
+@inject ShareTransfer Share
 
 <PageTitle>Tabs · LabbyTwo</PageTitle>
 
@@ -12,8 +13,33 @@
         <h1>🗂️ Tabs</h1>
         <p class="subtitle">The nav is whatever you put here — add, rename, reorder, remove.</p>
     </div>
-    <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add tab</button>
+    <div class="d-flex gap-2">
+        @* Arrows move one tab one place, which is right for "this belongs above that" and
+           useless on a nav that grew to fifteen entries in no order at all. *@
+        @if (_tabs.Count > 2)
+        {
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                        @onclick="() => _sorting = !_sorting">Sort</button>
+                @if (_sorting)
+                {
+                    <div class="dropdown-menu show" style="position:absolute; z-index:5">
+                        <button class="dropdown-item" type="button"
+                                @onclick="() => AskSort(ConfigStore.TabOrder.Alphabetical)">A–Z</button>
+                        <button class="dropdown-item" type="button"
+                                @onclick="() => AskSort(ConfigStore.TabOrder.ByKind)">By kind, then name</button>
+                    </div>
+                }
+            </div>
+        }
+        <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add tab</button>
+    </div>
 </div>
+
+@if (_notice is { Length: > 0 } notice)
+{
+    <div class="alert alert-info py-2">@notice</div>
+}
 
 @if (_tabs.Count == 0)
 {
@@ -63,6 +89,8 @@ else
                                    can do, and this way it works before one connects. *@
                                 <a class="btn btn-sm btn-outline-secondary" title="Export this tab to share it"
                                    href="@($"api/share/tab?id={tab.Id}")">Export</a>
+                                <button class="btn btn-sm btn-outline-secondary" title="Make another one like this"
+                                        disabled="@_busy" @onclick="() => DuplicateAsync(tab)">Duplicate</button>
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(tab)">Edit</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = tab">✕</button>
                             </div>
@@ -128,6 +156,16 @@ else
                    OnConfirm="DeleteAsync" />
 }
 
+@if (_confirmSort is { } order)
+{
+    @* It cannot be undone, and somebody's arrangement is somebody's work. *@
+    <ConfirmDialog Title="Sort the tabs?"
+                   Message="@($"This replaces the order you arranged by hand, and cannot be undone. {_tabs.Count} tabs will be renumbered.")"
+                   ConfirmText="Sort them"
+                   OnCancel="() => _confirmSort = null"
+                   OnConfirm="() => SortAsync(order)" />
+}
+
 @code {
     private IReadOnlyList<Tab> _tabs = [];
     private IReadOnlyList<Widget> _widgets = [];
@@ -135,6 +173,10 @@ else
     private Tab? _draft;
     private ITabKind? _draftKind;
     private Tab? _confirmDelete;
+    private bool _sorting;
+    private bool _busy;
+    private ConfigStore.TabOrder? _confirmSort;
+    private string? _notice;
 
     private string _name = "";
     private string _icon = "";
@@ -151,6 +193,39 @@ else
     {
         _tabs = await Config.TabsAsync();
         _widgets = await Config.WidgetsAsync();
+    }
+
+    private void AskSort(ConfigStore.TabOrder order)
+    {
+        _sorting = false;
+        _confirmSort = order;
+    }
+
+    private async Task SortAsync(ConfigStore.TabOrder order)
+    {
+        _confirmSort = null;
+        var moved = await Config.SortTabsAsync(order);
+        _notice = moved == 0 ? "Already in that order." : $"Moved {moved} tab{(moved == 1 ? "" : "s")}.";
+        await LoadAsync();
+    }
+
+    private async Task DuplicateAsync(Tab tab)
+    {
+        _busy = true;
+        try
+        {
+            var result = await Share.DuplicateTabAsync(tab.Id);
+            _notice = $"Copied “{tab.Name}” with {result.Widgets} card{(result.Widgets == 1 ? "" : "s")}.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _notice = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private string ContentSummary(Tab tab)

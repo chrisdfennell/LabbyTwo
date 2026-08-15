@@ -257,6 +257,49 @@ public sealed class ShareTransferTests : IDisposable
         Assert.Equal(nas.Id, (await config.WidgetsForTabAsync(tab.Id)).Last().ConnectionId);
     }
 
+    /// <summary>
+    /// Duplicating is the share round trip with both ends here, which is the point: one
+    /// copier, not two that drift. It has to land beside the original rather than on
+    /// whichever dashboard happens to be first, which is right for an import and wrong here.
+    /// </summary>
+    [Fact]
+    public async Task DuplicatingATabCopiesItsCardsAndNamesTheCopy()
+    {
+        var (tab, nas) = await SeedAsync();
+        var share = Get<ShareTransfer>();
+
+        var result = await share.DuplicateTabAsync(tab.Id);
+
+        var tabs = await Get<ConfigStore>().TabsAsync();
+        Assert.Equal(2, tabs.Count);
+
+        var copy = Assert.Single(tabs, t => t.Id != tab.Id);
+        Assert.Equal("Lab (copy)", copy.Name);
+        Assert.NotEqual(tab.Slug, copy.Slug);
+        Assert.Equal(2, result.Widgets);
+
+        // The binding survives, because the connection is still here to match.
+        var copied = await Get<ConfigStore>().WidgetsForTabAsync(copy.Id);
+        Assert.Equal(nas.Id, Assert.Single(copied, w => w.Type == "service-tile").ConnectionId);
+    }
+
+    [Fact]
+    public async Task DuplicatingACardPutsItOnTheSameTab()
+    {
+        var (tab, _) = await SeedAsync();
+        var config = Get<ConfigStore>();
+        var clock = Assert.Single(await config.WidgetsForTabAsync(tab.Id), w => w.Type == "clock");
+
+        await Get<ShareTransfer>().DuplicateWidgetAsync(clock.Id);
+
+        var after = await config.WidgetsForTabAsync(tab.Id);
+        Assert.Equal(3, after.Count);
+        Assert.Equal(2, after.Count(w => w.Type == "clock"));
+
+        // And nowhere else.
+        Assert.Single(await config.TabsAsync());
+    }
+
     [Fact]
     public void RubbishIsRefusedWithSomethingReadable()
     {

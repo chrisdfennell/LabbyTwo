@@ -65,6 +65,47 @@ public sealed class StorageTests : IDisposable
         }
     }
 
+    // ---------- Sorting the nav ----------
+
+    /// <summary>
+    /// The arrows move one tab one place. This is for a nav that grew to a dozen entries
+    /// in no order at all, and it renumbers the lot.
+    /// </summary>
+    [Fact]
+    public async Task SortingTabsPutsThemInOrderAndOnlyMovesWhatMoved()
+    {
+        var config = Get<ConfigStore>();
+        foreach (var (name, kind, sort) in ((string, string, int)[])
+                 [("Zulu", TabKinds.Grid, 0), ("alpha", TabKinds.Notes, 1), ("Mike", TabKinds.Grid, 2)])
+        {
+            await config.SaveTabAsync(new Tab { Slug = name.ToLowerInvariant(), Name = name, Kind = kind, Sort = sort });
+        }
+
+        var moved = await config.SortTabsAsync(ConfigStore.TabOrder.Alphabetical);
+        Assert.True(moved > 0);
+
+        // Case-insensitive, so "alpha" sorts with the letters rather than before them all.
+        Assert.Equal(["alpha", "Mike", "Zulu"], (await config.TabsAsync()).Select(t => t.Name));
+
+        // Already sorted: nothing is written, so nothing announces a change.
+        Assert.Equal(0, await config.SortTabsAsync(ConfigStore.TabOrder.Alphabetical));
+    }
+
+    [Fact]
+    public async Task SortingByKindGroupsThenNames()
+    {
+        var config = Get<ConfigStore>();
+        foreach (var (name, kind) in ((string, string)[])
+                 [("Runbooks", TabKinds.Notes), ("Home", TabKinds.Grid), ("Scratch", TabKinds.Notes), ("Media", TabKinds.Grid)])
+        {
+            await config.SaveTabAsync(new Tab { Slug = name.ToLowerInvariant(), Name = name, Kind = kind });
+        }
+
+        await config.SortTabsAsync(ConfigStore.TabOrder.ByKind);
+
+        Assert.Equal(["Home", "Media", "Runbooks", "Scratch"], (await config.TabsAsync()).Select(t => t.Name));
+    }
+
     // ---------- Widget ordering ----------
 
     private async Task<(Tab Tab, List<Widget> Widgets)> SeedGridAsync(int count)

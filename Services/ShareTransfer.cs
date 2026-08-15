@@ -156,6 +156,42 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
             ? new ConnectionRef(found.Provider, found.Name)
             : null;
 
+    // ---- copying one here ------------------------------------------------------------
+
+    /// <summary>
+    /// Another one of these. Sharing already had to answer every hard question a copy
+    /// asks — new ids, a slug that does not collide, connections resolved by what they
+    /// are — so duplicating is the same journey with both ends in the same install
+    /// rather than a second implementation that will drift from it.
+    /// </summary>
+    public async Task<Result> DuplicateTabAsync(string tabId, CancellationToken ct = default)
+    {
+        var (json, _) = await ExportTabAsync(tabId, ct);
+        var share = Read(json);
+
+        // Named as a copy up front. Coming back to two tabs called "Media" and having to
+        // open both to find out which is which is a poor reward for pressing a button.
+        var copy = share with { Tab = share.Tab! with { Name = Copy(share.Tab.Name) } };
+
+        return await ApplyAsync(await PlanAsync(copy, ct), ct);
+    }
+
+    public async Task<Result> DuplicateWidgetAsync(string widgetId, CancellationToken ct = default)
+    {
+        var (json, _) = await ExportWidgetAsync(widgetId, ct);
+        var share = Read(json);
+
+        // A card lands on the first dashboard, which is wrong for a duplicate: it belongs
+        // beside the one it was copied from.
+        var widgets = await config.WidgetsAsync(ct);
+        var original = widgets.First(w => w.Id == widgetId);
+
+        var plan = await PlanAsync(share, ct);
+        return await ApplyAsync(plan, ct, original.TabId);
+    }
+
+    private static string Copy(string name) => $"{name} (copy)";
+
     // ---- reading one back ------------------------------------------------------------
 
     /// <summary>What an import would do, worked out without writing anything.</summary>
@@ -289,7 +325,12 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
     /// and importing the same file twice gives you two of them rather than silently
     /// overwriting the first.
     /// </summary>
-    public async Task<Result> ApplyAsync(Plan plan, CancellationToken ct = default)
+    /// <param name="ontoTab">
+    /// Where a lone card should go. Null means the first dashboard, which is the only
+    /// sensible guess for a card arriving from somebody else; a duplicate passes the tab
+    /// its original is on, because next to it is the whole point.
+    /// </param>
+    public async Task<Result> ApplyAsync(Plan plan, CancellationToken ct = default, string? ontoTab = null)
     {
         var connections = await config.ConnectionsAsync(ct);
         var share = plan.Share;
@@ -319,13 +360,21 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
         {
             // A lone card needs somewhere to live. The first dashboard tab is the only
             // sensible answer, and saying so beats refusing the import.
-            var grid = (await config.TabsAsync(ct))
-                .FirstOrDefault(t => t.Kind == Core.TabKinds.Grid)
+            var tabs = await config.TabsAsync(ct);
+            var home = ontoTab is { Length: > 0 }
+                ? tabs.FirstOrDefault(t => t.Id == ontoTab)
+                : tabs.FirstOrDefault(t => t.Kind == Core.TabKinds.Grid);
+
+            home ??= tabs.FirstOrDefault(t => t.Kind == Core.TabKinds.Grid)
                 ?? throw new InvalidOperationException(
                     "There is no dashboard tab to put this card on. Add one first, then import it.");
 
-            tabId = grid.Id;
-            plan.Notes.Add($"Added to the “{grid.Name}” tab.");
+            tabId = home.Id;
+
+            // Only worth saying when it was a choice. Duplicating onto the tab you are
+            // looking at needs no explanation.
+            if (ontoTab is not { Length: > 0 })
+                plan.Notes.Add($"Added to the “{home.Name}” tab.");
         }
 
         var sort = await config.NextWidgetSortAsync(tabId, ct);
