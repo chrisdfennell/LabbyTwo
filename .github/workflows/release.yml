@@ -117,7 +117,9 @@ jobs:
     # A step's `if:` cannot read the secrets context, so mirror the one we test into env.
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      VERSION: ${{ needs.prepare.outputs.version }}
+      # Renamed for the same reason as the release job below, though nothing here runs
+      # dotnet today. Leaving one job with the trap still set is how it comes back.
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -129,7 +131,7 @@ jobs:
       - name: Say whether this run will publish
         run: |
           if [ -n "$DOCKERHUB_USERNAME" ]; then
-            echo "Publishing \`$VERSION\` to Docker Hub." >> "$GITHUB_STEP_SUMMARY"
+            echo "Publishing \`$RELEASE_VERSION\` to Docker Hub." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No DOCKERHUB_USERNAME secret, so the image is built as a check and not pushed." \
               >> "$GITHUB_STEP_SUMMARY"
@@ -158,7 +160,7 @@ jobs:
 
           {
             echo "tags<<TAGS"
-            echo "$image:$VERSION"
+            echo "$image:$RELEASE_VERSION"
 
             # :latest is the newest *release*, never the newest commit — main publishes
             # :main instead. Anything pulling :latest, Watchtower most of all, should get
@@ -190,7 +192,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ needs.prepare.outputs.version }}
+      # Not VERSION. MSBuild turns every environment variable into a global property, so a
+      # job-level VERSION sets the "Version" property on everything dotnet touches here —
+      # and "v1.3.0" is not a valid NuGet version, so restore dies before it starts.
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       PREVIOUS: ${{ needs.prepare.outputs.previous }}
 
     steps:
@@ -208,13 +213,6 @@ jobs:
       # half-loads — discovery keeps the types that resolve and silently drops the rest,
       # which surfaces much later as a tab kind that throws when somebody opens it.
       # Settings compares this stamp against the running build and says so instead.
-      # Before the loop, and deliberately without -warnaserror. NuGet's audit warnings are
-      # raised during *restore*, so building with warnings as errors and no prior restore
-      # fails as "RestoreTask returned false but did not log an error" — an MSB4181 with
-      # nothing else in the log, forty milliseconds in. ci.yml never sees it because it
-      # restores first, which is what this is copying.
-      - run: dotnet restore
-
       - name: Package the plugins
         run: |
           set -euo pipefail
@@ -224,18 +222,15 @@ jobs:
             name="$(basename "$plugin")"
             echo "::group::$name"
 
-            # Same split as above: restore quietly, then compile with warnings as errors.
-            dotnet restore "$plugin"
-
             # The whole output folder, not just the plugin's own DLL. Some of them carry
             # dependencies the host does not ship — the terminal plugin needs SSH.NET and
             # BouncyCastle beside it — and there is no NuGet restore at runtime to fetch
             # them. Zipping the directory is what makes "unzip into data/plugins" true
             # for every plugin rather than most of them.
-            dotnet build "$plugin" --configuration Release --no-restore \
-              -p:InformationalVersion="$VERSION" -warnaserror
+            dotnet build "$plugin" --configuration Release \
+              -p:InformationalVersion="$RELEASE_VERSION" -warnaserror
 
-            (cd "$plugin/bin/Release/net10.0" && zip -qr "$GITHUB_WORKSPACE/dist/$name-$VERSION.zip" . \
+            (cd "$plugin/bin/Release/net10.0" && zip -qr "$GITHUB_WORKSPACE/dist/$name-$RELEASE_VERSION.zip" . \
               -x '*.pdb' '*.staticwebassets.*')
             echo "::endgroup::"
           done
@@ -253,7 +248,7 @@ jobs:
               # release note is the list you can scan.
               git log --no-merges --pretty='- %s' "$PREVIOUS..HEAD"
               echo
-              echo "**Full diff:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${VERSION}"
+              echo "**Full diff:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${RELEASE_VERSION}"
             else
               echo "The first release."
             fi
@@ -266,7 +261,7 @@ jobs:
             echo "and restart:"
             echo
             echo '```bash'
-            echo "unzip LabbyTwo.TerminalPlugin-${VERSION}.zip -d plugins/"
+            echo "unzip LabbyTwo.TerminalPlugin-${RELEASE_VERSION}.zip -d plugins/"
             echo "docker cp plugins/. labbytwo-labbytwo-1:/app/data/plugins/"
             echo "docker compose restart labbytwo"
             echo '```'
@@ -298,8 +293,8 @@ jobs:
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$VERSION" -m "LabbyTwo $VERSION"
-          git push origin "$VERSION"
+          git tag -a "$RELEASE_VERSION" -m "LabbyTwo $RELEASE_VERSION"
+          git push origin "$RELEASE_VERSION"
 
       - name: Create the release
         run: |
@@ -310,4 +305,4 @@ jobs:
 
           # The zips are trailing arguments: gh attaches each one as a release asset.
           # shellcheck disable=SC2086
-          gh release create "$VERSION" --title "$VERSION" --notes-file notes.md $flags dist/*.zip
+          gh release create "$RELEASE_VERSION" --title "$RELEASE_VERSION" --notes-file notes.md $flags dist/*.zip
