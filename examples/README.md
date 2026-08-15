@@ -24,6 +24,32 @@ same way yours will.
 | [DashyImportPlugin](LabbyTwo.DashyImportPlugin) | importer | Reads Dashy's `conf.yml` so you can migrate from it. |
 | [ExamplePlugin](LabbyTwo.ExamplePlugin) | provider | Free space on a path. The smallest complete thing — start here if you are writing one. |
 
+## Install one without building it
+
+Every release attaches a **built copy of each of these**, so using one needs no .NET and no
+compiler — only the ability to put a file in a folder.
+
+Take the zip for the plugin you want from the
+[latest release](https://github.com/chrisdfennell/LabbyTwo/releases/latest), then:
+
+```bash
+unzip LabbyTwo.TerminalPlugin-v1.2.1.zip -d plugins/
+docker cp plugins/. labbytwo-labbytwo-1:/app/data/plugins/
+docker compose restart labbytwo
+```
+
+**Unzip the whole archive, not just the DLL with the plugin's name on it.** Some carry
+dependencies the host does not ship — the terminal plugin needs SSH.NET and BouncyCastle
+beside it — and there is no NuGet restore at runtime to go and fetch them.
+
+Each zip is built and stamped with the version of LabbyTwo it was published alongside, and
+**Settings → Plugins** holds that stamp up against the running build. This matters more than
+it sounds: a plugin compiled against a different LabbyTwo does not fail cleanly, it
+*half*-loads — discovery keeps the types that still resolve and drops the rest, so a tab
+kind can sit in the picker looking fine and then throw the moment somebody opens it. Taking
+the zip from the release you are actually running avoids the whole class of problem, and
+mismatching them now says so on the Settings page rather than three screens later.
+
 ## Build and install
 
 ```bash
@@ -375,9 +401,44 @@ Patterns worth copying, all of them learned the hard way:
 - **Use the injected `IHttpClientFactory`.** A `new HttpClient()` per probe exhausts
   sockets.
 
+## Contributing one
+
+These are not a closed set. If you have written a plugin that other people would want,
+open a pull request adding it here and it joins the list above — CI already builds every
+directory under `examples/` on every pull request with warnings as errors, and the release
+workflow publishes a zip for each one, so a merged plugin is installable by everybody from
+the next release without you doing anything else.
+
+What a plugin needs to be merged:
+
+- **It builds clean.** `dotnet build -c Release -warnaserror`, which is what CI runs.
+- **It fills a gap rather than restating one.** Check the table above first, and check the
+  built-in providers — "add your everything" is already true of the JSON API provider for
+  anything that returns numbers over HTTP, and a whole plugin to read one endpoint is worth
+  less than a paragraph in your own README telling people to point that at it.
+- **It reads like the others.** A probe returns `ProbeResult.Down` with a sentence somebody
+  can act on rather than throwing, a widget never polls or throws, and errors say what to
+  fix. The list under *Things every one of these does* is the whole standard.
+- **Its dependencies come with it.** If it needs a package the host does not ship, it needs
+  `CopyLocalLockFileAssemblies` so the build output is the complete set, and a line in its
+  section here saying so.
+- **A section in this file** explaining what it is for and, more usefully, what it learned.
+  The sections above are the actual value of this folder.
+
+Nothing here is compiled into LabbyTwo, so adding one cannot break the app for anybody who
+does not install it. That is what makes this a reasonable thing to accept pull requests
+into.
+
 ## A warning worth repeating
 
 Plugin code is not sandboxed. It runs with the full permissions of the LabbyTwo process,
 which can read the database and the data-protection keyring that decrypts every stored
 credential. Install plugins you would trust with your passwords, because that is what you
 are doing.
+
+That applies with more force now that they are downloadable. A zip attached to a release
+here has been through review and CI, which is worth something and is not the same as being
+safe — and it is exactly why there is no button inside LabbyTwo that fetches and installs a
+plugin for you. Installing one is a deliberate copy of a file you chose, which is a small
+enough amount of friction to leave a moment for the question of whether you trust its
+author with your NAS password.

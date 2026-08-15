@@ -159,4 +159,44 @@ public class ModuleDiscoveryTests
         Assert.Equal("LabbyTwo", host.Name);
         Assert.True(host.TypeCount > 20, "The host module should list every built-in extension.");
     }
+
+    private static ModuleInfo Plugin(string version, bool isPlugin = true) =>
+        new("LabbyTwo.SomePlugin", version, "/plugins/some.dll", isPlugin, [], [], [], [], [], []);
+
+    /// <summary>
+    /// The whole point of stamping. A plugin built against another LabbyTwo half-loads —
+    /// the types that still resolve are kept and the rest are dropped — so this has to be
+    /// said while everything still appears to work, not at the render that finally throws.
+    /// </summary>
+    [Fact]
+    public void APluginBuiltForAnotherVersionIsFlagged()
+    {
+        var catalog = new ModuleCatalog { HostVersion = "v1.3.0" };
+
+        Assert.True(catalog.BuiltForAnother(Plugin("v1.1.0")));
+        Assert.False(catalog.BuiltForAnother(Plugin("v1.3.0")));
+
+        // Case only, which is the same build by any sane reading.
+        Assert.False(catalog.BuiltForAnother(Plugin("V1.3.0")));
+    }
+
+    /// <summary>
+    /// An unstamped build is the normal state of a local <c>dotnet run</c> and of a plugin
+    /// somebody compiled themselves. Treating "I do not know" as "these differ" would put
+    /// a warning on every development machine, which is how warnings stop being read.
+    /// </summary>
+    [Fact]
+    public void NothingIsFlaggedWhenEitherSideIsUnstamped()
+    {
+        Assert.False(new ModuleCatalog { HostVersion = "" }.BuiltForAnother(Plugin("v1.1.0")));
+        Assert.False(new ModuleCatalog { HostVersion = "v1.3.0" }.BuiltForAnother(Plugin("")));
+    }
+
+    /// <summary>The host is not a plugin, and cannot be built for a different itself.</summary>
+    [Fact]
+    public void TheHostIsNeverFlagged()
+    {
+        var catalog = new ModuleCatalog { HostVersion = "v1.3.0" };
+        Assert.False(catalog.BuiltForAnother(Plugin("v1.1.0", isPlugin: false)));
+    }
 }

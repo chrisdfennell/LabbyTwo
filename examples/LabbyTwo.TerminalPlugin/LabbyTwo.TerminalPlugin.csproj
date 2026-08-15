@@ -15,7 +15,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+    <!-- "native" as well as "runtime", which the other plugins do not need. The moment
+         CopyLocalLockFileAssemblies is on, everything the host drags in transitively
+         becomes fair game to copy — and Microsoft.Data.Sqlite carries a native e_sqlite3
+         for every RID it has ever supported, so the build output grew by 31 MB of iOS
+         simulator static libraries and Android .so files. The host already has the one
+         that matters, and shipping a second copy into the plugins folder is at best waste
+         and at worst a different SQLite than the one it is using. -->
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime;native" />
   </ItemGroup>
 
   <ItemGroup>

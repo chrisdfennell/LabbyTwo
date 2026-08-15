@@ -501,6 +501,18 @@ docker compose restart labbytwo</code></pre>
                             <span class="tile-meta">· @plugin.TypeCount extension(s)</span>
                         </div>
                         <div class="tile-meta font-monospace" style="word-break: break-all">@plugin.Path</div>
+
+                        @* Said here, while everything still works, rather than left for the
+                           render that throws. A plugin built against another LabbyTwo often
+                           loads perfectly until the one type that moved is touched. *@
+                        @if (Catalog.BuiltForAnother(plugin))
+                        {
+                            <div class="tile-meta text-warning mt-1">
+                                Built for LabbyTwo @plugin.Version, and this is @Catalog.HostVersion.
+                                It may work; if part of it is missing or a page fails to open, that is why.
+                                Each release publishes a matching copy of every bundled plugin.
+                            </div>
+                        }
                     </div>
                 }
 

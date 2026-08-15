@@ -39,6 +39,28 @@ public sealed class ModuleCatalog
     public IEnumerable<ModuleInfo> Plugins => Modules.Where(m => m.IsPlugin);
 
     /// <summary>
+    /// The running build's own version, so a plugin's can be held up against it. Empty on
+    /// a build nobody stamped, which is every local <c>dotnet run</c> — and the reason
+    /// nothing here treats a blank as a mismatch.
+    /// </summary>
+    public string HostVersion { get; init; } = "";
+
+    /// <summary>
+    /// Whether a plugin says it was built for a different LabbyTwo than this one.
+    ///
+    /// This exists because the failure it predicts is so unhelpful on its own. A plugin
+    /// compiled against an older host half-loads: discovery keeps the types that still
+    /// resolve and drops the rest, so a tab kind can appear in the picker and then throw
+    /// when somebody opens it. "Built for v1.1.0, this is v1.3.0" is a sentence someone
+    /// can act on; "could not load type" three screens later is not.
+    /// </summary>
+    public bool BuiltForAnother(ModuleInfo plugin) =>
+        plugin.IsPlugin
+        && HostVersion.Length > 0
+        && plugin.Version.Length > 0
+        && !string.Equals(plugin.Version, HostVersion, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Whether the folder was there to scan. False is the single most common reason a
     /// plugin "does nothing": the DLL went next to the compose file, or onto the host,
     /// rather than into the volume the container reads.
@@ -83,6 +105,7 @@ public static class Modules
     {
         var catalog = new ModuleCatalog
         {
+            HostVersion = Stamp(hostAssembly),
             PluginDirectory = pluginDirectory,
             PluginDirectoryExists = Directory.Exists(pluginDirectory),
         };
@@ -93,6 +116,20 @@ public static class Modules
         services.AddSingleton(catalog);
         return catalog;
     }
+
+    /// <summary>
+    /// What an assembly says it is. The release workflow stamps the app and every plugin
+    /// it publishes with the same version, which is what makes the two comparable at all —
+    /// the assembly *reference* cannot do this job, because it stays 1.0.0.0 whatever the
+    /// build was called.
+    ///
+    /// The "+sha" suffix a source-linked build appends is dropped: it makes two identical
+    /// versions look different, which would turn the mismatch warning into noise.
+    /// </summary>
+    private static string Stamp(Assembly assembly) =>
+        assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
+            ?? assembly.GetName().Version?.ToString()
+            ?? "";
 
     private static IEnumerable<Assembly> LoadAssemblies(
         Assembly hostAssembly, string pluginDirectory, ModuleCatalog catalog, ILogger? log)
@@ -151,7 +188,19 @@ public static class Modules
             // take what loaded and report the rest rather than dropping the whole DLL.
             types = [.. ex.Types.OfType<Type>()];
             var reason = ex.LoaderExceptions.OfType<Exception>().FirstOrDefault()?.Message ?? ex.Message;
-            catalog.Failures.Add(new ModuleFailure(assembly.Location, $"Partly loaded: {reason}"));
+
+            // Naming the cause rather than only the symptom. This is almost always one
+            // thing — a plugin built against a different LabbyTwo — and the loader's own
+            // message says "could not load type", which reads like a corrupt file and
+            // sends people to rebuild the plugin when the host is what moved.
+            var built = Stamp(assembly);
+            var mismatch = built.Length > 0 && catalog.HostVersion.Length > 0 && built != catalog.HostVersion
+                ? $" It was built for LabbyTwo {built} and this is {catalog.HostVersion}, which is the usual " +
+                  "cause: get the copy of this plugin published for this version, or rebuild it against it."
+                : " That normally means it was built against a different version of LabbyTwo.";
+
+            catalog.Failures.Add(new ModuleFailure(assembly.Location,
+                $"Partly loaded, so some of what it declares is missing — {reason}.{mismatch}"));
             log?.LogWarning(ex, "Some types in {Assembly} could not be loaded", assembly.FullName);
         }
 
@@ -196,8 +245,7 @@ public static class Modules
         var name = assembly.GetName();
         catalog.Modules.Add(new ModuleInfo(
             name.Name ?? "unknown",
-            assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
-                ?? name.Version?.ToString() ?? "",
+            Stamp(assembly),
             isPlugin ? assembly.Location : null,
             isPlugin,
             providers, widgets, tabKinds, importers, endpoints, jobs));
