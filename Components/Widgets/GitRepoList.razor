@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject MyPersonalGitProvider Git
+@inject Registry Registry
 
 @* Repositories, most recently touched first — the table from the Git page, usable on any
    dashboard on its own. *@
@@ -41,7 +41,7 @@ else
                         <td>
                             @if (Link is { Length: > 0 })
                             {
-                                <a href="@($"{Link}/{repo.Name}")" target="_blank" rel="noreferrer">@repo.Name</a>
+                                <a href="@RepoLink(repo)" target="_blank" rel="noreferrer">@repo.Name</a>
                             }
                             else
                             {
@@ -78,15 +78,22 @@ else
     /// <summary>Set by the Git tab, which shows the lot rather than a card's worth.</summary>
     [Parameter] public int? LimitOverride { get; set; }
 
-    private MyPersonalGitProvider.Overview? _overview;
+    private GitOverview? _overview;
     private string? _error;
 
     private int Limit => LimitOverride ?? Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 500);
 
-    private IReadOnlyList<MyPersonalGitProvider.Repo> Shown =>
+    private IReadOnlyList<GitRepo> Shown =>
         _overview is null ? [] : [.. _overview.Repos.Take(Limit)];
 
-    private string Link => Context.Connection is null ? "" : MyPersonalGitProvider.LinkBase(Context.Connection);
+    private IGitForge? Forge =>
+        Context.Connection is null ? null : Registry.Provider(Context.Connection.Provider) as IGitForge;
+
+    private string Link => Context.Connection is null || Forge is null ? "" : Forge.LinkBase(Context.Connection);
+
+    /// <summary>A repository's own URL, which only the forge knows the shape of.</summary>
+    private string RepoLink(GitRepo repo) =>
+        Context.Connection is null || Forge is null ? "" : Forge.RepoUrl(Context.Connection, repo.PathOrName);
 
     protected override void OnInitialized() => Health.Updated += OnUpdated;
 
@@ -105,7 +112,10 @@ else
 
         try
         {
-            _overview = await Git.OverviewAsync(Context.Connection, CancellationToken.None);
+            if (Forge is null)
+                return;
+
+            _overview = await Forge.OverviewAsync(Context.Connection, CancellationToken.None);
             _error = null;
         }
         catch (Exception ex)

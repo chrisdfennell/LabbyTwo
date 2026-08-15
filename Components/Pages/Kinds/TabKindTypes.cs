@@ -124,12 +124,12 @@ public sealed class GitTabKind : ITabKind
     public string Kind => "git";
     public string DisplayName => "Git server";
     public string Icon => "🐙";
-    public string Description => "A whole page for one MyPersonalGit server — counts, repositories, open pull requests and open issues.";
+    public string Description => "A whole page for one Git server — counts, repositories, open pull requests and open issues. Works with any of them.";
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("connection", "Git server", FieldKind.Connection,
-            Help: "Leave blank to use the only MyPersonalGit connection you have.")
-            { ProviderFilter = "mypersonalgit" },
+            Help: "Any Git server — MyPersonalGit, Gitea, Forgejo or GitLab. Leave blank to use the only one you have.")
+            { ProviderFilter = GitForges.Any },
         new("subtitle", "Subtitle", FieldKind.Text),
     ];
     public Type Component => typeof(GitTab);

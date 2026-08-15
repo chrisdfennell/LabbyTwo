@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject MyPersonalGitProvider Git
+@inject Registry Registry
 
 @* The small card: three counts and what was touched last. Enough to know whether anything
    needs you, without the whole page. *@
@@ -39,10 +39,14 @@ else
 @code {
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
-    private MyPersonalGitProvider.Overview? _overview;
+    private GitOverview? _overview;
     private string? _error;
 
-    private string Link => Context.Connection is null ? "" : MyPersonalGitProvider.LinkBase(Context.Connection);
+    /// <summary>Whichever forge this connection is — MyPersonalGit, Gitea, GitLab, or one from a plugin.</summary>
+    private IGitForge? Forge =>
+        Context.Connection is null ? null : Registry.Provider(Context.Connection.Provider) as IGitForge;
+
+    private string Link => Context.Connection is null || Forge is null ? "" : Forge.LinkBase(Context.Connection);
 
     protected override void OnInitialized() => Health.Updated += OnUpdated;
 
@@ -63,7 +67,10 @@ else
 
         try
         {
-            _overview = await Git.OverviewAsync(Context.Connection, CancellationToken.None);
+            if (Forge is null)
+                return;
+
+            _overview = await Forge.OverviewAsync(Context.Connection, CancellationToken.None);
             _error = null;
         }
         catch (Exception ex)

@@ -218,8 +218,7 @@
     [
         .. _connections
             .Where(c => Registry.Provider(c.Provider) is not IAlertChannel)
-            .Where(c => field.ProviderFilter is not { Length: > 0 } wanted
-                || c.Provider.Equals(wanted, StringComparison.OrdinalIgnoreCase)),
+            .Where(c => Registry.MatchesFilter(field.ProviderFilter, c.Provider)),
     ];
 
     /// <summary>Keys whose stored secret existed when the form opened, for the placeholder text.</summary>

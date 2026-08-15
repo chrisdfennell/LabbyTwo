@@ -91,10 +91,29 @@ public sealed class Registry(
     /// <summary>
     /// A widget declaring "*" works with any probed connection (a tile, a chart); one
     /// naming providers works only with those.
+    ///
+    /// An instance method rather than a static one because of the third case: a widget can
+    /// also name a *capability* — <see cref="GitForges.Any"/> — and answering that needs
+    /// the registry to look at what the provider actually implements. Being able to say
+    /// "any Git server" is what stops the Git cards being welded to whichever one was
+    /// written first, and lets a forge from a plugin join them having never heard of them.
     /// </summary>
-    public static bool Accepts(IWidgetType widget, string providerType) =>
+    public bool Accepts(IWidgetType widget, string providerType) =>
         widget.ProviderTypes.Contains("*") ||
-        widget.ProviderTypes.Contains(providerType, StringComparer.OrdinalIgnoreCase);
+        widget.ProviderTypes.Contains(providerType, StringComparer.OrdinalIgnoreCase) ||
+        (widget.ProviderTypes.Contains(GitForges.Any) && IsForge(providerType));
+
+    /// <summary>Whether a provider key names something that is a Git server.</summary>
+    public bool IsForge(string? providerType) => Provider(providerType) is IGitForge;
+
+    /// <summary>
+    /// Whether a connection may be offered for a field's <see cref="FieldSpec.ProviderFilter"/>,
+    /// which understands the same wildcard for the same reason.
+    /// </summary>
+    public bool MatchesFilter(string? filter, string providerType) =>
+        filter is not { Length: > 0 } wanted
+        || string.Equals(wanted, providerType, StringComparison.OrdinalIgnoreCase)
+        || (wanted == GitForges.Any && IsForge(providerType));
 
     // ---------- Metrics ----------
 

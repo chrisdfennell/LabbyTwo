@@ -190,6 +190,8 @@ monitoring works.
 | **Immich** | Photos and videos in the library, what it takes on disk, and how full that disk is. |
 | **Nextcloud** | Users, files, shares, free space and load, from the Server info app. |
 | **MyPersonalGit** | A self-hosted [MyPersonalGit](https://github.com/chrisdfennell/MyPersonalGit) server — repositories, open pull requests, open issues and stars. Token auth. |
+| **Gitea / Forgejo** | The same, for Gitea, Forgejo or Gogs — one integration, because all three still answer the same API. |
+| **GitLab** | Projects, open merge requests, open issues and stars from a self-hosted GitLab. It says *merge request* where the others say pull request, because that is what GitLab calls them. |
 | **Pi-hole** | Queries and blocks today, block percentage, and whether blocking is switched on. **Pauses and resumes blocking**, given an API token. |
 | **QNAP NAS** | Model, firmware, uptime, CPU, memory, temperatures, fan speeds, volume usage, SMART health per drive, and whether a firmware update is waiting. **Restarts, shuts down and wakes the NAS.** |
 | **Ambient Weather** | Every reading the station sends — indoor/outdoor temperature, wind, rain, pressure, UV. |
@@ -353,8 +355,10 @@ The sidebar is literally a table. Add, rename, reorder, hide, delete. Seven kind
 - **Notes** — markdown notes and runbooks with a live preview. It points out headings
   written without their space — `##Wi-Fi` is a paragraph, not a heading, and CommonMark
   is right about that in a way that is baffling when you are staring at the preview.
-- **Git server** — a whole page for one MyPersonalGit server: counts, every repository
-  with its commit, pull request and issue tallies, and what is open across all of them.
+- **Git server** — a whole page for one Git server: counts, every repository with its
+  commit, pull request and issue tallies, and what is open across all of them. MyPersonalGit,
+  Gitea, Forgejo or GitLab — the page asks for *a forge*, not a brand, so a provider added
+  later joins it without the page being touched.
 - **Weather station** — a whole page for the weather where you are: any warnings in force
   at the top, current readings from your own station, the forecast by day and by hour, air
   quality, radar, today's extremes with sunrise and sunset, seven charts over 24h / 48h /
@@ -425,9 +429,9 @@ greys out the rest with the reason.
 | Download queue | Sonarr, Radarr — what is downloading right now, with progress |
 | What's on this week | Sonarr, Radarr — upcoming episodes and films, grouped by day |
 | Containers | Docker |
-| Git — summary | MyPersonalGit — repository, PR and issue counts, and what was touched last |
-| Git — repositories | MyPersonalGit — the repository table |
-| Git — open work | MyPersonalGit — open pull requests or open issues, switchable |
+| Git — summary | any Git server — repository, PR and issue counts, and what was touched last |
+| Git — repositories | any Git server — the repository table |
+| Git — open work | any Git server — open pull requests or open issues, switchable |
 
 Rearranging works three ways, because HTML drag-and-drop does not exist on a touchscreen
 and cannot be reached from a keyboard: **drag** a card with a mouse, tap **⠿** to pick one

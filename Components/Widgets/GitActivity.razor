@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject MyPersonalGitProvider Git
+@inject Registry Registry
 
 @* Open pull requests or open issues across every repository. One widget rather than two,
    because the two lists differ only in which field decorates the row. *@
@@ -30,7 +30,7 @@ else
                 <div class="text-truncate">
                     @if (Link is { Length: > 0 })
                     {
-                        <a href="@($"{Link}/{row.Repo}")" target="_blank" rel="noreferrer">@row.Repo</a>
+                        <a href="@RepoLink(row)" target="_blank" rel="noreferrer">@row.Repo</a>
                     }
                     else
                     {
@@ -66,10 +66,10 @@ else
     /// <summary>"issues" or "pulls". A parameter so the Git tab can show both without two widget types.</summary>
     [Parameter] public string? ShowOverride { get; set; }
 
-    private MyPersonalGitProvider.Overview? _overview;
+    private GitOverview? _overview;
     private string? _error;
 
-    private sealed record Row(string Repo, int Number, string Title, string Author, bool IsDraft, DateTimeOffset CreatedAt);
+    private sealed record Row(string Repo, string RepoPath, int Number, string Title, string Author, bool IsDraft, DateTimeOffset CreatedAt);
 
     private bool ShowIssues =>
         (ShowOverride ?? Context.Widget.Settings.Get("show", "pulls")) == "issues";
@@ -79,10 +79,21 @@ else
     private IReadOnlyList<Row> Rows => _overview is null
         ? []
         : ShowIssues
-            ? [.. _overview.OpenIssues.Select(i => new Row(i.Repo, i.Number, i.Title, i.Author, false, i.CreatedAt))]
-            : [.. _overview.OpenPulls.Select(p => new Row(p.Repo, p.Number, p.Title, p.Author, p.IsDraft, p.CreatedAt))];
+            ? [.. _overview.OpenIssues.Select(i => new Row(i.Repo, i.RepoPath, i.Number, i.Title, i.Author, false, i.CreatedAt))]
+            : [.. _overview.OpenPulls.Select(p => new Row(p.Repo, p.RepoPath, p.Number, p.Title, p.Author, p.IsDraft, p.CreatedAt))];
 
-    private string Link => Context.Connection is null ? "" : MyPersonalGitProvider.LinkBase(Context.Connection);
+    private IGitForge? Forge =>
+        Context.Connection is null ? null : Registry.Provider(Context.Connection.Provider) as IGitForge;
+
+    private string Link => Context.Connection is null || Forge is null ? "" : Forge.LinkBase(Context.Connection);
+
+    private string RepoLink(Row row) =>
+        Context.Connection is null || Forge is null
+            ? ""
+            : Forge.RepoUrl(Context.Connection, row.RepoPath is { Length: > 0 } path ? path : row.Repo);
+
+    /// <summary>"pull request" or "merge request", as this particular server calls it.</summary>
+    private string PullNoun => Forge?.PullNounPlural ?? "pull requests";
 
     protected override void OnInitialized() => Health.Updated += OnUpdated;
 
@@ -101,7 +112,10 @@ else
 
         try
         {
-            _overview = await Git.OverviewAsync(Context.Connection, CancellationToken.None);
+            if (Forge is null)
+                return;
+
+            _overview = await Forge.OverviewAsync(Context.Connection, CancellationToken.None);
             _error = null;
         }
         catch (Exception ex)

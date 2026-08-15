@@ -397,8 +397,8 @@ public sealed class GitSummaryWidget : IWidgetType
     public string Type => "git-summary";
     public string DisplayName => "Git — summary";
     public string Icon => "🐙";
-    public string Description => "Repository, pull request and issue counts for a Git server, and what was touched last.";
-    public IReadOnlyList<string> ProviderTypes => ["mypersonalgit"];
+    public string Description => "Repository, pull request and issue counts for any Git server, and what was touched last.";
+    public IReadOnlyList<string> ProviderTypes => GitForges.Types;
     public int DefaultWidth => 3;
     public Type Component => typeof(GitSummary);
 }
@@ -409,7 +409,7 @@ public sealed class GitRepoListWidget : IWidgetType
     public string DisplayName => "Git — repositories";
     public string Icon => "📚";
     public string Description => "Repositories with their commit, pull request and issue counts, most recently updated first.";
-    public IReadOnlyList<string> ProviderTypes => ["mypersonalgit"];
+    public IReadOnlyList<string> ProviderTypes => GitForges.Types;
     public int DefaultWidth => 6;
     public IReadOnlyList<FieldSpec> Fields =>
     [
@@ -423,8 +423,8 @@ public sealed class GitActivityWidget : IWidgetType
     public string Type => "git-activity";
     public string DisplayName => "Git — open work";
     public string Icon => "🔀";
-    public string Description => "Open pull requests or open issues across every repository on a Git server.";
-    public IReadOnlyList<string> ProviderTypes => ["mypersonalgit"];
+    public string Description => "Open pull requests or open issues across every repository on any Git server.";
+    public IReadOnlyList<string> ProviderTypes => GitForges.Types;
     public int DefaultWidth => 4;
     public IReadOnlyList<FieldSpec> Fields =>
     [
