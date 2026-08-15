@@ -234,6 +234,48 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
             await SaveTabAsync(tabs[i] with { Sort = i }, ct);
     }
 
+    /// <summary>How a one-click sort should arrange the nav.</summary>
+    public enum TabOrder
+    {
+        /// <summary>By name.</summary>
+        Alphabetical,
+
+        /// <summary>Dashboards together, then notes, then the rest — each group by name.</summary>
+        ByKind,
+    }
+
+    /// <summary>
+    /// Puts the nav in order in one go. The arrows move one tab one place, which is the
+    /// right tool for "this belongs above that" and a poor one for a nav that grew to
+    /// fifteen entries in no particular order.
+    ///
+    /// Deliberately destructive of whatever arrangement was there — the caller is expected
+    /// to have said so first, because a hand-built order is somebody's work and this
+    /// cannot put it back.
+    /// </summary>
+    public async Task<int> SortTabsAsync(TabOrder order, CancellationToken ct = default)
+    {
+        var tabs = await TabsAsync(ct);
+
+        var sorted = order == TabOrder.ByKind
+            ? tabs.OrderBy(t => t.Kind, StringComparer.OrdinalIgnoreCase)
+                  .ThenBy(t => t.Name, StringComparer.CurrentCultureIgnoreCase).ToList()
+            : tabs.OrderBy(t => t.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+
+        // Only the rows that actually move are written. A nav already in order should cost
+        // nothing and, more to the point, should not announce a change to every open page.
+        var moved = 0;
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            if (sorted[i].Sort == i)
+                continue;
+            await SaveTabAsync(sorted[i] with { Sort = i }, ct);
+            moved++;
+        }
+
+        return moved;
+    }
+
     /// <summary>Turns a display name into a URL slug that does not collide with an existing tab.</summary>
     public async Task<string> UniqueSlugAsync(string name, string? exceptId = null, CancellationToken ct = default)
     {

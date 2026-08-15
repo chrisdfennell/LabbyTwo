@@ -1,0 +1,119 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+
+@* The four numbers a speed test produces, together. They are all ordinary metrics, so a
+   metric tile shows any one of them — but four tiles is four cards, and download without
+   upload next to it only answers half the question anybody was asking. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a speed test.</p>
+}
+else if (_down is null && _up is null)
+{
+    <p class="tile-meta mb-0">
+        No result yet. @(_scheduled ? "The first test runs on the next sweep." : "Run one and it will appear here.")
+    </p>
+}
+else
+{
+    <div class="d-flex align-items-baseline gap-3 flex-wrap">
+        <div>
+            <div class="metric-value">@Format(_down)<span class="metric-unit">Mbps</span></div>
+            <div class="tile-meta">↓ download</div>
+        </div>
+        <div>
+            <div class="metric-value">@Format(_up)<span class="metric-unit">Mbps</span></div>
+            <div class="tile-meta">↑ upload</div>
+        </div>
+    </div>
+
+    <div class="row g-2 mt-2">
+        <div class="col-6">
+            <div class="tile-meta">Ping</div>
+            <div>@(_ping is { } p ? $"{p:0} ms" : "—")</div>
+        </div>
+        <div class="col-6">
+            <div class="tile-meta">Jitter</div>
+            <div>@(_jitter is { } j ? $"{j:0.0} ms" : "—")</div>
+        </div>
+    </div>
+
+    @* The number that catches a scheduler which quietly stopped. A speed figure from last
+       Tuesday looks exactly like one from a minute ago, and only its age says otherwise. *@
+    @if (Age is { } age)
+    {
+        <div class="tile-meta mt-2 @(age.TotalHours > StaleAfterHours ? "text-warning" : "")">
+            @(age.TotalHours > StaleAfterHours ? "⚠ last tested " : "tested ")@Ago.Since(DateTimeOffset.Now - age)
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private double? _down, _up, _ping, _jitter;
+    private DateTimeOffset? _takenAt;
+    private bool _scheduled;
+
+    /// <summary>
+    /// Past this, the reading is old enough to be worth pointing at rather than reading as
+    /// current. A day and a bit: long enough not to nag a six-hourly test that ran late,
+    /// short enough to catch one that stopped.
+    /// </summary>
+    private const double StaleAfterHours = 26;
+
+    private TimeSpan? Age
+    {
+        get
+        {
+            // Speedtest Tracker knows when its own result was taken, which is not when we
+            // asked it — a stalled tracker answers instantly with last week's number.
+            if (_trackerAgeHours is { } hours)
+                return TimeSpan.FromHours(hours);
+
+            return _takenAt is { } at ? DateTimeOffset.Now - at : null;
+        }
+    }
+
+    private double? _trackerAgeHours;
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        _scheduled = Context.Connection.Enabled;
+
+        // History rather than only the live state: a test runs hours apart, so the last
+        // probe in memory is empty for most of the life of the process and the card would
+        // be blank after every restart.
+        var latest = await History.LatestAsync(Context.Connection.Id, TimeSpan.FromDays(30));
+
+        _down = Value(latest, "download_mbps");
+        _up = Value(latest, "upload_mbps");
+        _ping = Value(latest, "ping_ms");
+        _jitter = Value(latest, "jitter_ms");
+        _trackerAgeHours = Value(latest, "result_age_hours");
+
+        _takenAt = Health.State(Context.Connection.Id)?.At;
+    }
+
+    private static double? Value(IReadOnlyDictionary<string, double> readings, string key) =>
+        readings.TryGetValue(key, out var value) ? value : null;
+
+    private static string Format(double? value) => value is { } v ? v.ToString(v >= 100 ? "0" : "0.0") : "—";
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

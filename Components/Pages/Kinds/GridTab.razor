@@ -1,5 +1,6 @@
 @implements IDisposable
 @inject ConfigStore Config
+@inject ShareTransfer Share
 @inject Registry Registry
 
 <div class="page-head">
@@ -145,6 +146,8 @@ else
                            stays a dashboard. *@
                         <a class="btn btn-sm btn-outline-secondary ms-auto" title="Export this card to share it"
                            href="@($"api/share/widget?id={widget.Id}")">Export</a>
+                        <button class="btn btn-sm btn-outline-secondary" title="Another one like this, on this tab"
+                                @onclick="() => DuplicateAsync(widget)">Duplicate</button>
                         <button class="btn btn-sm btn-outline-secondary"
                                 @onclick="() => _editingWidget = widget">Edit</button>
                         <button class="btn btn-sm btn-outline-danger"
@@ -263,6 +266,22 @@ else
     }
 
     private async Task MoveAsync(Widget widget, int direction) => await Config.ReorderWidgetAsync(widget.Id, direction);
+
+    /// <summary>
+    /// The same copy the share import does, with both ends here — so a duplicate gets new
+    /// ids and keeps its connection binding, and there is no second copier to drift.
+    /// </summary>
+    private async Task DuplicateAsync(Widget widget)
+    {
+        try
+        {
+            await Share.DuplicateWidgetAsync(widget.Id);
+        }
+        catch (Exception)
+        {
+            // A card that will not copy is not worth taking the dashboard down for.
+        }
+    }
 
     private async Task ResizeAsync(Widget widget, int step)
     {
