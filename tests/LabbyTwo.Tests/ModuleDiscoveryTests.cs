@@ -41,7 +41,7 @@ public class ModuleDiscoveryTests
             "homeassistant", "adguard", "nut", "unifi",
             "lidarr", "readarr", "prowlarr",
             "bazarr", "tautulli", "nzbget", "seerr", "ersatztv", "unmanic",
-            "mypersonalgit",
+            "mypersonalgit", "gitea", "gitlab",
             "uptime-kuma", "speedtest-tracker", "speedtest", "immich", "nextcloud",
             "prometheus", "pbs", "duplicati", "scrutiny", "frigate", "tailscale", "synology",
             "healthchecks", "email", "ifttt",
@@ -109,12 +109,20 @@ public class ModuleDiscoveryTests
 
         foreach (var widget in registry.Widgets)
         {
-            foreach (var type in widget.ProviderTypes.Where(t => t != "*"))
+            foreach (var type in widget.ProviderTypes.Where(t => t is not ("*" or GitForges.Any)))
             {
                 Assert.True(
                     registry.Provider(type) is not null,
                     $"Widget “{widget.Type}” binds to provider “{type}”, which is not registered.");
             }
+        }
+
+        // The capability wildcard gets the same guard, for the same reason: a widget asking
+        // for a kind of provider that nothing implements offers an empty list, which on
+        // screen is indistinguishable from having none configured.
+        if (registry.Widgets.Any(w => w.ProviderTypes.Contains(GitForges.Any)))
+        {
+            Assert.Contains(registry.Providers, p => p is IGitForge);
         }
     }
 
@@ -198,5 +206,57 @@ public class ModuleDiscoveryTests
     {
         var catalog = new ModuleCatalog { HostVersion = "v1.3.0" };
         Assert.False(catalog.BuiltForAnother(Plugin("v1.1.0", isPlugin: false)));
+    }
+
+    /// <summary>
+    /// The Git cards used to name one provider, which meant a second Git server could be
+    /// monitored and charted and still not appear on any of them. They now ask for a
+    /// capability, so this checks the capability is actually declared by everything that
+    /// should have it — a forge that forgets the interface fails silently and invisibly.
+    /// </summary>
+    [Fact]
+    public void EveryGitServerIsAForge()
+    {
+        var (registry, _) = Build();
+
+        foreach (var type in (string[])["mypersonalgit", "gitea", "gitlab"])
+            Assert.True(registry.IsForge(type), $"{type} should implement IGitForge.");
+
+        Assert.False(registry.IsForge("plex"));
+        Assert.False(registry.IsForge("nonsense"));
+    }
+
+    /// <summary>
+    /// And that the wildcard reaches them. This is the half that would break silently: a
+    /// widget naming a capability nothing resolves simply offers no connections, which
+    /// looks exactly like having none configured.
+    /// </summary>
+    [Fact]
+    public void TheGitCardsAcceptEveryForge()
+    {
+        var (registry, _) = Build();
+
+        foreach (var key in (string[])["git-summary", "git-repos", "git-activity"])
+        {
+            var widget = Assert.Single(registry.Widgets, w => w.Type == key);
+
+            Assert.True(registry.Accepts(widget, "mypersonalgit"), $"{key} should accept MyPersonalGit.");
+            Assert.True(registry.Accepts(widget, "gitea"), $"{key} should accept Gitea.");
+            Assert.True(registry.Accepts(widget, "gitlab"), $"{key} should accept GitLab.");
+
+            // Still narrow: the wildcard means "any forge", not "anything at all".
+            Assert.False(registry.Accepts(widget, "plex"), $"{key} should not accept Plex.");
+        }
+    }
+
+    /// <summary>GitLab calls them merge requests, and the page should use the server's word.</summary>
+    [Fact]
+    public void EachForgeNamesItsOwnKindOfRequest()
+    {
+        var (registry, _) = Build();
+
+        Assert.Equal("merge request", ((IGitForge)registry.Provider("gitlab")!).PullNoun);
+        Assert.Equal("pull request", ((IGitForge)registry.Provider("gitea")!).PullNoun);
+        Assert.Equal("pull requests", ((IGitForge)registry.Provider("mypersonalgit")!).PullNounPlural);
     }
 }

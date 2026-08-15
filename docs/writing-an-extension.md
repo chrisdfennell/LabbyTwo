@@ -150,6 +150,17 @@ charts.
   it and always makes the request.
 - **Implement `IAlertChannel` instead** and your provider becomes somewhere notifications
   are *sent*, with the same generated form and encrypted storage. See `WebhookProvider`.
+- **Implement `IGitForge` as well** and your provider becomes a Git server: the Git
+  summary, repositories and open-work cards and the whole Git server page will bind to it,
+  with no change to any of them. Derive from `CachedGitForge` and you get the caching that
+  stops four cards on one page making four rounds of calls. `GiteaProvider` is the worked
+  example, and `PullNoun` is why GitLab's pages say "merge request" — override it and the
+  UI uses your server's word.
+
+  This is the general shape for anything the built-in cards should be able to draw from
+  more than one source: a capability interface, and widgets that ask for the capability
+  rather than naming a provider. A widget declaring `ProviderTypes => GitForges.Types`
+  accepts any forge, including one that arrives in a plugin years later.
 - **Suggest the rules that matter.** `SuggestedRules` offers ready-made alert rules on the
   Alerts page — you know a UPS on battery is news and the user does not. Give each a
   `Why`. They are offers, never created automatically.

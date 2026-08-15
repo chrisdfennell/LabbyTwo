@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject ConfigStore Config
 @inject HealthMonitor Health
+@inject Registry Registry
 
 @* A whole page for one Git server. Like the weather station kind, every part of it is a
    widget you can also place on an ordinary dashboard — this only decides the arrangement. *@
@@ -13,7 +14,7 @@
             <p class="subtitle">@subtitle</p>
         }
     </div>
-    @if (_server is not null && MyPersonalGitProvider.LinkBase(_server) is { Length: > 0 } link)
+    @if (_server is not null && Forge?.LinkBase(_server) is { Length: > 0 } link)
     {
         <a class="btn btn-sm btn-outline-secondary" href="@link" target="_blank" rel="noreferrer">
             Open @_server.Name ↗
@@ -24,7 +25,7 @@
 @if (_server is null)
 {
     <div class="empty-state">
-        <p class="mb-3">This tab needs a MyPersonalGit connection.</p>
+        <p class="mb-3">This tab needs a Git server connection — MyPersonalGit, Gitea, Forgejo or GitLab.</p>
         <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
     </div>
 }
@@ -54,7 +55,7 @@ else
         </div>
         <div class="col-12 col-xl-5">
             <div class="widget mb-3">
-                <div class="widget-head"><h2 class="widget-title">🔀 Open pull requests</h2></div>
+                <div class="widget-head"><h2 class="widget-title">🔀 Open @PullNoun</h2></div>
                 <div class="widget-body">
                     <GitActivity Context="_context" ShowOverride="pulls" />
                 </div>
@@ -74,6 +75,12 @@ else
 
     private Connection? _server;
     private WidgetContext _context = default!;
+
+    /// <summary>Whichever kind of Git server this tab is pointed at.</summary>
+    private IGitForge? Forge => _server is null ? null : Registry.Provider(_server.Provider) as IGitForge;
+
+    /// <summary>GitLab says "merge requests", and this page should say what the server says.</summary>
+    private string PullNoun => Forge?.PullNounPlural ?? "pull requests";
 
     private static readonly string[] Counts = ["repo_count", "open_pulls", "open_issues", "stars"];
 
@@ -111,7 +118,8 @@ else
         _server = chosen.Length > 0
             ? connections.FirstOrDefault(c => c.Id == chosen)
             // Nothing chosen: the only Git server configured is almost certainly the one.
-            : connections.FirstOrDefault(c => c.Provider == "mypersonalgit");
+            // Any forge, not one brand — this page has no reason to prefer a particular.
+            : connections.FirstOrDefault(c => Registry.IsForge(c.Provider));
 
         if (_server is not null)
             _context = new WidgetContext(

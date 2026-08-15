@@ -16,7 +16,7 @@ namespace LabbyTwo.Providers;
 /// repository table and the pull-request list all read the same fetch rather than each
 /// setting off their own fan-out.
 /// </summary>
-public sealed class MyPersonalGitProvider(IHttpClientFactory httpFactory) : IConnectionProvider
+public sealed class MyPersonalGitProvider(IHttpClientFactory httpFactory) : CachedGitForge, IConnectionProvider
 {
     public string Type => "mypersonalgit";
     public string DisplayName => "MyPersonalGit";
@@ -44,39 +44,8 @@ public sealed class MyPersonalGitProvider(IHttpClientFactory httpFactory) : ICon
         new("latency_ms", "Response time", " ms"),
     ];
 
-    // ---- what the widgets read -----------------------------------------------------
-
-    public sealed record Repo(
-        string RawName,
-        string Description,
-        string Owner,
-        bool IsPrivate,
-        int Stars,
-        int Forks,
-        int Commits,
-        string DefaultBranch,
-        DateTimeOffset UpdatedAt,
-        int OpenIssues,
-        int OpenPulls)
-    {
-        /// <summary>The API returns the on-disk name, which carries a ".git" nobody wants to read.</summary>
-        public string Name =>
-            RawName.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? RawName[..^4] : RawName;
-    }
-
-    public sealed record Issue(int Number, string Title, string Author, DateTimeOffset CreatedAt, int Comments, string Repo);
-
-    public sealed record Pull(int Number, string Title, string Author, bool IsDraft,
-        string SourceBranch, string TargetBranch, DateTimeOffset CreatedAt, string Repo);
-
-    public sealed record Overview(IReadOnlyList<Repo> Repos, IReadOnlyList<Pull> OpenPulls, IReadOnlyList<Issue> OpenIssues)
-    {
-        public int Stars => Repos.Sum(r => r.Stars);
-        public Repo? MostRecent => Repos.MaxBy(r => r.UpdatedAt);
-    }
-
     /// <summary>Where a browser should go for this server — the override if set, else the probed URL.</summary>
-    public static string LinkBase(Connection connection) =>
+    public override string LinkBase(Connection connection) =>
         (connection.Settings.Get("open_url") is { Length: > 0 } custom
             ? custom
             : connection.Settings.Get("url")).TrimEnd('/');
@@ -123,52 +92,15 @@ public sealed class MyPersonalGitProvider(IHttpClientFactory httpFactory) : ICon
 
     // ---- the shared fetch -------------------------------------------------------------
 
-    private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(2);
-
-    private readonly ConcurrentDictionary<string, (Overview Value, DateTimeOffset At)> _cache = new();
-    private readonly SemaphoreSlim _lock = new(1, 1);
-
-    /// <summary>
-    /// Everything the Git page shows. Cached briefly per connection, so a page of six
-    /// widgets bound to the same server costs one round of calls rather than six.
-    /// </summary>
-    public async Task<Overview> OverviewAsync(Connection connection, CancellationToken ct)
+    protected override async Task<GitOverview> FetchAsync(Connection connection, CancellationToken ct)
     {
-        if (Fresh(connection) is { } cached)
-            return cached;
-
-        await _lock.WaitAsync(ct);
-        try
-        {
-            // Checked again inside the lock: several widgets render at once on first paint,
-            // and without this they would all queue up and then each fetch in turn.
-            if (Fresh(connection) is { } stillFresh)
-                return stillFresh;
-
-            var overview = await FetchAsync(connection, ct);
-            _cache[connection.Id] = (overview, DateTimeOffset.UtcNow);
-            return overview;
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    private Overview? Fresh(Connection connection) =>
-        _cache.TryGetValue(connection.Id, out var entry) && DateTimeOffset.UtcNow - entry.At < Ttl
-            ? entry.Value
-            : null;
-
-    private async Task<Overview> FetchAsync(Connection connection, CancellationToken ct)
-    {
-        var repos = new List<Repo>();
-        var pulls = new List<Pull>();
-        var issues = new List<Issue>();
+        var repos = new List<GitRepo>();
+        var pulls = new List<GitPull>();
+        var issues = new List<GitIssue>();
 
         using var list = await GetJsonAsync(connection, "/api/v1/repos", ct);
         if (list.RootElement.ValueKind != JsonValueKind.Array)
-            return new Overview([], [], []);
+            return new GitOverview([], [], []);
 
         var bare = list.RootElement.EnumerateArray().Select(ReadRepo).ToList();
 
@@ -185,18 +117,18 @@ public sealed class MyPersonalGitProvider(IHttpClientFactory httpFactory) : ICon
             }
         }
 
-        return new Overview(
+        return new GitOverview(
             [.. repos.OrderByDescending(r => r.UpdatedAt)],
             [.. pulls.OrderByDescending(p => p.CreatedAt)],
             [.. issues.OrderByDescending(i => i.CreatedAt)]);
     }
 
-    private async Task<(Repo Repo, List<Pull> Pulls, List<Issue> Issues)> DetailAsync(
-        Connection connection, Repo repo, CancellationToken ct)
+    private async Task<(GitRepo Repo, List<GitPull> Pulls, List<GitIssue> Issues)> DetailAsync(
+        Connection connection, GitRepo repo, CancellationToken ct)
     {
         var name = Uri.EscapeDataString(repo.RawName);
-        var pulls = new List<Pull>();
-        var issues = new List<Issue>();
+        var pulls = new List<GitPull>();
+        var issues = new List<GitIssue>();
 
         // A repository with issues or pull requests switched off answers with an error
         // rather than an empty list. That is a zero, not a failure of the whole page.
@@ -225,19 +157,19 @@ public sealed class MyPersonalGitProvider(IHttpClientFactory httpFactory) : ICon
         return (repo with { OpenPulls = pulls.Count, OpenIssues = issues.Count }, pulls, issues);
     }
 
-    private static Repo ReadRepo(JsonElement e) => new(
+    private static GitRepo ReadRepo(JsonElement e) => new(
         Str(e, "name"), Str(e, "description"), Str(e, "owner"), Bool(e, "isPrivate"),
         Int(e, "stars"), Int(e, "forks"), Int(e, "commits"), Str(e, "default_branch"),
         Date(e, "updated_at") ?? Date(e, "created_at") ?? DateTimeOffset.MinValue, 0, 0);
 
-    private static Pull ReadPull(JsonElement e, string repo) => new(
+    private static GitPull ReadPull(JsonElement e, string repo) => new(
         Int(e, "number"), Str(e, "title"), Str(e, "author"), Bool(e, "isDraft"),
         Str(e, "source_branch"), Str(e, "target_branch"),
-        Date(e, "created_at") ?? DateTimeOffset.MinValue, repo);
+        Date(e, "created_at") ?? DateTimeOffset.MinValue, repo, repo);
 
-    private static Issue ReadIssue(JsonElement e, string repo) => new(
+    private static GitIssue ReadIssue(JsonElement e, string repo) => new(
         Int(e, "number"), Str(e, "title"), Str(e, "author"),
-        Date(e, "created_at") ?? DateTimeOffset.MinValue, Int(e, "comment_count"), repo);
+        Date(e, "created_at") ?? DateTimeOffset.MinValue, Int(e, "comment_count"), repo, repo);
 
     private async Task<JsonDocument> GetJsonAsync(Connection connection, string path, CancellationToken ct)
     {
