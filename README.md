@@ -997,6 +997,31 @@ someone's dashboard adds to your setup rather than replacing it. Anything it can
 a provider you don't have installed, a tab slug already taken — is reported rather than
 silently dropped.
 
+### Sharing one tab, or one card
+
+The whole-install export above is for restoring *your* dashboard. Handing somebody a page
+you built is a different thing, and has its own button: **Export** next to any tab under
+Settings → Tabs, and next to any card under **Edit layout** on a dashboard.
+
+What comes out is a small readable JSON file with no ids in it, because a shared tab is a
+*copy*. Import it twice and you get two — it can never land on top of a tab of yours, which
+is exactly what an upsert by id would risk.
+
+**Credentials cannot travel this way at all**, because no connection settings do. A card
+that watched your NAS records only that it wanted *a QNAP called "The NAS"*, and the
+receiving install matches that against something it already has: by name first, then by
+provider if there is only one candidate, and otherwise not at all. Importing shows you
+exactly what it will do first — which cards will bind to what, which will arrive unbound,
+and what the tab's URL will be if yours is taken.
+
+```
+Adds the “Media” tab and 7 cards.
+  · It will be at /t/media-2 — /t/media is already taken.
+  · The “Downloads” card will use “sab”, the only one you have — the file asked for “SABnzbd”.
+  · The “Cameras” card wanted a Frigate called “frigate”, and there is no match here.
+    You can point it at something after importing.
+```
+
 ## Contributing
 
 Providers, most of all — every home lab has something LabbyTwo cannot see yet, and each

@@ -58,6 +58,11 @@ else
                         <td class="tile-meta">@ContentSummary(tab)</td>
                         <td class="text-end">
                             <div class="d-flex gap-1 justify-content-end">
+                                @* A tab as a file somebody else can import. A link rather
+                                   than a button: saving a file is not something a circuit
+                                   can do, and this way it works before one connects. *@
+                                <a class="btn btn-sm btn-outline-secondary" title="Export this tab to share it"
+                                   href="@($"api/share/tab?id={tab.Id}")">Export</a>
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(tab)">Edit</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = tab">✕</button>
                             </div>

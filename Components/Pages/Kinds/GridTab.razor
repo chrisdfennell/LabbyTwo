@@ -140,7 +140,12 @@ else
                                 @onclick="() => ResizeAsync(widget, -1)">−</button>
                         <button class="btn btn-sm btn-outline-secondary" title="Wider"
                                 @onclick="() => ResizeAsync(widget, 1)">+</button>
-                        <button class="btn btn-sm btn-outline-secondary ms-auto"
+                        @* One card, as a file. Sits in edit mode with the other card tools
+                           rather than on the card itself, so a dashboard nobody is editing
+                           stays a dashboard. *@
+                        <a class="btn btn-sm btn-outline-secondary ms-auto" title="Export this card to share it"
+                           href="@($"api/share/widget?id={widget.Id}")">Export</a>
+                        <button class="btn btn-sm btn-outline-secondary"
                                 @onclick="() => _editingWidget = widget">Edit</button>
                         <button class="btn btn-sm btn-outline-danger"
                                 @onclick="() => _confirmDelete = widget">✕</button>
