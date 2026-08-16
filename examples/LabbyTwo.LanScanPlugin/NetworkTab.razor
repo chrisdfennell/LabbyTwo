@@ -1,0 +1,284 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject Registry Registry
+@inject HealthMonitor Health
+@inject ActionRunner Actions
+
+@* The whole network on one page, rather than the eight rows a card has space for.
+   The card is a glance; this is the thing you open when the glance said something. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "🛰️" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_scan is null)
+            {
+                <text>No network scan connection to show.</text>
+            }
+            else
+            {
+                <text>@_scan.Name — @_devices.Count device@(_devices.Count == 1 ? "" : "s") on the last sweep.</text>
+            }
+        </p>
+    </div>
+
+    @if (_scan is not null)
+    {
+        <div class="d-flex gap-2 align-items-center">
+            <input type="search" class="form-control form-control-sm" style="width: 12rem"
+                   placeholder="Filter…" aria-label="Filter devices"
+                   @bind="_filter" @bind:event="oninput" />
+
+            <button class="btn btn-sm btn-primary" disabled="@_scanning" @onclick="ScanAsync">
+                @(_scanning ? "Scanning…" : "Scan now")
+            </button>
+        </div>
+    }
+</div>
+
+@if (_scan is null)
+{
+    <div class="empty-state">
+        <p class="mb-2">This tab needs a <strong>Network scan</strong> connection.</p>
+        <a class="btn btn-sm btn-primary" href="settings/connections">Add one</a>
+    </div>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3">
+            <div class="widget">
+                <div class="widget-head"><span class="widget-title">Answering</span></div>
+                <div class="metric-value">@_devices.Count</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="widget">
+                <div class="widget-head"><span class="widget-title">Named</span></div>
+                <div class="metric-value">@_devices.Count(d => d.Name.Length > 0)</div>
+                <div class="tile-meta">of @_devices.Count</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="widget">
+                <div class="widget-head"><span class="widget-title">Last swept</span></div>
+                <div class="metric-value" style="font-size:1.4rem">
+                    @(_state?.At is { } at ? at.ToString("HH:mm") : "—")
+                </div>
+                <div class="tile-meta">@(_state?.At is { } when ? Ago.Since(when) : "never")</div>
+            </div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="widget">
+                <div class="widget-head"><span class="widget-title">Subnet</span></div>
+                <div class="metric-value" style="font-size:1.1rem">@_scan.Settings.Get("subnet")</div>
+                <div class="tile-meta">@Subnet.Count(_scan.Settings.Get("subnet")) addresses</div>
+            </div>
+        </div>
+    </div>
+
+    @if (_result is { Length: > 0 })
+    {
+        <div class="tile-meta mb-2">@_result</div>
+    }
+
+    @if (_devices.Count == 0)
+    {
+        <div class="empty-state">
+            <p class="mb-2">Nothing recorded yet.</p>
+            <button class="btn btn-sm btn-primary" disabled="@_scanning" @onclick="ScanAsync">
+                @(_scanning ? "Scanning…" : "Run the first scan")
+            </button>
+        </div>
+    }
+    else if (Shown.Count == 0)
+    {
+        <div class="empty-state">
+            <p class="mb-2">Nothing matches that.</p>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _filter = string.Empty">Clear the filter</button>
+        </div>
+    }
+    else
+    {
+        <div class="panel">
+            @if (Shown.Count != _devices.Count)
+            {
+                <div class="tile-meta px-3 pt-2">Showing @Shown.Count of @_devices.Count.</div>
+            }
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th style="width:2.5rem"></th>
+                        <th>Name</th>
+                        <th>Address</th>
+                        <th>Hardware</th>
+                        <th>Open ports</th>
+                        <th class="text-end">Response</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var device in Shown)
+                    {
+                        <tr>
+                            <td><span class="status-dot status-up"></span></td>
+                            <td>@(device.Name is { Length: > 0 } named ? named : "—")</td>
+                            <td class="font-monospace">@device.Address</td>
+                            <td class="tile-meta">
+                                @if (device.Mac is { Length: > 0 })
+                                {
+                                    <span class="font-monospace">@device.Mac</span>
+                                    @if (device.Vendor is { Length: > 0 })
+                                    {
+                                        <span class="ms-2">@device.Vendor</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span>—</span>
+                                }
+                            </td>
+                            <td class="tile-meta font-monospace">
+                                @(device.OpenPorts.Count > 0 ? string.Join(" ", device.OpenPorts) : "—")
+                            </td>
+                            <td class="text-end tile-meta">@device.Milliseconds.ToString("0") ms</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @* Said once, under the table, rather than as a dash in every row of a column that
+           will never fill in. It is a fact about how this container is attached to the
+           network, not a fault, and it is only worth explaining where somebody is looking
+           at the empty column. *@
+        @if (_devices.All(device => device.Mac.Length == 0))
+        {
+            <p class="tile-meta mt-2">
+                No hardware addresses from here. ARP only reaches the same network segment, and LabbyTwo
+                is on a Docker bridge — replies from the LAN arrive routed through the gateway, so the
+                addresses never reach it. Host networking or a macvlan would show them; nothing else will.
+            </p>
+        }
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private Connection? _scan;
+    private LanScanProvider? _provider;
+    private IReadOnlyList<LanScanProvider.Device> _devices = [];
+    private HealthMonitor.ProbeState? _state;
+    private string _filter = "";
+    private string _result = "";
+    private bool _scanning;
+    private string _loadedTab = "";
+
+    /// <summary>
+    /// Matches on everything a row shows. Somebody looking for a device knows one of these
+    /// and not which — a name, half an address, "Espressif", or the port it serves on.
+    /// </summary>
+    private IReadOnlyList<LanScanProvider.Device> Shown
+    {
+        get
+        {
+            if (_filter.Trim() is not { Length: > 0 } needle)
+                return _devices;
+
+            return [.. _devices.Where(device =>
+                device.Name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || device.Address.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || device.Mac.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || device.Vendor.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || device.OpenPorts.Any(port => port.ToString().Contains(needle)))];
+        }
+    }
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Only when the tab actually changes: OnParametersSet fires on every render, and
+        // re-reading the connection list each time is work for nothing.
+        if (_loadedTab == Tab.Id)
+            return;
+
+        _loadedTab = Tab.Id;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var connections = await Config.ConnectionsAsync();
+        var chosen = Tab.Settings.Get("connection");
+
+        _scan = chosen.Length > 0
+            ? connections.FirstOrDefault(c => c.Id == chosen)
+            // Nothing chosen: the only scan there is, is almost certainly the one meant.
+            : connections.FirstOrDefault(c => c.Provider == "lanscan");
+
+        if (_scan is null)
+            return;
+
+        _provider = Registry.Provider(_scan.Provider) as LanScanProvider;
+        _state = Health.State(_scan.Id);
+
+        if (_provider is not null)
+        {
+            var seen = await _provider.LastSeenAsync(_scan);
+
+            // Named first, then by address as a number rather than as text — otherwise .10
+            // sorts before .9 and a table of a subnet reads as shuffled.
+            _devices = [.. seen
+                .OrderByDescending(device => device.Name.Length > 0)
+                .ThenBy(device => Numeric(device.Address))];
+        }
+    }
+
+    /// <summary>An IPv4 address as a number, so 192.168.1.9 comes before 192.168.1.10.</summary>
+    private static long Numeric(string address)
+    {
+        var parts = address.Split('.');
+        if (parts.Length != 4)
+            return long.MaxValue;
+
+        long value = 0;
+        foreach (var part in parts)
+            value = value * 256 + (byte.TryParse(part, out var octet) ? octet : 0);
+
+        return value;
+    }
+
+    private async Task ScanAsync()
+    {
+        if (_scan is null || _provider is null)
+            return;
+
+        _scanning = true;
+        _result = "";
+        try
+        {
+            // Through the runner rather than the provider directly, so a scan started here
+            // is recorded the same way one started from the connections page is.
+            var outcome = await Actions.RunAsync(_scan, "scan", new SettingsBag(), CancellationToken.None);
+            _result = outcome.Message;
+        }
+        catch (Exception ex)
+        {
+            _result = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _scanning = false;
+            await LoadAsync();
+        }
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}
