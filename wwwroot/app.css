@@ -997,6 +997,16 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .5rem;
 }
 
+/* Label beside its box rather than above it: four of these stacked is a tall column of
+   alternating text, and the labels are one word each. */
+.unit-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: .4rem .6rem;
+    align-items: center;
+}
+.unit-grid .form-label { margin: 0; white-space: nowrap; }
+
 /* ---------- workflow runs ---------- */
 
 .ci-runs { display: grid; gap: .1rem; }

@@ -38,7 +38,7 @@ else
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
     private IReadOnlyList<ForecastProvider.Hour> _hours = [];
-    private string _units = Appearance.Default.UnitSystem;
+    private Units.Preferences _units = Units.Preferences.Default;
 
     private IReadOnlyList<ForecastProvider.Hour> Hours =>
         [.. _hours.Take(Math.Clamp(Context.Widget.Settings.GetInt("hours", 12), 1, 48))];
@@ -46,7 +46,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
-        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+        _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
     protected override void OnParametersSet() => Load();

@@ -326,7 +326,7 @@ else
     private int _channelCount;
     private AlertPolicy _policy = AlertPolicy.Default;
     private List<Offer> _suggestions = [];
-    private string _units = Appearance.Default.UnitSystem;
+    private Units.Preferences _units = Units.Preferences.Default;
     private bool _adding;
 
     private sealed record Offer(Connection Connection, SuggestedRule Rule);
@@ -378,7 +378,7 @@ else
         _channels = [.. (await Alerts.ChannelsAsync()).Select(pair => pair.Connection)];
         _channelCount = _channels.Count;
         _policy = AlertPolicy.From(await AppSettings.AllAsync());
-        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+        _units = Units.Preferences.From(await AppSettings.AllAsync());
         LoadSuggestions();
         await LoadMetricsAsync(_draft?.ConnectionId);
     }

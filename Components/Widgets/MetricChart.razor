@@ -79,7 +79,7 @@ else
     private string _primaryPath = "";
     private string _comparePath = "";
     private double _high;
-    private string _units = Appearance.Default.UnitSystem;
+    private Units.Preferences _units = Units.Preferences.Default;
 
     private string Metric => Context.Widget.Settings.Get("metric", "latency_ms");
     private string CompareMetric => Context.Widget.Settings.Get("compare");
@@ -98,7 +98,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
-        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+        _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();

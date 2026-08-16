@@ -150,7 +150,7 @@ public sealed class MetricAlertService(
     {
         // A notification saying "-6.0°C" to someone who thinks in Fahrenheit is a puzzle
         // rather than a warning, so the message follows the same setting the UI does.
-        var system = (await appSettings.GetAsync(Appearance.UnitsKey, Appearance.Default.UnitSystem, ct));
+        var system = Units.Preferences.From(await appSettings.AllAsync(ct));
         var reading = Units.Format(spec, value, system, spec.Decimals == 0 && Math.Abs(value) < 100 ? 1 : spec.Decimals);
         var limit = Units.Format(spec, level == AlertLevel.Down ? rule.Threshold : rule.ClearsAt, system);
 

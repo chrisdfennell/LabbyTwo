@@ -69,14 +69,14 @@ else
     private Connection? _station;
     private IReadOnlyList<Row> _rows = [];
     private double _averageError;
-    private string _units = Appearance.Default.UnitSystem;
+    private Units.Preferences _units = Units.Preferences.Default;
 
     private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 30);
 
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
-        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+        _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
