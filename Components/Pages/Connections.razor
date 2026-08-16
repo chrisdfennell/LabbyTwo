@@ -285,7 +285,7 @@ else
 @if (_confirmDelete is not null)
 {
     <ConfirmDialog Title="Delete this connection?"
-                   Message="@($"“{_confirmDelete.Name}” and its recorded history will be removed. Widgets using it will ask for a new one.")"
+                   Message="@($"“{_confirmDelete.Name}” and its recorded history will be removed. {Usage([_confirmDelete])}")"
                    OnCancel="() => _confirmDelete = null"
                    OnConfirm="DeleteAsync" />
 }
@@ -296,7 +296,7 @@ else
        not having noticed that "select all" picked up nineteen rows rather than the two you
        could see. *@
     <ConfirmDialog Title="@($"Delete {Selected.Count} connections?")"
-                   Message="@($"{Names(Selected)} — and the history recorded against them — will be removed. Widgets using them will ask for a new one.")"
+                   Message="@($"{Names(Selected)} — and the history recorded against them — will be removed. {Usage(Selected)}")"
                    OnCancel="() => _confirmDeleteSelected = false"
                    OnConfirm="DeleteSelectedAsync" />
 }
@@ -465,7 +465,50 @@ else
     private async Task LoadAsync()
     {
         _connections = await Config.ConnectionsAsync();
+        // Only so a delete can say what it costs. Both are cached in ConfigStore, so this
+        // is a dictionary lookup rather than two more queries per render.
+        _widgets = await Config.WidgetsAsync();
+        _tabs = await Config.TabsAsync();
         await LoadMaintenanceAsync();
+    }
+
+    private IReadOnlyList<Widget> _widgets = [];
+    private IReadOnlyList<Tab> _tabs = [];
+
+    /// <summary>
+    /// What deleting these would cost, counted in cards and named in pages.
+    ///
+    /// "Widgets using it will ask for a new one" was true and answered the wrong question.
+    /// The number that changes your mind is *how many*, and *where* — one card on a tab you
+    /// forgot you had is a different decision from nine across your two main dashboards,
+    /// and the old wording read identically in both cases.
+    /// </summary>
+    private string Usage(IReadOnlyList<Connection> connections)
+    {
+        var ids = connections.Select(connection => connection.Id).ToHashSet();
+        var used = _widgets.Where(widget => widget.ConnectionId is { } id && ids.Contains(id)).ToList();
+
+        if (used.Count == 0)
+            return $"Nothing on your dashboards uses {(connections.Count == 1 ? "it" : "them")}.";
+
+        var cards = used.Count == 1 ? "One card" : $"{used.Count} cards";
+
+        var tabs = used
+            .Select(widget => widget.TabId)
+            .Distinct()
+            .Select(id => _tabs.FirstOrDefault(tab => tab.Id == id)?.Name)
+            .Where(name => name is { Length: > 0 })
+            .ToList();
+
+        return tabs.Count switch
+        {
+            // Named while there are few enough to be worth naming; counted after that,
+            // because a confirmation listing nine tab names is one nobody reads.
+            1 => $"{cards} on “{tabs[0]}” will ask for a new one.",
+            2 => $"{cards} on “{tabs[0]}” and “{tabs[1]}” will ask for a new one.",
+            > 2 => $"{cards} across {tabs.Count} tabs will ask for a new one.",
+            _ => $"{cards} will ask for a new one.",
+        };
     }
 
     private string ProviderName(Connection connection) =>

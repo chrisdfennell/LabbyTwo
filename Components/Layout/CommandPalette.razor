@@ -1,5 +1,6 @@
 @implements IDisposable
 @inject ConfigStore Config
+@inject AppSettingsStore AppSettings
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 
@@ -119,6 +120,26 @@
             {
                 entries.Add(new Entry("🔕", $"Silence {connection.Name} for an hour", "action", "",
                     () => Config.SilenceAsync(id, DateTimeOffset.Now.AddHours(1))));
+            }
+        }
+
+        // The whole-installation silence. It belongs here more than any per-connection one
+        // does: you reach for it on the way to unplug something, which is exactly when you
+        // do not want to be navigating to a page to find a button.
+        if (Maintenance.From(await AppSettings.AllAsync()) is { On: true })
+        {
+            entries.Add(new Entry("🔔", "Resume all alerts", "action", "",
+                () => AppSettings.SaveAsync(Maintenance.Key, Maintenance.Cleared)));
+        }
+        else
+        {
+            foreach (var (label, span) in ((string, TimeSpan?)[])
+                     [("Silence all alerts for an hour", TimeSpan.FromHours(1)),
+                      ("Silence all alerts for 4 hours", TimeSpan.FromHours(4)),
+                      ("Silence all alerts until I resume", null)])
+            {
+                entries.Add(new Entry("🔕", label, "action", "",
+                    () => AppSettings.SaveAsync(Maintenance.Key, Maintenance.Value(span, DateTimeOffset.Now))));
             }
         }
 
