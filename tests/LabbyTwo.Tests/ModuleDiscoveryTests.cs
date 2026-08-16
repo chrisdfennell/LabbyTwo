@@ -48,7 +48,7 @@ public class ModuleDiscoveryTests
             "cloudflare", "opnsense", "shelly", "forecast", "nws", "air-quality",
             "audiobookshelf", "navidrome",
             "sabnzbd", "transmission", "tdarr", "mylar3", "whisparr", "komga",
-            "certificate", "github",
+            "certificate", "github", "mqtt",
         ];
 
         Assert.Equal(
