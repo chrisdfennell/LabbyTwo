@@ -334,23 +334,59 @@ h1[tabindex]:focus { outline: none; }
     object-fit: contain;
 }
 
+/* Wraps, because a card cannot get wider to fit its own toolbar. This is the opposite of
+   the connections table, where the actions cell asks the table for the width it needs and
+   must not wrap — same principle, different container. Nine controls do not fit across a
+   three-column card, and without this they spill out over the card beside it. */
 .widget-edit-bar {
     display: flex;
+    flex-wrap: wrap;
     gap: .25rem;
     margin-top: .75rem;
     padding-top: .5rem;
     border-top: 1px dashed var(--edge);
 }
 
+/* Keeps the right-hand group together on whichever line it lands on. Without it, ms-auto
+   on a wrapped row throws Export to one end and leaves Edit and ✕ stranded at the other. */
+.widget-edit-bar > .ms-auto {
+    margin-left: auto;
+}
+
 /* ---------- drag to rearrange ---------- */
 
-.widget.is-draggable { cursor: grab; }
-.widget.is-dragging { opacity: .4; cursor: grabbing; }
+/* The gesture lives in widget-drag.js. There is no drop indicator here any more, because
+   the cards themselves move out of the way as you drag — the preview *is* the layout. */
 
-/* The insertion point, drawn on the card the pointer is over rather than as a separate
-   element, so there is nothing to position and nothing to leave behind on drop. */
-.widget.is-drop-before { box-shadow: -4px 0 0 var(--accent); }
-.widget.is-drop-after { box-shadow: 4px 0 0 var(--accent); }
+.widget.is-draggable { cursor: grab; }
+
+/* The card left behind: the hole the drop will fill. It keeps its size so the rest of the
+   grid does not re-flow the instant you pick something up, and it is outlined in the
+   accent rather than dimmed to near-nothing — this is the answer to "where will it land",
+   so it has to be the most obvious thing on the page. */
+.widget.is-dragging {
+    cursor: grabbing;
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    border: 1px dashed var(--accent-line);
+}
+.widget.is-dragging > * { visibility: hidden; }
+
+/* The card under the pointer. Lifted off the page, and transparent to hit-testing so the
+   grid underneath can still say which slot the pointer is over. */
+.widget-drag-ghost {
+    position: fixed;
+    z-index: 1080;
+    margin: 0;
+    pointer-events: none;
+    box-shadow: 0 18px 40px rgb(0 0 0 / .45);
+    opacity: .95;
+    cursor: grabbing;
+    will-change: transform;
+}
+
+/* No text selection anywhere while a card is in the air — a drag across a dashboard
+   otherwise leaves every label it passed highlighted in blue. */
+body.is-dragging-widget { user-select: none; cursor: grabbing; }
 
 .drag-handle {
     cursor: grab;
@@ -359,8 +395,16 @@ h1[tabindex]:focus { outline: none; }
     line-height: 1;
     padding: 0 .2rem;
     user-select: none;
+    /* The one place a touch drag may start, so it is the one place the browser must not
+       treat the gesture as a scroll instead. */
+    touch-action: none;
 }
 .drag-handle:hover { color: var(--text); }
+
+/* Someone who has asked for less movement gets the reordering without the sliding. */
+@media (prefers-reduced-motion: reduce) {
+    .widget-grid > .widget { transition: none !important; }
+}
 
 /* Card widths are twelfths of the row.
 
@@ -812,6 +856,16 @@ h1[tabindex]:focus { outline: none; }
 
 .table { color: var(--text); }
 .table > :not(caption) > * > * { background: transparent; border-color: var(--edge); }
+
+/* Every table here is flush to the bottom of the card it sits in, so the rule under the
+   last row is the card's own bottom border drawn a second time, a pixel above it — and
+   because a row border is square where the card is rounded, its two ends carry on past
+   where the corner has already turned, leaving a small spur at each bottom corner. The
+   card closes the table off; the row does not need to.
+
+   .table-bordered is left alone: there the borders are the grid rather than dividers
+   between rows, and dropping the last one opens the bottom of every cell. */
+.table:not(.table-bordered) > tbody > tr:last-child > * { border-bottom-width: 0; }
 
 /* Someone who asked for less motion should not get a dragging animation or a spinner. */
 @media (prefers-reduced-motion: reduce) {

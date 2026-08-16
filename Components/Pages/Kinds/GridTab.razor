@@ -2,6 +2,7 @@
 @inject ConfigStore Config
 @inject ShareTransfer Share
 @inject Registry Registry
+@inject IJSRuntime JS
 
 <div class="page-head">
     <div>
@@ -42,7 +43,7 @@
 }
 else
 {
-    <div class="widget-grid" @ondragover:preventDefault @ondragover="() => { }">
+    <div class="widget-grid">
         @foreach (var widget in _widgets)
         {
             var type = Registry.WidgetType(widget.Type);
@@ -51,13 +52,11 @@ else
             @* The width is a class rather than an inline span so the breakpoints can widen
                a narrow card on a small screen. An inline style could not be overridden by
                a media query without !important on every rule. *@
-            <div class="widget w-@Math.Clamp(widget.Width, 1, 12) @DragClass(current)"
-                 draggable="@(_editing ? "true" : null)"
-                 @ondragstart="() => _dragging = current"
-                 @ondragend="() => { _dragging = null; _dragOver = null; }"
-                 @ondragover:preventDefault
-                 @ondragover="() => _dragOver = current"
-                 @ondrop="() => DropOnAsync(current)">
+            @* Dragging is done in widget-drag.js, not here — see DropAsync. The only thing
+               the markup owes it is an id to report back and the class that says this card
+               is draggable at all. *@
+            <div class="widget w-@Math.Clamp(widget.Width, 1, 12) @(_editing ? "is-draggable" : "")"
+                 data-widget-id="@widget.Id">
                 @if (widget.Title is { Length: > 0 } || _editing)
                 {
                     <div class="widget-head">
@@ -110,10 +109,10 @@ else
 
                 @if (_editing && _moving is not null)
                 {
-                    @* Move mode. HTML drag and drop is mouse-only — it does not exist on
-                       a touchscreen and cannot be reached from a keyboard — so picking a
-                       card up and choosing a destination is the path that works
-                       everywhere, and the only one on a wall tablet. *@
+                    @* Move mode. Dragging now works with a finger as well as a mouse, but
+                       it still cannot be reached from a keyboard — so picking a card up
+                       and choosing a destination stays, as the path that needs no pointer
+                       at all. *@
                     <div class="widget-edit-bar">
                         @if (_moving.Id == widget.Id)
                         {
@@ -199,24 +198,41 @@ else
     private bool _picking;
     private Widget? _editingWidget;
     private Widget? _confirmDelete;
-    private Widget? _dragging;
-    private Widget? _dragOver;
     private Widget? _moving;
+    private DotNetObjectReference<GridTab>? _self;
+    private bool _settle;
 
     /// <summary>
-    /// Shows where the card would land. Which side depends on the direction of travel —
-    /// dragging a later card upwards inserts before the target, dragging an earlier one
-    /// down inserts after it, which is what a drag feels like it should do.
+    /// The end of a drag, and the only thing the browser tells the server about one — the
+    /// gesture itself is a hundred frames of pure JavaScript. <paramref name="beforeId"/>
+    /// is null when the card was dropped at the end.
     /// </summary>
-    private string DragClass(Widget widget)
+    [JSInvokable]
+    public async Task DropAsync(string id, string? beforeId)
     {
-        if (!_editing)
-            return "";
-        if (_dragging?.Id == widget.Id)
-            return "is-dragging";
-        if (_dragOver?.Id != widget.Id || _dragging is null)
-            return "is-draggable";
-        return _dragging.Sort > widget.Sort ? "is-draggable is-drop-before" : "is-draggable is-drop-after";
+        await Config.MoveWidgetAsync(id, beforeId);
+
+        // Reloaded and rendered here rather than left to the Changed event, so the new
+        // order is on screen by the time OnAfterRenderAsync clears the inline order the
+        // drag left behind. Clearing it any earlier flashes the old layout.
+        await LoadAsync();
+        _settle = true;
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("labbyDrag.register", _self);
+        }
+
+        if (_settle)
+        {
+            _settle = false;
+            await JS.InvokeVoidAsync("labbyDrag.clear");
+        }
     }
 
     /// <summary>Move mode's drop: put the held card immediately before this one.</summary>
@@ -227,26 +243,6 @@ else
         if (source is null || source.Id == target?.Id)
             return;
         await Config.MoveWidgetAsync(source.Id, target?.Id);
-    }
-
-    private async Task DropOnAsync(Widget target)
-    {
-        var source = _dragging;
-        _dragging = null;
-        _dragOver = null;
-        if (source is null || source.Id == target.Id)
-            return;
-
-        // Dropping onto a card that is already later in the order means "go after it", so
-        // the widget after the target is the insertion point.
-        string? before = target.Id;
-        if (source.Sort < target.Sort)
-        {
-            var index = _widgets.ToList().FindIndex(w => w.Id == target.Id);
-            before = index >= 0 && index + 1 < _widgets.Count ? _widgets[index + 1].Id : null;
-        }
-
-        await Config.MoveWidgetAsync(source.Id, before);
     }
 
     protected override void OnInitialized() => Config.Changed += OnChanged;
@@ -310,5 +306,9 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Config.Changed -= OnChanged;
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        _self?.Dispose();
+    }
 }
