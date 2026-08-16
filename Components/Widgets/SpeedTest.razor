@@ -61,7 +61,8 @@ else
                 </div>
 
                 <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img"
-                     aria-label="Download and upload over the last @WindowLabel, peaking at @_peak.ToString("0") Mbps">
+                     aria-label="Download and upload over the last @WindowLabel, peaking at @_peak.ToString("0") Mbps"
+                     data-chart="@_hover">
                     @foreach (var fraction in new[] { 0.25, 0.5, 0.75 })
                     {
                         var y = (40 - fraction * 38).ToString("0.##", CultureInfo.InvariantCulture);
@@ -114,6 +115,7 @@ else
     private string _downPath = "", _upPath = "";
     private double _peak;
     private DateTimeOffset _first, _last;
+    private string? _hover;
     private TimeSpan _span;
 
     /// <summary>
@@ -180,6 +182,7 @@ else
     private async Task LoadTrendAsync()
     {
         _downPath = _upPath = "";
+        _hover = null;
 
         if (!ShowTrend || Context.Connection is null)
             return;
@@ -204,6 +207,13 @@ else
         _first = down[0].At;
         _last = down[^1].At;
         _span = _last - _first;
+
+        _hover = ChartHover.Attribute(
+            [
+                new("download", "var(--accent)", [.. down.Select(s => s.Value)]),
+                new("upload", "var(--warn)", [.. up.Select(s => s.Value)]),
+            ],
+            " Mbps", 1, _first, _last);
     }
 
     private static string Plot(IReadOnlyList<HistoryStore.Sample> samples, double scale)

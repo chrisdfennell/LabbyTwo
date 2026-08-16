@@ -8,7 +8,7 @@
 else
 {
     <svg class="sparkline" viewBox="0 0 100 34" preserveAspectRatio="none" role="img"
-         aria-label="@Label">
+         aria-label="@Label" data-chart="@_hover">
         @if (Filled)
         {
             <polygon points="@($"0,34 {_points} 100,34")" fill="@Color" opacity="0.15" />
@@ -24,6 +24,14 @@ else
     [Parameter] public bool Filled { get; set; } = true;
     [Parameter] public string Label { get; set; } = "trend";
 
+    /// <summary>The unit and precision to read values back in. Empty means bare numbers.</summary>
+    [Parameter] public string Unit { get; set; } = "";
+    [Parameter] public int Decimals { get; set; }
+    [Parameter] public DateTimeOffset? From { get; set; }
+    [Parameter] public DateTimeOffset? To { get; set; }
+
+    private string? _hover;
+
     private string? _points;
 
     protected override void OnParametersSet()
@@ -31,8 +39,11 @@ else
         if (Values.Count < 2)
         {
             _points = null;
+            _hover = null;
             return;
         }
+
+        _hover = ChartHover.Attribute(Values, Unit, Decimals, Color, Label, From, To);
 
         var min = Values.Min();
         var max = Values.Max();

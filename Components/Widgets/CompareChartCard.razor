@@ -27,7 +27,8 @@ else
     </div>
 
     <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%; height:@(Height)px"
-         role="img" aria-label="@($"{Spec.Label} across {_series.Count} connections over {Hours} hours")">
+         role="img" aria-label="@($"{Spec.Label} across {_series.Count} connections over {Hours} hours")"
+         data-chart="@_hover">
         @foreach (var series in _series)
         {
             <polyline points="@series.Path" fill="none" stroke="@series.Colour" stroke-width="1.5"
@@ -46,6 +47,8 @@ else
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
     private sealed record Series(string Name, string Path, double Last, string Colour);
+
+    private string? _hover;
 
     private List<Series> _series = [];
     private double _low, _high;
@@ -95,6 +98,7 @@ else
         if (loaded.Count == 0)
         {
             _series = [];
+            _hover = null;
             return;
         }
 
@@ -121,6 +125,22 @@ else
                 entry.Samples[^1].Value,
                 Palette[index % Palette.Length])),
         ];
+
+        // Every line is named after a connection, so the tooltip is the only place you can
+        // tell two similar ones apart without counting colours against the key.
+        _hover = ChartHover.Attribute(
+            [.. loaded.Select((entry, index) => new ChartHover.Series(
+                entry.Connection.Name,
+                Palette[index % Palette.Length],
+                [.. entry.Samples.Select(s => s.Value)]))],
+            // Unconverted, and the spec's own unit, because that is what the key above the
+            // chart and the range below it already show — this card formats with
+            // Spec.Format rather than through Units. A tooltip disagreeing with the number
+            // beside it would be worse than one in the wrong unit.
+            _spec.Unit,
+            Math.Max(_spec.Decimals, 1),
+            loaded.Min(entry => entry.Samples[0].At),
+            loaded.Max(entry => entry.Samples[^1].At));
     }
 
     /// <summary>

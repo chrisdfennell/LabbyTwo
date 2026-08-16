@@ -39,7 +39,7 @@ else
     </div>
 
     <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%; height:@(Height)px" role="img"
-         aria-label="@Spec.Label over the last @Hours hours">
+         aria-label="@Spec.Label over the last @Hours hours" data-chart="@_hover">
         @* Three gridlines are enough to read a level off without becoming graph paper. *@
         @foreach (var fraction in new[] { 0.25, 0.5, 0.75 })
         {
@@ -79,6 +79,7 @@ else
     private string _primaryPath = "";
     private string _comparePath = "";
     private double _high;
+    private string? _hover;
     private Units.Preferences _units = Units.Preferences.Default;
 
     private string Metric => Context.Widget.Settings.Get("metric", "latency_ms");
@@ -114,6 +115,7 @@ else
 
         if (_primary.Count < 2)
         {
+            _hover = null;
             _available = await History.MetricsAsync(Context.Connection.Id);
             return;
         }
@@ -134,6 +136,28 @@ else
         _primaryPath = Plot(_primary, offset, scale);
         if (compare.Count >= 2)
             _comparePath = Plot(compare, offset, scale);
+
+        // Converted here rather than in the script, because the unit the user reads in is
+        // something only the server knows — the tooltip and the "now" figure above the chart
+        // are then the same number by construction.
+        List<ChartHover.Series> series =
+        [
+            new(_comparePath.Length > 0 ? Spec.Label : "", "var(--accent)",
+                [.. _primary.Select(s => Units.Display(s.Value, Spec.Unit, _units).Value)]),
+        ];
+
+        if (compare.Count >= 2)
+        {
+            series.Add(new(CompareSpec.Label, "var(--warn)",
+                [.. compare.Select(s => Units.Display(s.Value, CompareSpec.Unit, _units).Value)]));
+        }
+
+        _hover = ChartHover.Attribute(
+            series,
+            Units.Display(0, Spec.Unit, _units).Unit,
+            Math.Max(Spec.Decimals, 1),
+            _primary[0].At,
+            _primary[^1].At);
     }
 
     private static string Plot(IReadOnlyList<HistoryStore.Sample> samples, double offset, double scale)

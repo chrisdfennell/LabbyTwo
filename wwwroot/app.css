@@ -1007,6 +1007,52 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 }
 .unit-grid .form-label { margin: 0; white-space: nowrap; }
 
+/* ---------- reading a value off a chart ---------- */
+
+/* Both of these are on <body> rather than inside the chart: the SVG is a tree Blazor owns,
+   and the lesson about putting things inside one is already written down in widget-drag.js.
+   Fixed positioning is what lets them sit over a chart without being in it. */
+.chart-cursor {
+    position: fixed;
+    z-index: 1060;
+    width: 1px;
+    display: none;
+    pointer-events: none;
+    background: var(--accent-line);
+}
+
+.chart-tip {
+    position: fixed;
+    z-index: 1061;
+    display: none;
+    pointer-events: none;
+    padding: .4rem .55rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-inner);
+    background: var(--panel-2);
+    box-shadow: 0 8px 24px var(--shadow);
+    font-size: .8rem;
+    line-height: 1.35;
+    white-space: nowrap;
+}
+
+.chart-tip-when { display: block; color: var(--muted); margin-bottom: .15rem; }
+
+.chart-tip-row { display: flex; align-items: center; gap: .4rem; }
+
+.chart-tip-key {
+    width: .55rem;
+    height: .2rem;
+    flex: none;
+    border-radius: 2px;
+}
+
+.chart-tip-name { color: var(--muted); }
+
+/* Pushed right and never wrapped, so a stack of series reads as a column of figures
+   rather than as ragged sentences. */
+.chart-tip-value { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; }
+
 /* ---------- workflow runs ---------- */
 
 .ci-runs { display: grid; gap: .1rem; }
