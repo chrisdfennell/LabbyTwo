@@ -57,6 +57,13 @@ public sealed class AlertService(
     {
         var now = DateTimeOffset.Now;
 
+        // First, because it is the one that outranks everything: a maintenance window is
+        // somebody saying they already know. Checked here rather than beside quiet hours
+        // in BroadcastAsync so that it also silences the recovery, and so the log says
+        // which connection was held rather than only which alert.
+        if (Maintenance.From(await settings.AllAsync(ct), now) is { On: true } maintenance)
+            return maintenance.Reason;
+
         if (connection.IsSilenced(now))
             return $"silenced until {connection.SilencedUntil:HH:mm}";
 

@@ -886,6 +886,176 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .5rem;
 }
 
+/* ---------- acting on several rows at once ---------- */
+
+/* Sits inside the panel, above the table, in the accent rather than the panel colour so
+   that "nineteen selected" is not something you can scroll past on the way to Delete. */
+.bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+    padding: .5rem .75rem;
+    border-bottom: 1px solid var(--edge);
+    background: var(--accent-soft);
+    font-size: .9rem;
+}
+
+/* The rows the bar is talking about. Tinted rather than outlined: an outline on a table
+   row draws a box across cells that already have their own dividers, and the result reads
+   as a rendering fault. */
+.table > tbody > tr.is-selected > * {
+    background: var(--accent-soft);
+}
+
+/* ---------- undo ---------- */
+
+/* Centred at the bottom of the window. Not a corner, because a corner is where a
+   dashboard puts things you are meant to ignore, and this one has about twelve seconds to
+   be noticed. Sits above the cards but below the Blazor error bar, which has a better
+   claim on the bottom of the screen than an undo does. */
+.undo-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 1.25rem;
+    transform: translateX(-50%);
+    z-index: 1070;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    max-width: min(34rem, calc(100vw - 2rem));
+    padding: .6rem .75rem .6rem 1rem;
+    border: 1px solid var(--edge);
+    border-radius: .6rem;
+    /* Deliberately the raised surface rather than the page's own, so it reads as
+       something laid on top of the dashboard rather than part of it. */
+    background: var(--panel-2);
+    box-shadow: 0 12px 32px var(--shadow);
+    font-size: .9rem;
+}
+
+.undo-text { min-width: 0; }
+
+/* On its own line: it is the part people need to read, and running it on after the
+   sentence is how it gets skipped. */
+.undo-caveat {
+    display: block;
+    color: var(--muted);
+    font-size: .8rem;
+}
+
+.undo-dismiss {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    line-height: 1;
+    padding: 0 .15rem;
+}
+.undo-dismiss:hover { color: var(--text); }
+
+/* ---------- maintenance window ---------- */
+
+/* Warn-coloured rather than red: nothing is wrong, something is deliberately off. Red
+   here would be a lie every time you saw it, and a warning you learn to disbelieve is
+   worse than none. Sits above the page content and scrolls away with it — a sticky bar
+   would fight the nav on a phone, and this is a state you are told about on arrival
+   rather than one you need under your thumb. */
+.maintenance-banner {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    padding: .6rem .85rem;
+    border: 1px solid var(--warn);
+    border-radius: .5rem;
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    font-size: .9rem;
+}
+
+/* Pulses, because the banner's whole job is to not blend in by the third time you see
+   it. Stopped for anyone who asked for less motion by the global rule further down. */
+.maintenance-dot {
+    width: .55rem;
+    height: .55rem;
+    flex: none;
+    border-radius: 50%;
+    background: var(--warn);
+    animation: maintenance-pulse 2s ease-in-out infinite;
+}
+
+@keyframes maintenance-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .25; }
+}
+
+/* Pushes the button to the right on a wide banner, and lets it fall below on a narrow
+   one rather than squeezing the sentence into a column. */
+.maintenance-banner > button { margin-left: auto; }
+
+/* ---------- speed test ---------- */
+
+/* Centred, and centred as a column rather than with text-align, so the two-up rows below
+   stay two-up instead of collapsing into a centred list. The card is usually stretched
+   taller than its content by whatever tall card shares its row, so the gap grows and
+   shrinks with its neighbours — centring the *column* is what keeps it looking placed
+   rather than dropped in the top-left corner. */
+.speedtest {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .75rem;
+    text-align: center;
+}
+
+/* Wraps, because at three columns wide the two figures do not fit side by side and the
+   second would otherwise be clipped rather than moved. */
+.speedtest-headline {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0 1.5rem;
+}
+
+/* Ping and jitter. A grid rather than flex so the two columns are equal and the pair
+   stays symmetrical about the middle of the card whatever the numbers are — "1 ms" beside
+   "98.1 ms" pulls a centred flex row visibly off-centre. */
+.speedtest-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .5rem 1.5rem;
+    width: 100%;
+    max-width: 22rem;
+}
+
+/* Full width, because a chart is the one thing here that should use every pixel the card
+   has, however wide it has been made. */
+.speedtest-chart { width: 100%; }
+.speedtest-chart svg { display: block; width: 100%; height: 110px; }
+
+.speedtest-legend {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0 .5rem;
+    margin-bottom: .25rem;
+    color: var(--muted);
+    font-size: .8rem;
+}
+
+/* The ends of the axis and the top of the scale. Three cells so the peak sits in the
+   middle regardless of how long the two timestamps are. */
+.speedtest-axis {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: baseline;
+    color: var(--muted);
+    font-size: .8rem;
+}
+.speedtest-axis > :first-child { text-align: left; }
+.speedtest-axis > :last-child { text-align: right; }
+
 /* ---------- weather ---------- */
 
 .wind-dial { width: 92px; height: 92px; flex: none; }

@@ -1,0 +1,91 @@
+@implements IDisposable
+@inject UndoService Undo
+
+@* The way back from the last delete, for as long as it is on offer.
+
+   Fixed to the bottom of the window rather than placed on the page, because the three
+   things it can undo are deleted from three different pages and one of them (a card) is
+   deleted from inside a dialog that closes on the way out. Somewhere the page cannot move
+   is the only place it is always in the same spot. *@
+
+@if (_offer is { } offer)
+{
+    <div class="undo-toast" role="alert">
+        <span class="undo-text">
+            @offer.Description
+            @if (offer.Caveat is { Length: > 0 } caveat)
+            {
+                <span class="undo-caveat">@caveat</span>
+            }
+        </span>
+        <button class="btn btn-sm btn-outline-light flex-none" disabled="@_restoring" @onclick="UndoAsync">
+            @(_restoring ? "Putting it back…" : "Undo")
+        </button>
+        <button class="undo-dismiss flex-none" title="Dismiss" aria-label="Dismiss" @onclick="Undo.Dismiss">✕</button>
+    </div>
+}
+
+@code {
+    private UndoService.Offer? _offer;
+    private bool _restoring;
+    private Timer? _tick;
+
+    protected override void OnInitialized()
+    {
+        Undo.Changed += OnChanged;
+        Read();
+    }
+
+    /// <summary>
+    /// Reads the current offer and keeps a timer running only while there is one to
+    /// expire. The service decides whether an offer is still live; this exists so the bar
+    /// leaves the screen when it lapses rather than sitting there looking clickable.
+    /// </summary>
+    private void Read()
+    {
+        _offer = Undo.Current();
+
+        if (_offer is not null)
+            _tick ??= new Timer(_ => _ = InvokeAsync(Refresh), null, Beat, Beat);
+        else
+            Stop();
+    }
+
+    private static readonly TimeSpan Beat = TimeSpan.FromSeconds(1);
+
+    private void Refresh()
+    {
+        Read();
+        StateHasChanged();
+    }
+
+    private async Task UndoAsync()
+    {
+        // A restore can touch a tab, its cards and its notes, so it is not instant and the
+        // button says so rather than looking ignored.
+        _restoring = true;
+        try
+        {
+            await Undo.UndoAsync();
+        }
+        finally
+        {
+            _restoring = false;
+            Refresh();
+        }
+    }
+
+    private void Stop()
+    {
+        _tick?.Dispose();
+        _tick = null;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(Refresh);
+
+    public void Dispose()
+    {
+        Undo.Changed -= OnChanged;
+        Stop();
+    }
+}

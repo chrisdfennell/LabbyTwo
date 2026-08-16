@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject HistoryStore History
+@using System.Globalization
 
 @* The four numbers a speed test produces, together. They are all ordinary metrics, so a
    metric tile shows any one of them — but four tiles is four cards, and download without
@@ -18,36 +19,89 @@ else if (_down is null && _up is null)
 }
 else
 {
-    <div class="d-flex align-items-baseline gap-3 flex-wrap">
-        <div>
-            <div class="metric-value">@Format(_down)<span class="metric-unit">Mbps</span></div>
-            <div class="tile-meta">↓ download</div>
+    <div class="speedtest">
+        <div class="speedtest-headline">
+            <div>
+                <div class="metric-value">@Format(_down)<span class="metric-unit">Mbps</span></div>
+                <div class="tile-meta">↓ download</div>
+            </div>
+            <div>
+                <div class="metric-value">@Format(_up)<span class="metric-unit">Mbps</span></div>
+                <div class="tile-meta">↑ upload</div>
+            </div>
         </div>
-        <div>
-            <div class="metric-value">@Format(_up)<span class="metric-unit">Mbps</span></div>
-            <div class="tile-meta">↑ upload</div>
-        </div>
-    </div>
 
-    <div class="row g-2 mt-2">
-        <div class="col-6">
-            <div class="tile-meta">Ping</div>
-            <div>@(_ping is { } p ? $"{p:0} ms" : "—")</div>
+        <div class="speedtest-pair">
+            <div>
+                <div class="tile-meta">Ping</div>
+                <div>@(_ping is { } p ? $"{p:0} ms" : "—")</div>
+            </div>
+            <div>
+                <div class="tile-meta">Jitter</div>
+                <div>@(_jitter is { } j ? $"{j:0.0} ms" : "—")</div>
+            </div>
         </div>
-        <div class="col-6">
-            <div class="tile-meta">Jitter</div>
-            <div>@(_jitter is { } j ? $"{j:0.0} ms" : "—")</div>
-        </div>
-    </div>
 
-    @* The number that catches a scheduler which quietly stopped. A speed figure from last
-       Tuesday looks exactly like one from a minute ago, and only its age says otherwise. *@
-    @if (Age is { } age)
-    {
-        <div class="tile-meta mt-2 @(age.TotalHours > StaleAfterHours ? "text-warning" : "")">
-            @(age.TotalHours > StaleAfterHours ? "⚠ last tested " : "tested ")@Ago.Since(DateTimeOffset.Now - age)
-        </div>
-    }
+        @if (ShowTrend && _downPath.Length > 0)
+        {
+            @* Both lines share one Mbps scale, and it starts at zero rather than at the
+               lowest reading. Two reasons, and the second is the important one:
+
+                 * Throughput is a magnitude. On a min-to-max scale a line that never left
+                   440–460 fills the box top to bottom and reads as a connection thrashing
+                   about, when it is flat to within four per cent.
+                 * The gap between the two lines is the thing worth seeing on an asymmetric
+                   connection, and only a shared zero-based axis draws it truthfully. Upload
+                   sitting low on the chart is not the axis failing, it is the answer. *@
+            <div class="speedtest-chart">
+                <div class="speedtest-legend">
+                    <span class="series-key series-primary">download</span>
+                    <span class="series-key series-compare">upload</span>
+                    <span class="opacity-50">· last @WindowLabel</span>
+                </div>
+
+                <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img"
+                     aria-label="Download and upload over the last @WindowLabel, peaking at @_peak.ToString("0") Mbps">
+                    @foreach (var fraction in new[] { 0.25, 0.5, 0.75 })
+                    {
+                        var y = (40 - fraction * 38).ToString("0.##", CultureInfo.InvariantCulture);
+                        <line x1="0" y1="@y" x2="100" y2="@y" stroke="var(--edge)" stroke-width="0.4"
+                              vector-effect="non-scaling-stroke" />
+                    }
+
+                    @* Lines only, no area fill. On a zero-based axis a healthy 450 Mbps line
+                       sits near the top, so filling under it floods nine tenths of the box
+                       with one flat colour, buries the gridlines and leaves a chart that
+                       looks broken rather than steady. *@
+                    <polyline points="@_downPath" fill="none" stroke="var(--accent)" stroke-width="1.5"
+                              vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+
+                    @if (_upPath.Length > 0)
+                    {
+                        <polyline points="@_upPath" fill="none" stroke="var(--warn)" stroke-width="1.5"
+                                  vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+                    }
+                </svg>
+
+                <div class="speedtest-axis">
+                    <span>@_first.ToString(_span > TimeSpan.FromDays(1) ? "ddd HH:mm" : "HH:mm")</span>
+                    @* The range rather than just the peak, because the zero is the point:
+                       it is what makes a dip look like a dip instead of like noise. *@
+                    <span class="opacity-50">0–@_peak.ToString("0") Mbps</span>
+                    <span>@_last.ToString(_span > TimeSpan.FromDays(1) ? "ddd HH:mm" : "HH:mm")</span>
+                </div>
+            </div>
+        }
+
+        @* The number that catches a scheduler which quietly stopped. A speed figure from last
+           Tuesday looks exactly like one from a minute ago, and only its age says otherwise. *@
+        @if (Age is { } age)
+        {
+            <div class="tile-meta @(age.TotalHours > StaleAfterHours ? "text-warning" : "")">
+                @(age.TotalHours > StaleAfterHours ? "⚠ last tested " : "tested ")@Ago.Since(DateTimeOffset.Now - age)
+            </div>
+        }
+    </div>
 }
 
 @code {
@@ -57,12 +111,29 @@ else
     private DateTimeOffset? _takenAt;
     private bool _scheduled;
 
+    private string _downPath = "", _upPath = "";
+    private double _peak;
+    private DateTimeOffset _first, _last;
+    private TimeSpan _span;
+
     /// <summary>
     /// Past this, the reading is old enough to be worth pointing at rather than reading as
     /// current. A day and a bit: long enough not to nag a six-hourly test that ran late,
     /// short enough to catch one that stopped.
     /// </summary>
     private const double StaleAfterHours = 26;
+
+    private bool ShowTrend => Context.Widget.Settings.GetBool("show_trend", true);
+
+    /// <summary>
+    /// A week by default, not the day every other chart here uses. A speed test runs hours
+    /// apart rather than every sweep, so a 24-hour window on a six-hourly schedule is four
+    /// points and not a trend at all.
+    /// </summary>
+    private int Hours => Math.Clamp(Context.Widget.Settings.GetInt("hours", 168), 1, 24 * 90);
+
+    /// <summary>The window as somebody would say it: "7d" rather than "168 h".</summary>
+    private string WindowLabel => Hours % 24 == 0 && Hours >= 24 ? $"{Hours / 24}d" : $"{Hours}h";
 
     private TimeSpan? Age
     {
@@ -102,6 +173,48 @@ else
         _trackerAgeHours = Value(latest, "result_age_hours");
 
         _takenAt = Health.State(Context.Connection.Id)?.At;
+
+        await LoadTrendAsync();
+    }
+
+    private async Task LoadTrendAsync()
+    {
+        _downPath = _upPath = "";
+
+        if (!ShowTrend || Context.Connection is null)
+            return;
+
+        var window = TimeSpan.FromHours(Hours);
+        var down = await History.SamplesAsync(Context.Connection.Id, "download_mbps", window);
+        if (down.Count < 2)
+            return;
+
+        var up = await History.SamplesAsync(Context.Connection.Id, "upload_mbps", window);
+
+        // Zero-based and shared, so the two lines can be read against each other. The top
+        // of the box is the highest reading either series produced, with a little air above
+        // it so the peak is not drawn along the edge.
+        _peak = down.Concat(up).Max(s => s.Value);
+        var scale = _peak > 0 ? _peak * 1.08 : 1;
+
+        _downPath = Plot(down, scale);
+        if (up.Count >= 2)
+            _upPath = Plot(up, scale);
+
+        _first = down[0].At;
+        _last = down[^1].At;
+        _span = _last - _first;
+    }
+
+    private static string Plot(IReadOnlyList<HistoryStore.Sample> samples, double scale)
+    {
+        var step = 100d / Math.Max(1, samples.Count - 1);
+        return string.Join(' ', samples.Select((sample, index) =>
+        {
+            var x = index * step;
+            var y = 40 - sample.Value / scale * 38;
+            return $"{x.ToString("0.##", CultureInfo.InvariantCulture)},{y.ToString("0.##", CultureInfo.InvariantCulture)}";
+        }));
     }
 
     private static double? Value(IReadOnlyDictionary<string, double> readings, string key) =>

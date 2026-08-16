@@ -81,6 +81,14 @@ builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<SelfUpdater>();
 builder.Services.AddSingleton<DashboardImportService>();
 
+// The only scoped pair in here, and deliberately. An undo offer is one person's last
+// action rather than a fact about the installation: as a singleton it would survive across
+// browser sessions and, with auth switched on, offer your deletion to somebody else.
+// Scoped means one circuit, which is exactly the span a "you just did this" bar should
+// live for. Deletions is scoped only because it holds the UndoService.
+builder.Services.AddScoped<UndoService>();
+builder.Services.AddScoped<Deletions>();
+
 // Not a provider — it answers a question the Settings page asks once, rather than
 // something to monitor — so it is registered by hand rather than discovered.
 builder.Services.AddSingleton<Geocoder>();

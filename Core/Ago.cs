@@ -37,4 +37,33 @@ public static class Ago
     }
 
     public static string Since(DateTimeOffset when) => Since(when, DateTimeOffset.Now);
+
+    /// <summary>
+    /// The same shape pointing the other way: how much longer. A banner that says a
+    /// window lifts at 15:40 makes you do the subtraction; one that also says "43m left"
+    /// does not, and the second is the number you actually wanted.
+    /// </summary>
+    public static string Until(DateTimeOffset when, DateTimeOffset now)
+    {
+        var left = when - now;
+
+        // Already lapsed. The caller normally stops showing this at all, but a tick can
+        // land the wrong side of the boundary and "-1m left" would be nonsense.
+        if (left <= TimeSpan.Zero)
+            return "any moment";
+
+        if (left.TotalMinutes < 1)
+            return "less than a minute left";
+
+        if (left.TotalHours < 1)
+            return $"{left.Minutes}m left";
+
+        if (left.TotalDays < 1)
+            return left.Minutes == 0 ? $"{left.Hours}h left" : $"{left.Hours}h {left.Minutes}m left";
+
+        var days = (int)left.TotalDays;
+        return left.Hours == 0 ? $"{days}d left" : $"{days}d {left.Hours}h left";
+    }
+
+    public static string Until(DateTimeOffset when) => Until(when, DateTimeOffset.Now);
 }

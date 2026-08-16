@@ -1,0 +1,86 @@
+@implements IDisposable
+@inject AppSettingsStore AppSettings
+
+@* Shown on every page, and carrying its own way out.
+
+   A maintenance window is the one setting that is dangerous to forget, because the
+   symptom of forgetting it is silence — exactly what a working dashboard looks like. So
+   it is not a checkbox on a settings page you would have to think to visit: it follows
+   you, says when it ends, and ends from wherever you happen to be standing. *@
+
+@if (_maintenance.On)
+{
+    <div class="maintenance-banner" role="status">
+        <span class="maintenance-dot" aria-hidden="true"></span>
+        <span>
+            <strong>Alerts are silenced.</strong>
+            @if (_maintenance.Until is { } until)
+            {
+                <span> Back on at @until.ToLocalTime().ToString("HH:mm") — @Ago.Until(until, _now).</span>
+            }
+            else
+            {
+                <span> Until you turn them back on.</span>
+            }
+        </span>
+        <button class="btn btn-sm btn-outline-secondary flex-none" @onclick="ResumeAsync">Resume alerts</button>
+    </div>
+}
+
+@code {
+    private Maintenance _maintenance = Maintenance.Off;
+    private DateTimeOffset _now = DateTimeOffset.Now;
+
+    /// <summary>
+    /// Only runs while a window is open, and only to move the countdown on and close the
+    /// banner when it lapses. Nothing about the window needs a timer to be *correct* —
+    /// <see cref="Maintenance.From"/> settles that on every read — this is so the banner
+    /// goes away on time rather than at the next navigation.
+    /// </summary>
+    private Timer? _tick;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AppSettings.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _now = DateTimeOffset.Now;
+        _maintenance = Maintenance.From(await AppSettings.AllAsync(), _now);
+
+        if (_maintenance is { On: true, Until: not null })
+            _tick ??= new Timer(_ => _ = InvokeAsync(RefreshAsync), null, Every, Every);
+        else
+            Stop();
+    }
+
+    private static readonly TimeSpan Every = TimeSpan.FromSeconds(30);
+
+    private async Task RefreshAsync()
+    {
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private async Task ResumeAsync()
+    {
+        await AppSettings.SaveAsync(Maintenance.Key, Maintenance.Cleared);
+        await RefreshAsync();
+    }
+
+    private void Stop()
+    {
+        _tick?.Dispose();
+        _tick = null;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(RefreshAsync);
+
+    public void Dispose()
+    {
+        AppSettings.Changed -= OnChanged;
+        Stop();
+    }
+}

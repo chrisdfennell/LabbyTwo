@@ -2,8 +2,10 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @inject ConfigStore Config
+@inject Deletions Deletions
 @inject Registry Registry
 @inject HealthMonitor Health
+@inject AppSettingsStore AppSettings
 
 <PageTitle>Connections · LabbyTwo</PageTitle>
 
@@ -27,6 +29,31 @@
             <button class="btn btn-sm btn-outline-secondary" disabled="@_testing" @onclick="TestAllAsync">
                 @(_testing ? $"Testing… {_tested}/{_toTest}" : "Test all")
             </button>
+
+            @* The whole-installation version of the per-row Silence below. Rebooting the
+               NAS takes everything down at once, and silencing fifteen rows one at a time
+               is not something anybody does while the reboot is already running. Lifting
+               it lives on the banner instead, which is on every page. *@
+            @if (!_maintenance.On)
+            {
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                            title="Hold every alert while you work on something"
+                            @onclick="() => _silencingAll = !_silencingAll">
+                        Silence all
+                    </button>
+                    @if (_silencingAll)
+                    {
+                        <div class="dropdown-menu dropdown-menu-end show" style="position:absolute; z-index:5">
+                            @foreach (var (label, span) in MaintenanceOptions)
+                            {
+                                <button class="dropdown-item" type="button"
+                                        @onclick="() => SilenceAllAsync(span)">@label</button>
+                            }
+                        </div>
+                    }
+                </div>
+            }
         }
         <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add connection</button>
     </div>
@@ -51,13 +78,55 @@ else
     else
     {
     <div class="panel">
-        @if (Shown.Count != _connections.Count)
+        @* The bulk bar takes the place of the count when there is a selection, rather than
+           appearing under it. Two lines of chrome above a table both saying something about
+           how many rows there are is one line too many. *@
+        @if (Selected.Count > 0)
+        {
+            <div class="bulk-bar">
+                <span><strong>@Selected.Count</strong> selected</span>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => SetEnabledAsync(true)">Enable</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => SetEnabledAsync(false)">Disable</button>
+
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                            @onclick="() => _silencingSelected = !_silencingSelected">Silence</button>
+                    @if (_silencingSelected)
+                    {
+                        <div class="dropdown-menu show" style="position:absolute; z-index:5">
+                            @foreach (var (label, span) in SilenceOptions)
+                            {
+                                <button class="dropdown-item" type="button"
+                                        @onclick="() => SilenceSelectedAsync(DateTimeOffset.Now + span)">@label</button>
+                            }
+                            <button class="dropdown-item" type="button"
+                                    @onclick="() => SilenceSelectedAsync(null)">Resume alerts</button>
+                        </div>
+                    }
+                </div>
+
+                <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDeleteSelected = true">Delete</button>
+                <button class="btn btn-sm btn-link ms-auto" @onclick="() => _selected.Clear()">Clear selection</button>
+            </div>
+        }
+        else if (Shown.Count != _connections.Count)
         {
             <div class="tile-meta px-3 pt-2">Showing @Shown.Count of @_connections.Count.</div>
         }
         <table class="table table-hover align-middle mb-0">
             <thead>
                 <tr>
+                    @if (Selectable)
+                    {
+                        @* Selects what is *shown*, not everything. The filter is the thing
+                           that makes a selection worth having — "Down only" then select-all
+                           then Silence is the whole point — and a box that quietly picked up
+                           rows scrolled out of sight by a filter would be a trap. *@
+                        <th style="width:2.25rem">
+                            <input type="checkbox" class="form-check-input" aria-label="Select all shown"
+                                   checked="@AllShownSelected" @onchange="ToggleAllShown" />
+                        </th>
+                    }
                     <th style="width:2.5rem"></th>
                     <th>Name</th>
                     <th>Type</th>
@@ -69,7 +138,16 @@ else
                 @foreach (var connection in Shown)
                 {
                     var state = Health.State(connection.Id);
-                    <tr>
+                    <tr class="@(_selected.Contains(connection.Id) ? "is-selected" : "")">
+                        @if (Selectable)
+                        {
+                            <td>
+                                <input type="checkbox" class="form-check-input"
+                                       aria-label="@($"Select {connection.Name}")"
+                                       checked="@_selected.Contains(connection.Id)"
+                                       @onchange="() => Toggle(connection.Id)" />
+                            </td>
+                        }
                         <td><span class="status-dot @DotClass(connection, state)"></span></td>
                         <td>
                             <div class="d-flex align-items-center gap-2">
@@ -157,6 +235,13 @@ else
                                 <ProviderActions Connection="connection" Compact="true" Ran="LoadAsync" />
 
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(connection)">Edit</button>
+                                @* An icon rather than the word, unlike the Duplicate on the
+                                   Tabs page. This actions cell is already the widest thing
+                                   on the page and must not wrap, so a sixth worded button
+                                   is paid for by every other column. *@
+                                <button class="btn btn-sm btn-outline-secondary" title="Duplicate"
+                                        aria-label="Duplicate @connection.Name"
+                                        @onclick="() => Duplicate(connection)">⧉</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = connection">✕</button>
                             </div>
                         </td>
@@ -205,6 +290,17 @@ else
                    OnConfirm="DeleteAsync" />
 }
 
+@if (_confirmDeleteSelected)
+{
+    @* Still confirmed, even though it can be undone. Undo covers the misclick; this covers
+       not having noticed that "select all" picked up nineteen rows rather than the two you
+       could see. *@
+    <ConfirmDialog Title="@($"Delete {Selected.Count} connections?")"
+                   Message="@($"{Names(Selected)} — and the history recorded against them — will be removed. Widgets using them will ask for a new one.")"
+                   OnCancel="() => _confirmDeleteSelected = false"
+                   OnConfirm="DeleteSelectedAsync" />
+}
+
 @code {
     private IReadOnlyList<Connection> _connections = [];
     private DateTimeOffset _now = DateTimeOffset.Now;
@@ -243,21 +339,134 @@ else
         await LoadAsync();
     }
 
+    /// <summary>
+    /// The same durations, plus the one the list above deliberately refuses. That refusal
+    /// is right for a single connection: a row silenced for ever is invisible, and you
+    /// find out months later that the thing you most wanted to hear about was the thing
+    /// you muted. A maintenance window is not invisible — it puts a banner on every page
+    /// with the way out on it — and the honest length of "I am replacing a drive" is not
+    /// known when you start. The banner is what earns this option; without it this list
+    /// would end at four hours too.
+    /// </summary>
+    private static readonly (string Label, TimeSpan? Span)[] MaintenanceOptions =
+    [
+        ("For 30 minutes", TimeSpan.FromMinutes(30)),
+        ("For an hour", TimeSpan.FromHours(1)),
+        ("For 4 hours", TimeSpan.FromHours(4)),
+        ("Until I resume", null),
+    ];
+
+    private async Task SilenceAllAsync(TimeSpan? span)
+    {
+        _silencingAll = false;
+        await AppSettings.SaveAsync(Maintenance.Key, Maintenance.Value(span, DateTimeOffset.Now));
+        await LoadMaintenanceAsync();
+    }
+
+    private async Task LoadMaintenanceAsync() =>
+        _maintenance = Maintenance.From(await AppSettings.AllAsync());
+
+    // ---------- acting on several at once ----------
+
+    private readonly HashSet<string> _selected = [];
+    private bool _silencingSelected;
+    private bool _confirmDeleteSelected;
+
+    /// <summary>
+    /// Same threshold as the filter, because these solve the same problem: a page long
+    /// enough that doing something to it a row at a time stops being reasonable. Below it,
+    /// a checkbox column is a column of chrome earning nothing.
+    /// </summary>
+    private bool Selectable => _connections.Count > 6;
+
+    /// <summary>
+    /// The selection, less anything that has since been filtered away or deleted. Kept as
+    /// a view rather than pruned on every change: a row hidden by a filter and then shown
+    /// again should come back still ticked, but must not be acted on while it is out of
+    /// sight — "Down only, select all, Delete" has to mean the rows on screen.
+    /// </summary>
+    private IReadOnlyList<Connection> Selected =>
+        [.. Shown.Where(connection => _selected.Contains(connection.Id))];
+
+    private bool AllShownSelected => Shown.Count > 0 && Shown.All(c => _selected.Contains(c.Id));
+
+    private void Toggle(string id)
+    {
+        if (!_selected.Add(id))
+            _selected.Remove(id);
+    }
+
+    private void ToggleAllShown()
+    {
+        // Reading the current state rather than the event argument: the header box is also
+        // driven by the rows, so "are they all on" is the only thing worth asking.
+        if (AllShownSelected)
+            foreach (var connection in Shown)
+                _selected.Remove(connection.Id);
+        else
+            foreach (var connection in Shown)
+                _selected.Add(connection.Id);
+    }
+
+    private static string Names(IReadOnlyList<Connection> connections) =>
+        connections.Count <= 3
+            ? string.Join(", ", connections.Select(c => $"“{c.Name}”"))
+            : $"“{connections[0].Name}”, “{connections[1].Name}” and {connections.Count - 2} more";
+
+    private async Task SetEnabledAsync(bool enabled)
+    {
+        foreach (var connection in Selected.Where(c => c.Enabled != enabled))
+            await Config.SaveConnectionAsync(connection with { Enabled = enabled });
+
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private async Task SilenceSelectedAsync(DateTimeOffset? until)
+    {
+        _silencingSelected = false;
+        foreach (var connection in Selected)
+            await Config.SilenceAsync(connection.Id, until);
+
+        _now = DateTimeOffset.Now;
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        _confirmDeleteSelected = false;
+        // One call, so twenty deletions are one row on the undo bar rather than nineteen
+        // that have already scrolled past.
+        await Deletions.ConnectionsAsync(Selected);
+        _selected.Clear();
+        await LoadAsync();
+    }
+
     private string Name(string id) =>
         _connections.FirstOrDefault(c => c.Id == id)?.Name ?? "";
     private bool _picking;
     private Connection? _draft;
     private IConnectionProvider? _draftProvider;
     private Connection? _confirmDelete;
+    private Maintenance _maintenance = Maintenance.Off;
+    private bool _silencingAll;
 
     protected override async Task OnInitializedAsync()
     {
         Config.Changed += OnChanged;
         Health.Updated += OnChanged;
+        // So "Silence all" comes back the moment the banner is used to resume, wherever
+        // that happened.
+        AppSettings.Changed += OnChanged;
         await LoadAsync();
     }
 
-    private async Task LoadAsync() => _connections = await Config.ConnectionsAsync();
+    private async Task LoadAsync()
+    {
+        _connections = await Config.ConnectionsAsync();
+        await LoadMaintenanceAsync();
+    }
 
     private string ProviderName(Connection connection) =>
         Registry.Provider(connection.Provider)?.DisplayName ?? $"{connection.Provider} (not installed)";
@@ -280,6 +489,31 @@ else
         _draftProvider = Registry.Provider(connection.Provider);
         // Editing a clone means Cancel leaves the stored connection untouched.
         _draft = connection with { Settings = connection.Settings.Clone() };
+    }
+
+    /// <summary>
+    /// A second one of something you already set up — another Sonarr, a second NAS, the
+    /// same Git server with a different token. Everything but the identity comes across,
+    /// credentials included, which is the whole point: a copy that loses the API key has
+    /// saved you the easy half of the typing.
+    ///
+    /// It opens the editor rather than writing the copy and telling you about it. Nothing
+    /// is stored until Save, so Cancel leaves nothing behind — and duplicating is always
+    /// followed by changing the one field that differs, so this is the same number of
+    /// clicks with none of the litter. Sort is inherited on purpose: the list orders by
+    /// sort then name, so "Sonarr (copy)" lands directly under "Sonarr".
+    /// </summary>
+    private void Duplicate(Connection connection)
+    {
+        _draftProvider = Registry.Provider(connection.Provider);
+        _draft = connection with
+        {
+            Id = Ids.New(),
+            Name = $"{connection.Name} (copy)",
+            Settings = connection.Settings.Clone(),
+            // A hold belongs to the thing that was making noise, not to its copy.
+            SilencedUntil = null,
+        };
     }
 
     private async Task CloseEditor()
@@ -365,7 +599,7 @@ else
     private async Task DeleteAsync()
     {
         if (_confirmDelete is not null)
-            await Config.DeleteConnectionAsync(_confirmDelete.Id);
+            await Deletions.ConnectionAsync(_confirmDelete);
         _confirmDelete = null;
     }
 
@@ -379,5 +613,6 @@ else
     {
         Config.Changed -= OnChanged;
         Health.Updated -= OnChanged;
+        AppSettings.Changed -= OnChanged;
     }
 }
