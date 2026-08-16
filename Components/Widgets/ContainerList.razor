@@ -24,6 +24,17 @@ else
                 <span class="text-truncate">@container.Name</span>
                 <span class="tile-meta ms-auto flex-none text-truncate" style="max-width:11rem"
                       title="@container.Image">@container.Status</span>
+
+                @* Restart only. Every outcome of one is recoverable on its own, where a
+                   container this stopped would stay stopped until somebody found a
+                   terminal — and the socket behind this is root on the host, so the
+                   smallest verb that does the job is the right one. *@
+                <button class="btn btn-sm btn-outline-secondary flex-none container-restart"
+                        title="Restart @container.Name" aria-label="Restart @container.Name"
+                        disabled="@(_restarting is { Length: > 0 })"
+                        @onclick="() => _confirm = container">
+                    @(_restarting == container.Name ? "…" : "↻")
+                </button>
             </div>
         }
     </div>
@@ -31,6 +42,23 @@ else
     {
         <div class="tile-meta mt-2">+@(_containers.Count - _shown.Count) more</div>
     }
+
+    @if (_note is { Length: > 0 })
+    {
+        <div class="tile-meta mt-2">@_note</div>
+    }
+}
+
+@if (_confirm is { } target)
+{
+    @* Confirmed even though a restart is recoverable, because the rows are one line apart
+       and the button is small. The dialog is here to catch the wrong row, not to ask
+       whether you meant to restart something. *@
+    <ConfirmDialog Title="@($"Restart {target.Name}?")"
+                   Message="@ConfirmMessage(target)"
+                   ConfirmText="Restart it"
+                   OnCancel="() => _confirm = null"
+                   OnConfirm="() => RestartAsync(target)" />
 }
 
 @code {
@@ -39,6 +67,25 @@ else
     private IReadOnlyList<DockerProvider.ContainerInfo> _containers = [];
     private IReadOnlyList<DockerProvider.ContainerInfo> _shown = [];
     private string? _error;
+    private DockerProvider.ContainerInfo? _confirm;
+    private string _restarting = "";
+    private string _note = "";
+
+    /// <summary>
+    /// LabbyTwo's own container gets a different sentence, because the consequence is
+    /// different: the page goes away. Matched on the hostname, which inside Docker is the
+    /// container's own short id.
+    /// </summary>
+    private static bool IsSelf(DockerProvider.ContainerInfo container) =>
+        container.Id.StartsWith(Environment.MachineName, StringComparison.OrdinalIgnoreCase)
+        || container.Name.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+
+    private static string ConfirmMessage(DockerProvider.ContainerInfo container) =>
+        IsSelf(container)
+            ? $"“{container.Name}” is the container LabbyTwo itself runs in. This page will go "
+              + "away and come back when it has restarted."
+            : $"“{container.Name}” will stop and start again. Anything depending on it is down "
+              + "until it comes back.";
 
     private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 10), 1, 100);
     private bool RunningOnly => Context.Widget.Settings.GetBool("running_only");
@@ -72,6 +119,32 @@ else
         catch (Exception ex)
         {
             _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private async Task RestartAsync(DockerProvider.ContainerInfo container)
+    {
+        _confirm = null;
+        _restarting = container.Name;
+        _note = "";
+        try
+        {
+            await DockerProvider.RestartAsync(Context.Connection!, container, CancellationToken.None);
+            _note = $"Restarted {container.Name}.";
+        }
+        catch (Exception ex)
+        {
+            // Restarting LabbyTwo's own container kills this circuit mid-call, so the
+            // failure that arrives is the connection dropping rather than anything Docker
+            // said. Reporting it as an error would be describing success as a fault.
+            _note = IsSelf(container)
+                ? "Restarting — this page will reconnect on its own."
+                : ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _restarting = "";
+            await LoadAsync();
         }
     }
 

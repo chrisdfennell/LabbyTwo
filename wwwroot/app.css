@@ -1007,6 +1007,15 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 }
 .unit-grid .form-label { margin: 0; white-space: nowrap; }
 
+/* The restart button on a container row. Narrow and quiet: it sits beside a status that
+   is the thing you are actually reading, and a full-width button per row would turn a list
+   into a control panel. */
+.container-restart {
+    padding: 0 .35rem;
+    line-height: 1.4;
+    font-size: .8rem;
+}
+
 /* ---------- reading a value off a chart ---------- */
 
 /* Both of these are on <body> rather than inside the chart: the SVG is a tree Blazor owns,
