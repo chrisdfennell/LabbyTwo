@@ -231,6 +231,9 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **Navidrome** | Albums, songs, and who is playing something right now. |
 | **Email (SMTP)** | *Alert channel.* Any SMTP server. The one that needs nothing else installed. |
 | **IFTTT** | *Alert channel.* Fires an applet, so an alert can turn a light on rather than only say something. |
+| **GitHub** | GitHub or GitHub Enterprise — repositories, open pull requests and issues, on the same page as your self-hosted forges. You choose the scope: what you own, a user's, an organisation's, or just the ones you name, because a token can see far more than belongs on a dashboard. |
+| **TLS certificate** | Days until a certificate expires, and who issued it. The outage that gives no warning: automatic renewal fails *silently*, and the only sign is a number counting down that nobody is watching. |
+| **MQTT broker** | Any broker — Zigbee2MQTT, Tasmota, ESPHome. Subscribes and turns messages into metrics: `name = topic:path`, the same shape the JSON API provider already used. The one integration here that holds a connection open rather than asking. |
 
 ### Controls — the ones that do something back
 
@@ -269,7 +272,7 @@ Power.
 ### Alerts you can leave switched on
 
 Monitoring forty things makes a dashboard worse, not better, unless something decides what
-is worth saying. Four things do:
+is worth saying. Five things do:
 
 - **Quiet hours** — between the times you set, only a service actually going down gets
   through, or nothing at all. Recoveries are always held: being woken to be told something
@@ -279,9 +282,10 @@ is worth saying. Four things do:
   `Ctrl+K`, for the hour you spend restarting the thing on purpose.
 - **Silence all** — the same thing for the whole installation, for when *you* are the one
   breaking it. Rebooting the NAS takes fifteen services down inside a minute, and quiet
-  hours are no help at two on a Saturday afternoon. While it is on, a banner on every page
-  says so and carries the way out, which is what makes "until I resume" a safe option to
-  offer here and not on a single connection.
+  hours are no help at two on a Saturday afternoon. It is on `Ctrl+K` as well as the
+  connections page, because you reach for it on the way to unplug something. While it is
+  on, a banner on every page says so and carries the way out — which is what makes "until I
+  resume" a safe option to offer here and not on a single connection.
 - **Dependencies** — a connection can sit *behind* another. While the VPN gateway is down,
   the ten containers behind it stay quiet, and the one message you get names the gateway.
 - **Routing** — each rule can name a channel, so the disk-space rule goes to email and the
@@ -444,10 +448,11 @@ greys out the rest with the reason.
 | Jellyfin — now playing | Jellyfin |
 | Download queue | Sonarr, Radarr — what is downloading right now, with progress |
 | What's on this week | Sonarr, Radarr — upcoming episodes and films, grouped by day |
-| Containers | Docker |
+| Containers | Docker — every container, with a **↻ restart** on each row |
 | Git — summary | any Git server — repository, PR and issue counts, and what was touched last |
 | Git — repositories | any Git server — the repository table |
 | Git — open work | any Git server — open pull requests or open issues, switchable |
+| GitHub — workflow runs | GitHub — recent Actions runs and whether they passed, so "did that build" is not a tab switch |
 
 Rearranging works three ways, because no one gesture reaches every input: **drag** a card —
 anywhere on it with a mouse, by its **⠿** handle with a finger or a pen — and the others
@@ -455,6 +460,12 @@ slide out of the way to show you where it will land; tap **⠿** to pick one up 
 choose where it lands; or use the **↑↓** arrows. The last two are ordinary buttons, so they
 work from a keyboard, which a drag still cannot. A wall-mounted tablet gets the same
 editing as a laptop.
+
+**Every chart reads back.** Point at a sparkline, a metric chart, the speed test trend or
+the compare card and a crosshair snaps to the nearest real reading, with the time, the
+series and the value in whichever units you chose. Snapped rather than free-floating,
+because the number under a crosshair sitting between two samples is one that was never
+taken.
 
 The search box is a plain HTML form pointed at the engine, so what you type goes straight
 there and never touches LabbyTwo. Bookmark icons are fetched by the *server* and cached,
@@ -558,14 +569,35 @@ token is a plain 404.
 **Settings → Appearance** holds the things that are yours rather than your lab's:
 
 - **Theme** — follow the OS, or pin light or dark.
-- **Accent colour** — one setting, and links, buttons, the active tab, charts and focus
-  rings all follow it.
+- **Dark shade** — midnight, slate, or true black. Only the dark end has variants, because
+  light is already "a white page" and the thing people actually want to change is how dark
+  dark should be. True black is for an OLED wall panel, where the background then draws no
+  power at all.
+- **Accent colour** — fourteen swatches or your own, and links, buttons, the active tab,
+  charts and focus rings all follow it.
+- **Corners** — sharp, rounded or soft.
+- **Cards** — outlined, raised or flat. A line around it, a shadow under it, or a different
+  fill: those are the only three honest answers, and outlined is the default because it is
+  the one that survives every palette.
 - **Density** — compact for a laptop, roomy for a tablet on a wall.
-- **Units** — °F/mph or °C/km/h, applied to tiles, the alerts page, the rule editor and
-  the notifications themselves. Readings are always *recorded* in one unit so history
-  stays comparable and a rule written today keeps meaning the same thing; only what you
-  read and type converts.
+- **Text size** — deliberately *separate* from density. Density is how much air there is;
+  this is how big the words are. Compact and huge together is a dense wall display you can
+  read from the hallway, which one combined slider could not express.
+- **Typeface** — sans, serif or monospace from the system's own fonts, so nothing is
+  downloaded. Or your own: type a family name, upload a `.woff2` (served by LabbyTwo from
+  your data volume, so it looks the same on every device and still nothing leaves your
+  network), or point at a hosted stylesheet — which is the one setting here that makes the
+  dashboard fetch something from outside to draw itself, and says so.
+- **Units, one quantity at a time** — temperature in °C, °F or **K**; wind in mph, km/h,
+  m/s or **knots**; pressure in inHg, hPa, mbar, mmHg or kPa; rain in inches or mm. Metric
+  and Imperial remain as presets that set all four, and the control says *Mixed* once they
+  no longer add up to either. A pilot wants knots and inHg, and the old single switch could
+  not say that. Readings are always *recorded* in one unit so history stays comparable and
+  a rule written today keeps meaning the same thing; only what you read and type converts.
 - **Name** — call it after your house instead of after this project.
+
+**Reset to defaults** puts the look back without touching the dashboard's name or your
+units — resetting the appearance is not asking to be renamed.
 
 It is stored in the database, not the browser, so every device that opens the dashboard
 sees the same thing and a backup carries it.
@@ -637,8 +669,20 @@ working example of each.
 
 ### Plugins
 
-You do not have to fork LabbyTwo to extend it. Build a class library that references it,
-drop the DLL into `data/plugins`, and restart:
+**Settings → Plugins → Browse available plugins** lists what this release publishes and
+installs any of them with a button — no terminal, no `docker cp`. The release *is* the catalogue: every bundled plugin
+is attached to it, so the list cannot drift from what actually ships, and a plugin built
+for a different version is not offered at all rather than half-loading later. Removing one
+takes the files it brought with it, except any that another installed plugin also uses.
+
+**Update plugins now** brings the installed ones up to the running version, and a toggle
+does it on every restart — during startup, because a DLL already in memory is not replaced
+by rewriting the file. That closes a gap this page used to only warn about: a plugin
+compiled against another LabbyTwo half-loads, keeping the types that still resolve and
+dropping the rest, so a tab kind can appear in the picker and throw when somebody opens it.
+
+You do not have to fork LabbyTwo to extend it either. Build a class library that references
+it, drop the DLL into `data/plugins`, and restart:
 
 ```bash
 cp bin/Release/net10.0/MyLabbyPlugin.dll /path/to/labbytwo-data/plugins/
@@ -686,8 +730,10 @@ everyone's phone), **Chores** (recurring jobs, storing their own data in a table
 own), **Renewals** (domains and certificates, with an expiry that can raise a real alert),
 **Drop** (a shared shelf for files between devices, swept on a timer), **NAS files**
 (browse and download a QNAP you already monitor), **Who's home** (pings devices and charts
-each one), plus Syncthing, Paperless-ngx, a Dashy importer and a one-file disk-space
-provider to start from. Between them they cover every extension point — copy whichever is
+each one), **Network scan** (sweeps a subnet and reports what answered — as a card, as a
+whole page, and as a `devices_new` metric, so "something appeared at 3am" is an alert you
+can leave switched on), plus Syncthing, Paperless-ngx, a Dashy importer and a one-file
+disk-space provider to start from. Between them they cover every extension point — copy whichever is
 closest to what you want and change the middle.
 
 ---
@@ -974,7 +1020,9 @@ replaced.
 It appears only when all three are true, and Settings says which one is missing:
 
 - the socket is mounted,
-- LabbyTwo can identify its own container (it asks Docker about its own hostname),
+- LabbyTwo can identify its own container — it asks Docker about its own hostname, and
+  failing that finds the container whose id starts with it, which is the same match Docker
+  does for a short id and covers the containers Compose and Watchtower create,
 - and the running image came from a registry — a locally built one has no published
   digest to compare against and nothing to pull.
 
@@ -985,10 +1033,18 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
+**Restart LabbyTwo** sits beside it and needs only the second of those three. Restarting
+is useful even where Watchtower does the updating — it is the second half of installing a
+plugin, since a new DLL is read only while LabbyTwo is starting. Every container in the
+Containers card gets a **↻** for the same reason. Restart and nothing else: every outcome
+of one is recoverable on its own, where a container this stopped would stay stopped until
+somebody found a terminal.
+
 **Be deliberate about this one.** Anything that can reach that socket can start a
 privileged container, which is root on the host — and `:ro` does not prevent it, because it
-protects the socket *file* rather than the API behind it. That means a button on a page
-which, by default, has no login. If you enable this, set `LABBY_AUTH_PASSWORD` too;
+protects the socket *file* rather than the API behind it. That means buttons on a page
+which, by default, has no login — and since the restart controls, anyone who can reach the
+dashboard can restart anything on the box. If you enable this, set `LABBY_AUTH_PASSWORD` too;
 Settings warns you when you have not. Watchtower on a timer gets you the same updates
 without the dashboard ever holding the keys, and is the better choice if you do not
 specifically want the button.
