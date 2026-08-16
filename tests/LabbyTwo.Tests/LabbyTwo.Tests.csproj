@@ -21,6 +21,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\LabbyTwo.csproj" />
+
+    <!-- The network scan plugin, for SubnetTests. Its address arithmetic is the one part of
+         that plugin that can do damage, so it is tested here rather than left to the plugin
+         being loaded at runtime and hoped about. -->
+    <ProjectReference Include="..\..\examples\LabbyTwo.LanScanPlugin\LabbyTwo.LanScanPlugin.csproj" />
   </ItemGroup>
 
 </Project>

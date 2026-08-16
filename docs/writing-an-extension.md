@@ -539,9 +539,9 @@ warnings as errors, and each release attaches a zip of each one, so a merged plu
 installable by everybody from the next release. [`examples/README.md`](../examples/README.md)
 lists what one needs to be merged.
 
-## Thirteen that work
+## Fourteen that work
 
-[`examples/`](../examples) has thirteen plugins that build and run, covering every extension
+[`examples/`](../examples) has fourteen plugins that build and run, covering every extension
 point on this page. Start from whichever is closest to what you are writing:
 
 | If you are writing | Read |
@@ -558,6 +558,7 @@ point on this page. Start from whichever is closest to what you are writing:
 | Anything with OAuth | `GoogleCalendarPlugin` — consent, refresh tokens, and a callback endpoint |
 | Data that should raise alerts | `RenewalsPlugin` — a tab kind paired with a provider, so a date can page you |
 | Work on a timer | `DropPlugin` — a tab kind, an endpoint and a background job in one DLL |
+| Something that sweeps rather than asks | `LanScanPlugin` — a range of addresses, a bounded fan-out, and remembering what it saw last time |
 | Something that streams, or that acts rather than watches | `TerminalPlugin` — a WebSocket from an endpoint, a third-party library shipped beside the DLL, and a permission boundary that is checked where it matters |
 
 ### The rules

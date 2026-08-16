@@ -676,7 +676,7 @@ a merged plugin becomes installable by everyone from the next release.
 Plugin code runs unsandboxed inside the LabbyTwo process, which can read the database and
 the keyring. Install plugins you would trust with your credentials.
 
-[`examples/`](examples) has thirteen that build and run, and most of them fill a real gap
+[`examples/`](examples) has fourteen that build and run, and most of them fill a real gap
 rather than only demonstrating one: **Terminal** (a real shell on a tab — SSH to a host or
 into a running container, with a pty, so `htop` and `vim` work), **Gluetun** (is the VPN
 tunnel actually up, and exiting

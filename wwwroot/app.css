@@ -1016,6 +1016,26 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     font-size: .8rem;
 }
 
+/* ---------- network scan ---------- */
+
+.lan-devices { display: grid; gap: .15rem; }
+
+.lan-device { display: flex; align-items: center; gap: .5rem; }
+
+.lan-what { display: grid; flex: 1; }
+.lan-name { font-size: .9rem; }
+
+/* The address, and the manufacturer when ARP could reach far enough to say. Muted because
+   it is what you read second — the name is what you are looking for. */
+.lan-detail { color: var(--muted); font-size: .78rem; }
+
+/* Ports read as data rather than prose, so they get the figures treatment. */
+.lan-ports {
+    color: var(--muted);
+    font-size: .75rem;
+    font-variant-numeric: tabular-nums;
+}
+
 /* ---------- reading a value off a chart ---------- */
 
 /* Both of these are on <body> rather than inside the chart: the SVG is a tree Blazor owns,
