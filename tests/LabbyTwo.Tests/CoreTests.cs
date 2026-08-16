@@ -555,6 +555,11 @@ public class ContainerHintTests
 
 public class UnitsTests
 {
+    // The tests were written when this was one switch with two positions; the two presets
+    // are now the starting points for four separate choices, so they are resolved once here.
+    private static readonly Units.Preferences ImperialPrefs = Units.Preferences.Of(Units.Imperial);
+    private static readonly Units.Preferences MetricPrefs = Units.Preferences.Of(Units.Metric);
+
     private static readonly MetricSpec Temp = new("temp_outdoor_c", "Outdoor temperature", "°C", 1);
     private static readonly MetricSpec Wind = new("gust_mph", "Wind gust", " mph", 1);
     private static readonly MetricSpec Disk = new("disk_percent", "Disk used", "%");
@@ -562,16 +567,16 @@ public class UnitsTests
     [Fact]
     public void CelsiusBecomesFahrenheitForImperialAndStaysForMetric()
     {
-        Assert.Equal(32, Units.Display(0, "°C", Units.Imperial).Value, 3);
-        Assert.Equal("°F", Units.Display(0, "°C", Units.Imperial).Unit);
-        Assert.Equal(0, Units.Display(0, "°C", Units.Metric).Value, 3);
+        Assert.Equal(32, Units.Display(0, "°C", ImperialPrefs).Value, 3);
+        Assert.Equal("°F", Units.Display(0, "°C", ImperialPrefs).Unit);
+        Assert.Equal(0, Units.Display(0, "°C", MetricPrefs).Value, 3);
     }
 
     [Fact]
     public void MilesPerHourBecomesKilometresForMetric()
     {
-        Assert.Equal(40, Units.Display(40, "mph", Units.Imperial).Value, 3);
-        Assert.Equal(64.37, Units.Display(40, "mph", Units.Metric).Value, 2);
+        Assert.Equal(40, Units.Display(40, "mph", ImperialPrefs).Value, 3);
+        Assert.Equal(64.37, Units.Display(40, "mph", MetricPrefs).Value, 2);
     }
 
     [Theory]
@@ -581,8 +586,8 @@ public class UnitsTests
     [InlineData("")]
     public void UnitsThatMeanTheSameEverywherePassStraightThrough(string unit)
     {
-        Assert.Equal(42, Units.Display(42, unit, Units.Metric).Value);
-        Assert.Equal(42, Units.Display(42, unit, Units.Imperial).Value);
+        Assert.Equal(42, Units.Display(42, unit, MetricPrefs).Value);
+        Assert.Equal(42, Units.Display(42, unit, ImperialPrefs).Value);
         Assert.False(Units.IsConvertible(unit));
     }
 
@@ -597,10 +602,10 @@ public class UnitsTests
     {
         // This is the property that matters: a threshold typed in one system and read
         // back in the other must be the same number, or every rule quietly drifts.
-        foreach (var system in new[] { Units.Metric, Units.Imperial })
+        foreach (var prefs in new[] { MetricPrefs, ImperialPrefs })
         {
-            var shown = Units.Display(stored, unit, system).Value;
-            Assert.Equal(stored, Units.Store(shown, unit, system), 6);
+            var shown = Units.Display(stored, unit, prefs).Value;
+            Assert.Equal(stored, Units.Store(shown, unit, prefs), 6);
         }
     }
 
@@ -608,8 +613,8 @@ public class UnitsTests
     public void AThresholdTypedInFahrenheitIsStoredInCelsius()
     {
         // The bug this exists to prevent: someone shown °F types 90 and saves 90°C.
-        Assert.Equal(32.22, Units.Store(90, "°C", Units.Imperial), 2);
-        Assert.Equal(90, Units.Store(90, "°C", Units.Metric), 6);
+        Assert.Equal(32.22, Units.Store(90, "°C", ImperialPrefs), 2);
+        Assert.Equal(90, Units.Store(90, "°C", MetricPrefs), 6);
     }
 
     [Fact]
@@ -617,25 +622,131 @@ public class UnitsTests
     {
         // A hardcoded literal here turned every " mph" into "0mph" on the page, whatever
         // the provider asked for.
-        Assert.Equal(" mph", Units.Display(40, " mph", Units.Imperial).Unit);
-        Assert.Equal(" inHg", Units.Display(30, " inHg", Units.Imperial).Unit);
-        Assert.Equal("°C", Units.Display(20, "°C", Units.Metric).Unit);
+        Assert.Equal(" mph", Units.Display(40, " mph", ImperialPrefs).Unit);
+        Assert.Equal(" inHg", Units.Display(30, " inHg", ImperialPrefs).Unit);
+        Assert.Equal("°C", Units.Display(20, "°C", MetricPrefs).Unit);
     }
 
     [Fact]
     public void FormattingCarriesTheConvertedUnit()
     {
-        Assert.Equal("32.0°F", Units.Format(Temp, 0, Units.Imperial));
-        Assert.Equal("0.0°C", Units.Format(Temp, 0, Units.Metric));
-        Assert.Equal("40.0 mph", Units.Format(Wind, 40, Units.Imperial));
-        Assert.Equal("90%", Units.Format(Disk, 90, Units.Imperial));
+        Assert.Equal("32.0°F", Units.Format(Temp, 0, ImperialPrefs));
+        Assert.Equal("0.0°C", Units.Format(Temp, 0, MetricPrefs));
+        Assert.Equal("40.0 mph", Units.Format(Wind, 40, ImperialPrefs));
+        Assert.Equal("90%", Units.Format(Disk, 90, ImperialPrefs));
     }
 
     [Fact]
-    public void AnUnknownOrMissingSystemIsTreatedAsImperialRatherThanThrowing()
+    public void AnUnknownOrMissingPresetIsTreatedAsImperialRatherThanThrowing()
     {
-        Assert.Equal(32, Units.Display(0, "°C", null).Value, 3);
-        Assert.Equal(32, Units.Display(0, "°C", "nonsense").Value, 3);
+        Assert.Equal(32, Units.Display(0, "°C", Units.Preferences.Of(null)).Value, 3);
+        Assert.Equal(32, Units.Display(0, "°C", Units.Preferences.Of("nonsense")).Value, 3);
+    }
+
+    // ---- one quantity at a time ----
+
+    /// <summary>
+    /// The point of the whole change. A pilot wants knots and inHg; the old single switch
+    /// could not express that, because choosing knots meant choosing hPa with it.
+    /// </summary>
+    [Fact]
+    public void EachQuantityIsChosenIndependently()
+    {
+        var pilot = new Units.Preferences(Units.Celsius, Units.Knots, Units.InHg, Units.Inches);
+
+        Assert.Equal(34.76, Units.Display(40, "mph", pilot).Value, 2);
+        Assert.Equal(29.92, Units.Display(29.92, "inHg", pilot).Value, 2);
+        Assert.Equal(0, Units.Display(0, "°C", pilot).Value, 3);
+    }
+
+    [Theory]
+    [InlineData(Units.Celsius, 21.5, 21.5)]
+    [InlineData(Units.Fahrenheit, 21.5, 70.7)]
+    [InlineData(Units.Kelvin, 21.5, 294.65)]
+    public void TemperatureConvertsToWhicheverWasChosen(string unit, double stored, double shown)
+        => Assert.Equal(shown, Units.Display(stored, "°C", Units.Preferences.Default with { Temperature = unit }).Value, 2);
+
+    [Theory]
+    [InlineData(Units.Mph, 40, 40)]
+    [InlineData(Units.Kmh, 40, 64.37)]
+    [InlineData(Units.Ms, 40, 17.88)]
+    [InlineData(Units.Knots, 40, 34.76)]
+    public void WindConvertsToWhicheverWasChosen(string unit, double stored, double shown)
+        => Assert.Equal(shown, Units.Display(stored, "mph", Units.Preferences.Default with { Wind = unit }).Value, 2);
+
+    [Theory]
+    [InlineData(Units.InHg, 29.92, 29.92)]
+    [InlineData(Units.HPa, 29.92, 1013.2)]
+    [InlineData(Units.Mbar, 29.92, 1013.2)]
+    [InlineData(Units.MmHg, 29.92, 759.97)]
+    [InlineData(Units.KPa, 29.92, 101.32)]
+    public void PressureConvertsToWhicheverWasChosen(string unit, double stored, double shown)
+        => Assert.Equal(shown, Units.Display(stored, "inHg", Units.Preferences.Default with { Pressure = unit }).Value, 1);
+
+    /// <summary>
+    /// The property that matters most, now across every combination rather than two: a
+    /// threshold typed in one unit and read back in another has to be the same number, or
+    /// every alert rule quietly drifts.
+    /// </summary>
+    [Theory]
+    [InlineData("°C", Units.Kelvin, -40)]
+    [InlineData("°C", Units.Fahrenheit, 21.5)]
+    [InlineData("mph", Units.Knots, 12.3)]
+    [InlineData("mph", Units.Ms, 12.3)]
+    [InlineData("inHg", Units.MmHg, 29.94)]
+    [InlineData("inHg", Units.KPa, 29.94)]
+    [InlineData("in", Units.Mm, 0.12)]
+    public void EveryUnitRoundTrips(string canonical, string chosen, double stored)
+    {
+        var prefs = canonical switch
+        {
+            "°C" => Units.Preferences.Default with { Temperature = chosen },
+            "mph" => Units.Preferences.Default with { Wind = chosen },
+            "inHg" => Units.Preferences.Default with { Pressure = chosen },
+            _ => Units.Preferences.Default with { Rain = chosen },
+        };
+
+        var shown = Units.Display(stored, canonical, prefs).Value;
+        Assert.Equal(stored, Units.Store(shown, canonical, prefs), 6);
+    }
+
+    /// <summary>
+    /// An install that only ever chose "metric" has none of the per-quantity keys, and must
+    /// keep reading in metric rather than falling back to the imperial defaults.
+    /// </summary>
+    [Fact]
+    public void TheOldPresetStillDecidesWhenNothingFinerWasChosen()
+    {
+        var prefs = Units.Preferences.From(new SettingsBag { ["units"] = Units.Metric });
+
+        Assert.Equal(Units.Celsius, prefs.Temperature);
+        Assert.Equal(Units.Kmh, prefs.Wind);
+        Assert.Equal(Units.HPa, prefs.Pressure);
+        Assert.Equal(Units.Mm, prefs.Rain);
+        Assert.Equal(Units.Metric, prefs.MatchingPreset);
+    }
+
+    [Fact]
+    public void OneFinerChoiceOverridesThePresetAndLeavesTheRestAlone()
+    {
+        var prefs = Units.Preferences.From(new SettingsBag
+        {
+            ["units"] = Units.Metric,
+            ["unit_wind"] = Units.Knots,
+        });
+
+        Assert.Equal(Units.Knots, prefs.Wind);
+        Assert.Equal(Units.Celsius, prefs.Temperature);
+        // Mixed, so the preset control has to say so rather than claim to be metric.
+        Assert.Null(prefs.MatchingPreset);
+    }
+
+    [Fact]
+    public void AStoredUnitNobodyOffersIsTreatedAsUnset()
+    {
+        var prefs = Units.Preferences.From(new SettingsBag { ["unit_wind"] = "furlongs per fortnight" });
+
+        Assert.Equal(Units.Mph, prefs.Wind);
     }
 }
 

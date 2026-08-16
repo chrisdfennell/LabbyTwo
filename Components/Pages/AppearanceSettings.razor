@@ -232,16 +232,65 @@
                 <div class="form-text mb-3">Shown in the sidebar.</div>
 
                 <label class="form-label" for="units">Units</label>
-                <select id="units" class="form-select mb-1" value="@_look.UnitSystem"
-                        @onchange="e => SetUnitsAsync(e.Value?.ToString())">
+                <div class="d-flex gap-2 flex-wrap mb-1">
                     @foreach (var option in Units.Options)
                     {
-                        <option value="@option.Value">@option.Label</option>
+                        <button class="btn btn-sm @(_units.MatchingPreset == option.Value ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="() => SetUnitsAsync(option.Value)">@option.Label</button>
                     }
-                </select>
+                    @if (_units.MatchingPreset is null)
+                    {
+                        @* Not a button: there is nothing to *choose* here, it is what the four
+                           below already add up to. A third button would imply you could pick it. *@
+                        <span class="btn btn-sm btn-primary disabled">Mixed</span>
+                    }
+                </div>
+                <div class="form-text mb-3">
+                    A starting point — each of the four below can then be changed on its own.
+                </div>
+
+                <div class="unit-grid mb-1">
+                    <label class="form-label" for="unit-temp">Temperature</label>
+                    <select id="unit-temp" class="form-select form-select-sm" value="@_units.Temperature"
+                            @onchange="e => SetUnitAsync(Units.Preferences.TemperatureKey, e.Value?.ToString(), Units.TemperatureUnits)">
+                        @foreach (var (value, label) in Units.TemperatureUnits)
+                        {
+                            <option value="@value">@label</option>
+                        }
+                    </select>
+
+                    <label class="form-label" for="unit-wind">Wind</label>
+                    <select id="unit-wind" class="form-select form-select-sm" value="@_units.Wind"
+                            @onchange="e => SetUnitAsync(Units.Preferences.WindKey, e.Value?.ToString(), Units.WindUnits)">
+                        @foreach (var (value, label) in Units.WindUnits)
+                        {
+                            <option value="@value">@label</option>
+                        }
+                    </select>
+
+                    <label class="form-label" for="unit-pressure">Pressure</label>
+                    <select id="unit-pressure" class="form-select form-select-sm" value="@_units.Pressure"
+                            @onchange="e => SetUnitAsync(Units.Preferences.PressureKey, e.Value?.ToString(), Units.PressureUnits)">
+                        @foreach (var (value, label) in Units.PressureUnits)
+                        {
+                            <option value="@value">@label</option>
+                        }
+                    </select>
+
+                    <label class="form-label" for="unit-rain">Rain</label>
+                    <select id="unit-rain" class="form-select form-select-sm" value="@_units.Rain"
+                            @onchange="e => SetUnitAsync(Units.Preferences.RainKey, e.Value?.ToString(), Units.RainUnits)">
+                        @foreach (var (value, label) in Units.RainUnits)
+                        {
+                            <option value="@value">@label</option>
+                        }
+                    </select>
+                </div>
                 <div class="form-text">
                     Readings are always recorded in one unit so history stays comparable — this
-                    changes what you are shown. Existing alert thresholds keep meaning the same thing.
+                    changes what you are shown, and existing alert thresholds keep meaning the same
+                    thing. Knots with inHg, or Kelvin with millimetres, are combinations the old
+                    single switch could not express.
                 </div>
             </div>
         </div>
@@ -261,6 +310,7 @@
     private Appearance _look = Appearance.Default;
     private bool _confirmReset;
 
+    private Units.Preferences _units = Units.Preferences.Default;
     private string? _uploaded;
     private bool _uploading;
     private string _fontError = "";
@@ -285,7 +335,9 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _look = Appearance.From(await AppSettings.AllAsync());
+        var settings = await AppSettings.AllAsync();
+        _look = Appearance.From(settings);
+        _units = Units.Preferences.From(settings);
         _uploaded = Fonts.Current();
     }
 
@@ -410,8 +462,34 @@
     private async Task SetDensityAsync(string? value) =>
         await SaveAsync(Appearance.DensityKey, value is "compact" or "roomy" ? value : "comfortable");
 
-    private async Task SetUnitsAsync(string? value) =>
-        await SaveAsync(Appearance.UnitsKey, value == Units.Metric ? Units.Metric : Units.Imperial);
+    /// <summary>
+    /// The preset. It clears the four finer keys rather than only writing its own, because
+    /// "Metric" has to actually mean metric — leaving a stored "knots" behind would give you
+    /// a preset that visibly does not take.
+    /// </summary>
+    private async Task SetUnitsAsync(string? value)
+    {
+        var preset = value == Units.Metric ? Units.Metric : Units.Imperial;
+
+        await AppSettings.SaveAsync(new Dictionary<string, string>
+        {
+            [Appearance.UnitsKey] = preset,
+            [Units.Preferences.TemperatureKey] = "",
+            [Units.Preferences.WindKey] = "",
+            [Units.Preferences.PressureKey] = "",
+            [Units.Preferences.RainKey] = "",
+        });
+
+        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+    }
+
+    private async Task SetUnitAsync(string key, string? value, (string Value, string Label)[] allowed)
+    {
+        if (value is null || !allowed.Any(option => option.Value == value))
+            return;
+
+        await SaveAsync(key, value);
+    }
 
     private async Task SetBrandAsync(string? value) =>
         await SaveAsync(Appearance.BrandKey,

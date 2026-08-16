@@ -181,7 +181,7 @@ else
     private Dictionary<string, object> _airParameters = [];
     private DateTimeOffset? _lastReport;
     private IReadOnlyDictionary<string, double> _readings = new Dictionary<string, double>();
-    private string _units = Appearance.Default.UnitSystem;
+    private Units.Preferences _units = Units.Preferences.Default;
     private int _hours = 24;
 
     private static readonly (string Label, int Hours)[] Ranges = [("24h", 24), ("48h", 48), ("7d", 168)];
@@ -351,7 +351,7 @@ else
                 ? connections.FirstOrDefault(c => c.Id == picked)
                 : connections.FirstOrDefault(c => c.Provider == provider && c.Enabled);
 
-        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+        _units = Units.Preferences.From(await AppSettings.AllAsync());
 
         var state = Health.State(_station.Id);
         _lastReport = state?.At;

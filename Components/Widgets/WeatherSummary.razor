@@ -56,7 +56,7 @@ else
 
     private List<Cell> _cells = [];
     private SunTimes.Day? _sun;
-    private string _units = Appearance.Default.UnitSystem;
+    private Units.Preferences _units = Units.Preferences.Default;
 
     private int Hours => HoursOverride ?? Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
     private double Latitude => Context.Widget.Settings.GetDouble("latitude");
@@ -65,7 +65,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
-        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+        _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();

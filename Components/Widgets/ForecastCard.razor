@@ -82,7 +82,7 @@ else
     private Dictionary<string, double> _readings = [];
     private IReadOnlyList<ForecastProvider.Day> _days = [];
     private DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
-    private string _units = Appearance.Default.UnitSystem;
+    private Units.Preferences _units = Units.Preferences.Default;
 
     /// <summary>
     /// How many days the connection fetches is the connection's business; this only trims
@@ -96,7 +96,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
-        _units = Appearance.From(await AppSettings.AllAsync()).UnitSystem;
+        _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
