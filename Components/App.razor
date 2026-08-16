@@ -1,4 +1,5 @@
 @inject AppSettingsStore AppSettings
+@inject FontStore Fonts
 
 <!DOCTYPE html>
 <html lang="en" data-theme="@_look.ThemeAttribute" data-bs-theme="@BootstrapTheme"
@@ -12,6 +13,24 @@
     <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
     <link rel="stylesheet" href="@Assets["LabbyTwo.styles.css"]" />
+
+    @* A hosted web font, if somebody asked for one. Last of the stylesheets so it cannot be
+       overridden by ours, and only ever emitted for an https absolute URL — see
+       Appearance.IsValidFontUrl. This is the one thing in the app that makes the dashboard
+       reach outside the house to draw itself, which is why it is opt-in and empty by
+       default: the page still renders without it, in the fallback. *@
+    @if (_look.WebFontUrl is { } webFont)
+    {
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="stylesheet" href="@webFont" />
+    }
+
+    @* An uploaded typeface. The rule is built by FontStore from a fixed family name and a
+       filename it chose itself, so nothing a user typed reaches this declaration. *@
+    @if (_face is { Length: > 0 })
+    {
+        <style>@_face</style>
+    }
     <link rel="icon" type="image/svg+xml" href="icon.svg" />
     <link rel="alternate icon" type="image/png" href="icon-192.png" />
     <link rel="apple-touch-icon" href="icon-192.png" />
@@ -46,10 +65,18 @@
 
 @code {
     private Appearance _look = Appearance.Default;
+    private string _face = "";
 
     /// <summary>On "system" the script above takes over; this is the pre-script value.</summary>
     private string BootstrapTheme => _look.Theme == "light" ? "light" : "dark";
 
-    protected override async Task OnInitializedAsync() =>
-        _look = Appearance.From(await AppSettings.AllAsync());
+    protected override async Task OnInitializedAsync()
+    {
+        var look = Appearance.From(await AppSettings.AllAsync());
+
+        // Whether the file is there is asked of the disk, not of a setting. A setting saying
+        // a font exists can be wrong; the file cannot.
+        _look = look with { HasUploadedFont = look.Font == "custom" && Fonts.Current() is not null };
+        _face = _look.HasUploadedFont ? Fonts.FaceRule() : "";
+    }
 }

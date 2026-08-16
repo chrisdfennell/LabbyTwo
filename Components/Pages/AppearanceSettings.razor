@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject AppSettingsStore AppSettings
 @inject NavigationManager Nav
+@inject FontStore Fonts
 
 <PageTitle>Appearance · LabbyTwo</PageTitle>
 
@@ -124,10 +125,73 @@
                         <option value="@value">@label</option>
                     }
                 </select>
-                <div class="form-text">
-                    The system's own fonts, so nothing is downloaded and this still works with no
-                    internet.
-                </div>
+                @if (_look.Font != "custom")
+                {
+                    <div class="form-text">
+                        The system's own fonts, so nothing is downloaded and this still works with no
+                        internet.
+                    </div>
+                }
+                else
+                {
+                    <div class="form-text mb-2">Three ways, and they stack in this order.</div>
+
+                    <label class="form-label" for="family">Font family</label>
+                    <input id="family" class="form-control" value="@_look.FontFamily" maxlength="200"
+                           placeholder="Inter, Segoe UI, sans-serif"
+                           @onchange="e => SetFamilyAsync(e.Value?.ToString())" />
+                    <div class="form-text mb-3">
+                        Used as-is. On its own this only works where the font is already installed —
+                        which is not the wall tablet.
+                    </div>
+
+                    <label class="form-label" for="fontfile">Font file</label>
+                    @if (_uploaded is { Length: > 0 })
+                    {
+                        <div class="d-flex align-items-center gap-2 mb-1">
+                            <code>@_uploaded</code>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="RemoveFontAsync">Remove</button>
+                        </div>
+                    }
+                    <InputFile id="fontfile" class="form-control" accept=".woff2,.woff,.ttf,.otf"
+                               OnChange="OnFontChosenAsync" disabled="@_uploading" />
+                    <div class="form-text mb-3">
+                        @if (_fontError is { Length: > 0 })
+                        {
+                            <span class="text-warning">@_fontError</span>
+                        }
+                        else
+                        {
+                            <text>
+                                woff2, woff, ttf or otf, up to 8&nbsp;MB. Served by LabbyTwo itself and
+                                stored in your data volume, so it looks the same on every device and
+                                still nothing leaves your network. This wins over the family above.
+                            </text>
+                        }
+                    </div>
+
+                    <label class="form-label" for="fonturl">Web font stylesheet</label>
+                    <input id="fonturl" class="form-control" value="@_look.FontUrl" maxlength="500"
+                           placeholder="https://fonts.googleapis.com/css2?family=Inter&display=swap"
+                           @onchange="e => SetFontUrlAsync(e.Value?.ToString())" />
+                    <div class="form-text">
+                        @if (_urlError is { Length: > 0 })
+                        {
+                            <span class="text-warning">@_urlError</span>
+                        }
+                        else
+                        {
+                            <text>
+                                A Google Fonts link, or any https stylesheet. Put the family name in the
+                                box above as well — the link loads the font, the family selects it.
+                                <strong>This is the one setting that makes the dashboard fetch something
+                                from outside your network to draw itself</strong>, so it needs internet
+                                and the viewer's address reaches whoever hosts it. Uploading the file
+                                instead does the same job without either.
+                            </text>
+                        }
+                    </div>
+                }
             </div>
         </div>
     </div>
@@ -197,6 +261,11 @@
     private Appearance _look = Appearance.Default;
     private bool _confirmReset;
 
+    private string? _uploaded;
+    private bool _uploading;
+    private string _fontError = "";
+    private string _urlError = "";
+
     private string Brand => _look.BrandName is { Length: > 0 } name ? name : Appearance.Default.BrandName;
 
     /// <summary>
@@ -214,8 +283,92 @@
         ("light", "Light", "Always light"),
     ];
 
-    protected override async Task OnInitializedAsync() =>
+    protected override async Task OnInitializedAsync()
+    {
         _look = Appearance.From(await AppSettings.AllAsync());
+        _uploaded = Fonts.Current();
+    }
+
+    /// <summary>
+    /// Rejected quietly rather than stored, and the box keeps its old value — the same rule
+    /// the accent picker follows. A family with a semicolon in it is not a family.
+    /// </summary>
+    private async Task SetFamilyAsync(string? value)
+    {
+        var typed = value?.Trim() ?? "";
+
+        if (typed.Length == 0)
+        {
+            await SaveAsync(Appearance.FontFamilyKey, "");
+            return;
+        }
+
+        if (!Appearance.IsValidFontFamily(typed))
+        {
+            _urlError = "";
+            _fontError = "A font family is names, commas and quotes — that had something else in it.";
+            return;
+        }
+
+        await SaveAsync(Appearance.FontFamilyKey, typed);
+    }
+
+    private async Task SetFontUrlAsync(string? value)
+    {
+        var typed = value?.Trim() ?? "";
+
+        if (typed.Length == 0)
+        {
+            await SaveAsync(Appearance.FontUrlKey, "");
+            return;
+        }
+
+        if (!Appearance.IsValidFontUrl(typed))
+        {
+            _urlError = "That has to be a full https:// address to a stylesheet.";
+            return;
+        }
+
+        await SaveAsync(Appearance.FontUrlKey, typed);
+    }
+
+    private async Task OnFontChosenAsync(InputFileChangeEventArgs args)
+    {
+        _fontError = "";
+        _uploading = true;
+        try
+        {
+            var file = args.File;
+            if (file.Size > FontStore.MaxBytes)
+            {
+                _fontError = $"That is {file.Size / 1024 / 1024} MB — the limit is {FontStore.MaxBytes / 1024 / 1024} MB.";
+                return;
+            }
+
+            await using var stream = file.OpenReadStream(FontStore.MaxBytes);
+            _uploaded = await Fonts.SaveAsync(stream, file.Name);
+
+            // Nothing to store: whether a font exists is asked of the disk. But the page has
+            // to be rebuilt for the @font-face rule to appear in its head.
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            _fontError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private Task RemoveFontAsync()
+    {
+        Fonts.Clear();
+        _uploaded = null;
+        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// The look is read while the page is server-rendered, so a change only shows once the

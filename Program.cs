@@ -72,6 +72,7 @@ builder.Services.AddSingleton<AlertRuleStore>();
 builder.Services.AddSingleton<ConfigStore>();
 builder.Services.AddSingleton<HistoryStore>();
 builder.Services.AddSingleton<NotesStore>();
+builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
@@ -297,6 +298,31 @@ foreach (var extension in app.Services.GetServices<IEndpointExtension>())
 // Stylesheets and scripts are not secrets, and the login page cannot render without
 // them — the fallback policy would otherwise apply here too.
 app.MapStaticAssets().AllowAnonymous();
+
+// An uploaded typeface, served from the data volume rather than from wwwroot — wwwroot is
+// part of the image and is replaced on every update, so a font left there would vanish the
+// first time a new version was pulled. Anonymous for the same reason as the stylesheets: the
+// login page has to be able to draw itself.
+{
+    var fonts = app.Services.GetRequiredService<FontStore>();
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(fonts.Directory),
+        RequestPath = FontStore.Route,
+        // Fixed names in a fixed directory, and only ever four extensions — but the
+        // provider is pointed at a directory somebody can write to, so it is told exactly
+        // what it may serve rather than being left to guess from the extension.
+        ContentTypeProvider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider(
+            new Dictionary<string, string>
+            {
+                [".woff2"] = "font/woff2",
+                [".woff"] = "font/woff",
+                [".ttf"] = "font/ttf",
+                [".otf"] = "font/otf",
+            }),
+        ServeUnknownFileTypes = false,
+    });
+}
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

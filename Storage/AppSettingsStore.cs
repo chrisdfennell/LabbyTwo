@@ -96,7 +96,9 @@ public sealed record Appearance(
     string Surface,
     string DarkPalette,
     string TextScale,
-    string Font)
+    string Font,
+    string FontFamily,
+    string FontUrl)
 {
     public const string ThemeKey = "theme";
     public const string AccentKey = "accent";
@@ -108,10 +110,12 @@ public sealed record Appearance(
     public const string DarkPaletteKey = "dark_palette";
     public const string TextScaleKey = "text_scale";
     public const string FontKey = "font";
+    public const string FontFamilyKey = "font_family";
+    public const string FontUrlKey = "font_url";
 
     public static Appearance Default => new(
         "system", "#4da3ff", "comfortable", "LabbyTwo", Core.Units.Imperial,
-        "rounded", "outlined", "midnight", "normal", "sans");
+        "rounded", "outlined", "midnight", "normal", "sans", "", "");
 
     public static Appearance From(SettingsBag settings) => new(
         settings.Get(ThemeKey, Default.Theme),
@@ -123,7 +127,9 @@ public sealed record Appearance(
         settings.Get(SurfaceKey, Default.Surface),
         settings.Get(DarkPaletteKey, Default.DarkPalette),
         settings.Get(TextScaleKey, Default.TextScale),
-        settings.Get(FontKey, Default.Font));
+        settings.Get(FontKey, Default.Font),
+        settings.Get(FontFamilyKey, Default.FontFamily),
+        settings.Get(FontUrlKey, Default.FontUrl));
 
     /// <summary>
     /// The choices themselves, so the settings page renders from the same list the CSS is
@@ -163,7 +169,33 @@ public sealed record Appearance(
         ("sans", "Sans", "The system's own interface font."),
         ("serif", "Serif", ""),
         ("mono", "Monospace", "Every figure the same width, so columns of numbers line up."),
+        ("custom", "Custom", "Your own — a family name, an uploaded file, or a web font."),
     ];
+
+    /// <summary>
+    /// A CSS font-family list, and the only free text in this record that reaches a style
+    /// attribute. It is checked rather than escaped, because escaping a value that lands
+    /// inside a declaration is the wrong tool: a single semicolon ends the declaration and
+    /// everything after it is a new one somebody else wrote.
+    ///
+    /// Letters, digits, spaces, commas, hyphens, underscores, full stops and quotes cover
+    /// every real font stack — "Segoe UI", 'JetBrains Mono', Helvetica-Neue — and exclude
+    /// the brackets and semicolons that make an injection.
+    /// </summary>
+    public static bool IsValidFontFamily(string? value) =>
+        value is { Length: > 0 and <= 200 }
+        && value.All(c => char.IsLetterOrDigit(c) || c is ' ' or ',' or '-' or '_' or '.' or '\'' or '"');
+
+    /// <summary>
+    /// A stylesheet URL for a hosted web font. https only, and absolute — a relative one
+    /// would be resolved against this app and a javascript: one is not a stylesheet at all.
+    ///
+    /// This is the one setting in here that makes the dashboard depend on something outside
+    /// the house. It is off unless somebody fills it in, and the page still draws without it.
+    /// </summary>
+    public static bool IsValidFontUrl(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var url)
+        && url.Scheme == Uri.UriSchemeHttps;
 
     /// <summary>
     /// Accent swatches. More than a handful, because this is the one setting people actually
@@ -235,12 +267,14 @@ public sealed record Appearance(
                 _ => "1",
             };
 
-            // System stacks only. The README claims there is nothing to download before a
-            // page can draw itself, and a web font would quietly make that false.
+            // The three built-ins are system stacks, so the default install still downloads
+            // nothing before a page can draw itself. "custom" is the opt-in that gives that
+            // up, and only as far as whoever chose it asked for.
             var font = Font switch
             {
                 "serif" => "Georgia, Cambria, 'Times New Roman', serif",
                 "mono" => "ui-monospace, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace",
+                "custom" => CustomStack,
                 _ => "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
             };
 
@@ -248,6 +282,42 @@ public sealed record Appearance(
                  + $"--text-scale: {text}; --font-body: {font};";
         }
     }
+
+    /// <summary>
+    /// What "custom" resolves to.
+    ///
+    /// The uploaded family goes first when there is one, with whatever was typed behind it
+    /// and the system sans behind that — so an upload that fails to load, a family the device
+    /// has never heard of and an empty box all end at something readable rather than at the
+    /// browser's default serif.
+    /// </summary>
+    private string CustomStack
+    {
+        get
+        {
+            var typed = IsValidFontFamily(FontFamily) ? FontFamily.Trim() : "";
+            var parts = new List<string>();
+
+            if (HasUploadedFont)
+                parts.Add($"'{FontStore.Family}'");
+            if (typed.Length > 0)
+                parts.Add(typed);
+
+            parts.Add("system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif");
+            return string.Join(", ", parts);
+        }
+    }
+
+    /// <summary>
+    /// Set by whoever builds this when a file is actually on disk. A property rather than a
+    /// stored setting, because the file either exists or it does not and a setting saying
+    /// otherwise is a setting that can be wrong.
+    /// </summary>
+    public bool HasUploadedFont { get; init; }
+
+    /// <summary>The stylesheet to pull in, or null. Only ever set for the custom typeface.</summary>
+    public string? WebFontUrl =>
+        Font == "custom" && IsValidFontUrl(FontUrl) ? FontUrl : null;
 
     /// <summary>
     /// Only #rgb and #rrggbb get through. The value goes into a style attribute, so
