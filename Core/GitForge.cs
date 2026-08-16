@@ -151,3 +151,26 @@ public static class GitForges
 
     public static IReadOnlyList<string> Types => [Any];
 }
+
+/// <summary>
+/// One run of a CI workflow, in the shape a card wants to draw.
+///
+/// Not behind a capability interface yet, and on purpose: GitHub is the only thing here
+/// that reports runs, and one implementation is not a pattern. When Gitea Actions or GitLab
+/// pipelines want the same card, that is the moment the interface earns itself — and the
+/// record is already the right shape to put behind one.
+/// </summary>
+/// <param name="Conclusion">Empty while a run is still going; "success", "failure", "cancelled" once it is not.</param>
+public sealed record CiRun(
+    string Name,
+    string Repo,
+    string Branch,
+    string Status,
+    string Conclusion,
+    DateTimeOffset At,
+    TimeSpan Duration,
+    string Url)
+{
+    public bool Running => Conclusion.Length == 0;
+    public bool Ok => Conclusion is "success";
+}

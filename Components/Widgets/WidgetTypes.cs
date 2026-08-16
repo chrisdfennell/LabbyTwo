@@ -416,6 +416,26 @@ public sealed class SpeedTestWidget : IWidgetType
     ];
 }
 
+/// <summary>
+/// Recent workflow runs. Bound to GitHub by name rather than to a capability, because
+/// GitHub is the only thing here that reports runs — see the note on <see cref="CiRun"/>.
+/// </summary>
+public sealed class ActionsWidget : IWidgetType
+{
+    public string Type => "github-actions";
+    public string DisplayName => "GitHub — workflow runs";
+    public string Icon => "⚙️";
+    public string Description => "Recent GitHub Actions runs across the repositories being watched, and whether they passed.";
+    public IReadOnlyList<string> ProviderTypes => ["github"];
+    public int DefaultWidth => 4;
+    public Type Component => typeof(ActionsCard);
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("limit", "Runs to show", FieldKind.Number, Default: "6"),
+    ];
+}
+
 public sealed class GitSummaryWidget : IWidgetType
 {
     public string Type => "git-summary";
