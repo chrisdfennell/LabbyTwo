@@ -41,7 +41,8 @@ else
     {
         <div class="mt-1">
             <Sparkline Values="_series" Color="@(_state?.IsUp == false ? "#ff5c6c" : "#4da3ff")"
-                       Label="@($"{Context.Connection.Name} response time")" />
+                       Label="@($"{Context.Connection.Name} response time")"
+                       Unit=" ms" Decimals="0" From="_from" To="_to" />
         </div>
     }
 }
@@ -52,6 +53,9 @@ else
     private HealthMonitor.ProbeState? _state;
     private HistoryStore.Uptime? _uptime;
     private IReadOnlyList<double> _series = [];
+
+    /// <summary>The ends of the hour the sparkline covers, so hovering it can name a time.</summary>
+    private DateTimeOffset? _from, _to;
 
     private bool ShowSparkline => Context.Widget.Settings.GetBool("show_sparkline", true);
     private bool ShowUptime => Context.Widget.Settings.GetBool("show_uptime", true);
@@ -100,6 +104,8 @@ else
             var metric = _state?.Metrics.ContainsKey("rtt_ms") == true ? "rtt_ms" : "latency_ms";
             var samples = await History.SamplesAsync(Context.Connection.Id, metric, TimeSpan.FromHours(1));
             _series = [.. samples.Select(s => s.Value)];
+            _from = samples.Count > 0 ? samples[0].At : null;
+            _to = samples.Count > 0 ? samples[^1].At : null;
         }
 
         if (ShowUptime)
