@@ -5,6 +5,10 @@
        a statically-rendered page is on screen. *@
     <NavMenu @rendermode="InteractiveServer" />
     <main class="app-main">
+        @* Above the page rather than inside it, and interactive on its own, so a window
+           opened on the Connections page is still visible — and still liftable — from a
+           dashboard tab that renders statically. *@
+        <MaintenanceBanner @rendermode="InteractiveServer" />
         @Body
     </main>
 </div>

@@ -886,6 +886,46 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .5rem;
 }
 
+/* ---------- maintenance window ---------- */
+
+/* Warn-coloured rather than red: nothing is wrong, something is deliberately off. Red
+   here would be a lie every time you saw it, and a warning you learn to disbelieve is
+   worse than none. Sits above the page content and scrolls away with it — a sticky bar
+   would fight the nav on a phone, and this is a state you are told about on arrival
+   rather than one you need under your thumb. */
+.maintenance-banner {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    padding: .6rem .85rem;
+    border: 1px solid var(--warn);
+    border-radius: .5rem;
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    font-size: .9rem;
+}
+
+/* Pulses, because the banner's whole job is to not blend in by the third time you see
+   it. Stopped for anyone who asked for less motion by the global rule further down. */
+.maintenance-dot {
+    width: .55rem;
+    height: .55rem;
+    flex: none;
+    border-radius: 50%;
+    background: var(--warn);
+    animation: maintenance-pulse 2s ease-in-out infinite;
+}
+
+@keyframes maintenance-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .25; }
+}
+
+/* Pushes the button to the right on a wide banner, and lets it fall below on a narrow
+   one rather than squeezing the sentence into a column. */
+.maintenance-banner > button { margin-left: auto; }
+
 /* ---------- speed test ---------- */
 
 /* Centred, and centred as a column rather than with text-align, so the two-up rows below

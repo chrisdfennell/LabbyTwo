@@ -4,6 +4,7 @@
 @inject ConfigStore Config
 @inject Registry Registry
 @inject HealthMonitor Health
+@inject AppSettingsStore AppSettings
 
 <PageTitle>Connections · LabbyTwo</PageTitle>
 
@@ -27,6 +28,31 @@
             <button class="btn btn-sm btn-outline-secondary" disabled="@_testing" @onclick="TestAllAsync">
                 @(_testing ? $"Testing… {_tested}/{_toTest}" : "Test all")
             </button>
+
+            @* The whole-installation version of the per-row Silence below. Rebooting the
+               NAS takes everything down at once, and silencing fifteen rows one at a time
+               is not something anybody does while the reboot is already running. Lifting
+               it lives on the banner instead, which is on every page. *@
+            @if (!_maintenance.On)
+            {
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                            title="Hold every alert while you work on something"
+                            @onclick="() => _silencingAll = !_silencingAll">
+                        Silence all
+                    </button>
+                    @if (_silencingAll)
+                    {
+                        <div class="dropdown-menu dropdown-menu-end show" style="position:absolute; z-index:5">
+                            @foreach (var (label, span) in MaintenanceOptions)
+                            {
+                                <button class="dropdown-item" type="button"
+                                        @onclick="() => SilenceAllAsync(span)">@label</button>
+                            }
+                        </div>
+                    }
+                </div>
+            }
         }
         <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add connection</button>
     </div>
@@ -243,21 +269,57 @@ else
         await LoadAsync();
     }
 
+    /// <summary>
+    /// The same durations, plus the one the list above deliberately refuses. That refusal
+    /// is right for a single connection: a row silenced for ever is invisible, and you
+    /// find out months later that the thing you most wanted to hear about was the thing
+    /// you muted. A maintenance window is not invisible — it puts a banner on every page
+    /// with the way out on it — and the honest length of "I am replacing a drive" is not
+    /// known when you start. The banner is what earns this option; without it this list
+    /// would end at four hours too.
+    /// </summary>
+    private static readonly (string Label, TimeSpan? Span)[] MaintenanceOptions =
+    [
+        ("For 30 minutes", TimeSpan.FromMinutes(30)),
+        ("For an hour", TimeSpan.FromHours(1)),
+        ("For 4 hours", TimeSpan.FromHours(4)),
+        ("Until I resume", null),
+    ];
+
+    private async Task SilenceAllAsync(TimeSpan? span)
+    {
+        _silencingAll = false;
+        await AppSettings.SaveAsync(Maintenance.Key, Maintenance.Value(span, DateTimeOffset.Now));
+        await LoadMaintenanceAsync();
+    }
+
+    private async Task LoadMaintenanceAsync() =>
+        _maintenance = Maintenance.From(await AppSettings.AllAsync());
+
     private string Name(string id) =>
         _connections.FirstOrDefault(c => c.Id == id)?.Name ?? "";
     private bool _picking;
     private Connection? _draft;
     private IConnectionProvider? _draftProvider;
     private Connection? _confirmDelete;
+    private Maintenance _maintenance = Maintenance.Off;
+    private bool _silencingAll;
 
     protected override async Task OnInitializedAsync()
     {
         Config.Changed += OnChanged;
         Health.Updated += OnChanged;
+        // So "Silence all" comes back the moment the banner is used to resume, wherever
+        // that happened.
+        AppSettings.Changed += OnChanged;
         await LoadAsync();
     }
 
-    private async Task LoadAsync() => _connections = await Config.ConnectionsAsync();
+    private async Task LoadAsync()
+    {
+        _connections = await Config.ConnectionsAsync();
+        await LoadMaintenanceAsync();
+    }
 
     private string ProviderName(Connection connection) =>
         Registry.Provider(connection.Provider)?.DisplayName ?? $"{connection.Provider} (not installed)";
@@ -379,5 +441,6 @@ else
     {
         Config.Changed -= OnChanged;
         Health.Updated -= OnChanged;
+        AppSettings.Changed -= OnChanged;
     }
 }
