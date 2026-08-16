@@ -64,6 +64,47 @@
     --shadow: rgba(22, 32, 46, .18);
 }
 
+/* ---------- dark palette variants ----------
+
+   Only the dark end has these, and on purpose: light is already "a white page", and the
+   variations people actually want are all about how dark dark should be. Each one redefines
+   the surface tokens only — text, accent and the status colours are shared, so a variant
+   cannot quietly break contrast on something it was not thinking about.
+
+   Guarded with :not([data-theme="light"]) inside the media query for the same reason the
+   base palette is: somebody on a light OS who has explicitly chosen dark must still get it,
+   and somebody who chose light must not be given a dark variant by their OS. */
+
+:root[data-palette="slate"],
+:root[data-palette="slate"]:not([data-theme="light"]) {
+    --ink: #14181d;
+    --panel: #1c2229;
+    --panel-2: #242b34;
+    --edge: #333c47;
+    --muted: #9aa7b6;
+}
+
+/* True black, for a wall-mounted OLED. The point is the background costing no power, so the
+   page colour really is #000 rather than a very dark grey — and the panels have to lift a
+   little more than usual or every edge in the layout vanishes into it. */
+:root[data-palette="black"],
+:root[data-palette="black"]:not([data-theme="light"]) {
+    --ink: #000000;
+    --panel: #0b0b0d;
+    --panel-2: #15161a;
+    --edge: #262a31;
+    --shadow: rgba(0, 0, 0, .9);
+}
+
+/* A light-themed page ignores both: they are dark palettes, and a "true black" light theme
+   is not a thing anybody asked for. */
+:root[data-theme="light"][data-palette] {
+    --ink: #f2f5f9;
+    --panel: #ffffff;
+    --panel-2: #eef2f7;
+    --edge: #d5dde8;
+}
+
 /* Tints derived from whatever accent the user picked, so changing one colour restyles
    focus rings, the active nav item and the chart fill together. */
 :root {
@@ -73,11 +114,27 @@
     --down-line: color-mix(in srgb, var(--down) 38%, transparent);
     --pad: calc(1rem * var(--density));
     --gap: calc(1rem * var(--density));
+
+    /* Set inline on <html> from the user's choice — see Appearance.StyleAttribute. Declared
+       here too so the stylesheet stands on its own: a page rendered before settings load,
+       or a mock opened straight from disk, must not fall back to "unset". */
+    --radius: .75rem;
+    --text-scale: 1;
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    /* A card's inner corner. Anything nested inside a rounded card wants to be tighter than
+       the card itself, or the two curves fight and the inner one looks like a mistake. */
+    --radius-inner: calc(var(--radius) * .66);
+}
+
+html {
+    font-size: calc(100% * var(--text-scale));
 }
 
 html, body {
     background: var(--ink);
     color: var(--text);
+    font-family: var(--font-body);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -194,7 +251,52 @@ h1[tabindex]:focus { outline: none; }
 .panel {
     background: var(--panel);
     border: 1px solid var(--edge);
-    border-radius: .75rem;
+    border-radius: var(--radius);
+}
+
+/* ---------- card surface ----------
+
+   How a card is told apart from the page behind it. There are only three honest answers —
+   a line around it, a shadow under it, or a different fill — and the default draws the line
+   because it is the only one that survives every palette, including true black where a
+   shadow is invisible and a tint is nearly so.
+
+   Applied to .widget and .panel together: they are the same idea at two sizes, and a
+   dashboard where the cards were raised and the tables were outlined would look like two
+   designs sharing a page. */
+
+:root[data-surface="raised"] .widget,
+:root[data-surface="raised"] .panel {
+    border-color: transparent;
+    box-shadow: 0 1px 2px var(--shadow), 0 8px 24px var(--shadow);
+}
+
+/* Flat leans on fill alone, so it wants whichever surface token is furthest from the page.
+   In the dark palettes that is the raised one; in light it is plain --panel, because there
+   the page is grey and the cards are white. Using --panel-2 in light put a #eef2f7 card on
+   an #f2f5f9 page, which is a card you cannot see. */
+:root[data-surface="flat"] .widget,
+:root[data-surface="flat"] .panel {
+    border-color: transparent;
+    background: var(--panel-2);
+    box-shadow: none;
+}
+
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"])[data-surface="flat"] .widget,
+    :root:not([data-theme="dark"])[data-surface="flat"] .panel { background: var(--panel); }
+}
+
+:root[data-theme="light"][data-surface="flat"] .widget,
+:root[data-theme="light"][data-surface="flat"] .panel { background: var(--panel); }
+
+/* Raised on true black keeps its border. A shadow is a darkening of what is behind it, and
+   nothing is darker than #000 — so on an OLED panel the lift simply does not render and the
+   card loses every edge it had. Rather than let one combination be quietly broken, this is
+   the one place raised and outlined agree. */
+:root[data-palette="black"][data-surface="raised"] .widget,
+:root[data-palette="black"][data-surface="raised"] .panel {
+    border-color: var(--edge);
 }
 
 /* ---------- widgets ---------- */
@@ -216,7 +318,7 @@ h1[tabindex]:focus { outline: none; }
 .widget {
     background: var(--panel);
     border: 1px solid var(--edge);
-    border-radius: .75rem;
+    border-radius: var(--radius);
     padding: var(--pad);
     min-width: 0;
     display: flex;
@@ -592,6 +694,15 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 }
 .color-swatch.is-active { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
 
+/* A grid rather than a wrapping flex row, so fourteen swatches make tidy rows instead of a
+   ragged last line — and auto-fill means the column count follows the card's width. */
+.swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(1.9rem, 1fr));
+    gap: .4rem;
+    justify-items: center;
+}
+
 .modal-content { background: var(--panel); border: 1px solid var(--edge); }
 .modal-header, .modal-footer { border-color: var(--edge); }
 
@@ -615,7 +726,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 
 .empty-state {
     border: 1px dashed var(--edge);
-    border-radius: .75rem;
+    border-radius: var(--radius);
     padding: 2.5rem 1.5rem;
     text-align: center;
     color: var(--muted);
@@ -624,7 +735,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .embed-frame {
     width: 100%;
     border: 1px solid var(--edge);
-    border-radius: .75rem;
+    border-radius: var(--radius);
     background: #fff;
 }
 
@@ -644,7 +755,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     width: min(38rem, calc(100vw - 2rem));
     background: var(--panel);
     border: 1px solid var(--edge);
-    border-radius: .75rem;
+    border-radius: var(--radius);
     box-shadow: 0 20px 60px var(--shadow);
     z-index: 1091;
     overflow: hidden;
