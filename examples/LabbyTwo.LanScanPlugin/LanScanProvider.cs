@@ -19,9 +19,11 @@ namespace LabbyTwo.LanScanPlugin;
 /// **What it can see depends on where LabbyTwo runs.** From a bridged container it can route
 /// to the LAN, so ping, reverse DNS and open ports all work. It is not on the same broadcast
 /// domain, so ARP does not reach it and there are no MAC addresses — which is where a
-/// desktop scanner gets vendor names. Host networking or a macvlan would give those back;
-/// that is a deployment choice rather than something this can fix, so it is stated rather
-/// than worked around.
+/// desktop scanner gets vendor names. Host networking or a macvlan puts it on the LAN's own
+/// segment and those appear; see <see cref="Arp"/>. Nothing is switched on for it: the
+/// addresses are read if they are there and the column is empty if they are not, because a
+/// setting for this would be a setting nobody could answer without knowing how their own
+/// container is attached.
 /// </summary>
 public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProvider
 {
@@ -132,6 +134,17 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
             }));
 
             var up = found.Where(device => device is not null).Select(device => device!).ToList();
+
+            // After the sweep, never before: pinging a host is what puts it in the kernel's
+            // ARP cache, so there is nothing to read until the addresses have been probed.
+            var macs = Arp.Table();
+            if (macs.Count > 0)
+            {
+                up = [.. up.Select(device => macs.TryGetValue(device.Address, out var mac)
+                    ? device with { Mac = mac, Vendor = Oui.Vendor(mac) }
+                    : device)];
+            }
+
             stopwatch.Stop();
 
             var known = await KnownAsync(connection, ct);
@@ -151,6 +164,11 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
                 summary += $" · {appeared.Count} new: {string.Join(", ", appeared.Take(3).Select(d => d.Label))}";
             else if (first)
                 summary += " · first scan, so none are counted as new";
+
+            // Said once in the message rather than as a warning, because it is a fact about
+            // the deployment rather than a fault: on a bridge there is nothing to fix.
+            if (up.Count > 0 && up.All(device => device.Mac.Length == 0))
+                summary += " · no hardware addresses from here";
 
             return ProbeResult.Up(stopwatch.Elapsed, summary, new Dictionary<string, double>
             {
@@ -172,9 +190,23 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
     }
 
     /// <param name="Label">The name if there is one, the address otherwise — what a row should read.</param>
-    public sealed record Device(string Address, string Name, double Milliseconds, IReadOnlyList<int> OpenPorts)
+    /// <param name="Mac">Empty wherever ARP cannot reach, which is any bridged container.</param>
+    public sealed record Device(
+        string Address,
+        string Name,
+        double Milliseconds,
+        IReadOnlyList<int> OpenPorts,
+        string Mac = "",
+        string Vendor = "")
     {
         public string Label => Name.Length > 0 ? Name : Address;
+
+        /// <summary>
+        /// What to put under the name. The vendor when there is one, because "Espressif" is
+        /// the fact that identifies a device you had forgotten owning; the address otherwise,
+        /// since a row has to say *something* about which machine it is.
+        /// </summary>
+        public string Detail => Vendor.Length > 0 ? $"{Address} · {Vendor}" : Address;
     }
 
     private static async Task<Device?> ProbeOneAsync(

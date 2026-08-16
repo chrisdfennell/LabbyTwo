@@ -28,7 +28,10 @@ else
         {
             <div class="lan-device">
                 <span class="status-dot status-up flex-none"></span>
-                <span class="lan-name text-truncate" title="@device.Address">@device.Label</span>
+                <span class="lan-what min-w-0">
+                    <span class="lan-name text-truncate">@device.Label</span>
+                    <span class="lan-detail text-truncate" title="@device.Mac">@device.Detail</span>
+                </span>
 
                 @if (ShowPorts && device.OpenPorts.Count > 0)
                 {
