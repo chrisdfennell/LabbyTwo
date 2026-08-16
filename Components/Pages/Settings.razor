@@ -7,6 +7,7 @@
 @inject ConfigTransfer Transfer
 @inject Db Database
 @inject AppSettingsStore AppSettings
+@inject IHttpClientFactory HttpFactory
 @inject NavigationManager Nav
 @inject UpdateChecker Updates
 @inject SelfUpdater Updater
@@ -609,6 +610,41 @@ docker compose restart labbytwo</code></pre>
                         @failure.Reason
                     </div>
                 }
+
+                @* Keeping thirteen plugins in step with the host by hand is thirteen downloads
+                   after every update, which is why the warning above used to be the end of the
+                   story. *@
+                @if (Catalog.Plugins.Any())
+                {
+                    <hr class="my-3" />
+
+                    <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+                        <button class="btn btn-sm btn-outline-secondary" disabled="@_updatingPlugins"
+                                @onclick="UpdatePluginsAsync">
+                            @(_updatingPlugins ? "Updating…" : "Update plugins now")
+                        </button>
+
+                        <div class="form-check form-switch mb-0 ms-2">
+                            <input class="form-check-input" type="checkbox" id="plugin-auto"
+                                   checked="@_pluginAuto" @onchange="TogglePluginAutoAsync" />
+                            <label class="form-check-label" for="plugin-auto">Update them on every restart</label>
+                        </div>
+                    </div>
+
+                    @if (_pluginResult is { Length: > 0 })
+                    {
+                        <div class="tile-meta mt-1">@_pluginResult</div>
+                    }
+
+                    <div class="form-text">
+                        Downloads the copy of each installed plugin published for
+                        @(Catalog.HostVersion is { Length: > 0 } v ? v : "this version"), from the same
+                        release this LabbyTwo came from. A plugin that is not one of the bundled ones has
+                        nothing published under its name and is left alone. <strong>Restart to load
+                        them</strong> — a DLL already in memory is not replaced by rewriting the file,
+                        which is also why the automatic one runs during startup rather than after it.
+                    </div>
+                }
             </div>
         </div>
     </div>
@@ -624,6 +660,42 @@ docker compose restart labbytwo</code></pre>
 }
 
 @code {
+    // ---- keeping the plugins in step with the host ----
+
+    private bool _updatingPlugins;
+    private bool _pluginAuto;
+    private string _pluginResult = "";
+
+    private async Task UpdatePluginsAsync()
+    {
+        _updatingPlugins = true;
+        _pluginResult = "";
+        try
+        {
+            var http = HttpFactory.CreateClient();
+            var result = await PluginUpdater.UpdateAsync(
+                Catalog.PluginDirectory, Catalog.HostVersion, http);
+
+            _pluginResult = result.Updated.Count > 0
+                ? $"Updated {string.Join(", ", result.Updated)}. Restart LabbyTwo to load them."
+                : result.Reason ?? "Everything was already current.";
+        }
+        catch (Exception ex)
+        {
+            _pluginResult = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _updatingPlugins = false;
+        }
+    }
+
+    private async Task TogglePluginAutoAsync(ChangeEventArgs args)
+    {
+        _pluginAuto = args.Value is true;
+        await AppSettings.SaveAsync(PluginUpdater.EnabledKey, _pluginAuto ? "true" : "false");
+    }
+
     private int _connectionCount, _tabCount, _widgetCount, _channelCount;
     private string _statusToken = "";
     private UpdateChecker.Result? _update;
@@ -689,6 +761,8 @@ docker compose restart labbytwo</code></pre>
 
     protected override async Task OnInitializedAsync()
     {
+        _pluginAuto = (await AppSettings.AllAsync()).GetBool(PluginUpdater.EnabledKey);
+
         await LoadAsync();
 
         // Local only: which container this is and whether the socket is there. Nothing
