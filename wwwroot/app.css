@@ -886,6 +886,69 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .5rem;
 }
 
+/* ---------- speed test ---------- */
+
+/* Centred, and centred as a column rather than with text-align, so the two-up rows below
+   stay two-up instead of collapsing into a centred list. The card is usually stretched
+   taller than its content by whatever tall card shares its row, so the gap grows and
+   shrinks with its neighbours — centring the *column* is what keeps it looking placed
+   rather than dropped in the top-left corner. */
+.speedtest {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .75rem;
+    text-align: center;
+}
+
+/* Wraps, because at three columns wide the two figures do not fit side by side and the
+   second would otherwise be clipped rather than moved. */
+.speedtest-headline {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0 1.5rem;
+}
+
+/* Ping and jitter. A grid rather than flex so the two columns are equal and the pair
+   stays symmetrical about the middle of the card whatever the numbers are — "1 ms" beside
+   "98.1 ms" pulls a centred flex row visibly off-centre. */
+.speedtest-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .5rem 1.5rem;
+    width: 100%;
+    max-width: 22rem;
+}
+
+/* Full width, because a chart is the one thing here that should use every pixel the card
+   has, however wide it has been made. */
+.speedtest-chart { width: 100%; }
+.speedtest-chart svg { display: block; width: 100%; height: 110px; }
+
+.speedtest-legend {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0 .5rem;
+    margin-bottom: .25rem;
+    color: var(--muted);
+    font-size: .8rem;
+}
+
+/* The ends of the axis and the top of the scale. Three cells so the peak sits in the
+   middle regardless of how long the two timestamps are. */
+.speedtest-axis {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: baseline;
+    color: var(--muted);
+    font-size: .8rem;
+}
+.speedtest-axis > :first-child { text-align: left; }
+.speedtest-axis > :last-child { text-align: right; }
+
 /* ---------- weather ---------- */
 
 .wind-dial { width: 92px; height: 92px; flex: none; }

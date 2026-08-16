@@ -405,6 +405,15 @@ public sealed class SpeedTestWidget : IWidgetType
     public IReadOnlyList<string> ProviderTypes => ["speedtest", "speedtest-tracker"];
     public int DefaultWidth => 3;
     public Type Component => typeof(SpeedTest);
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show_trend", "Show the trend", FieldKind.Bool, Default: "true",
+            Help: "Download and upload over time, under the numbers."),
+        new("hours", "Hours of history", FieldKind.Number, Default: "168",
+            Help: "A week by default. A speed test runs hours apart, so a single day is "
+                + "usually too few results to be a line."),
+    ];
 }
 
 public sealed class GitSummaryWidget : IWidgetType
