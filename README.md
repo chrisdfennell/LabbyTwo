@@ -436,10 +436,12 @@ greys out the rest with the reason.
 | Git — repositories | any Git server — the repository table |
 | Git — open work | any Git server — open pull requests or open issues, switchable |
 
-Rearranging works three ways, because HTML drag-and-drop does not exist on a touchscreen
-and cannot be reached from a keyboard: **drag** a card with a mouse, tap **⠿** to pick one
-up and then choose where it lands, or use the **↑↓** arrows. A wall-mounted tablet gets the
-same editing as a laptop.
+Rearranging works three ways, because no one gesture reaches every input: **drag** a card —
+anywhere on it with a mouse, by its **⠿** handle with a finger or a pen — and the others
+slide out of the way to show you where it will land; tap **⠿** to pick one up and then
+choose where it lands; or use the **↑↓** arrows. The last two are ordinary buttons, so they
+work from a keyboard, which a drag still cannot. A wall-mounted tablet gets the same
+editing as a laptop.
 
 The search box is a plain HTML form pointed at the engine, so what you type goes straight
 there and never touches LabbyTwo. Bookmark icons are fetched by the *server* and cached,
@@ -1039,12 +1041,19 @@ whole setup.
 ## Built with
 
 .NET 10, Blazor Server, and SQLite. Charts and sparklines are server-rendered SVG, so
-there is no charting library and no JavaScript beyond Blazor's own and one keyboard
-shortcut.
+there is no charting library and nothing to download before a page can draw itself.
 
-That is a claim about LabbyTwo, not about everything you can install into it — a plugin is
-a separate DLL and may bring whatever it needs. The Terminal example vendors xterm.js,
-because a terminal emulator is the one thing here that genuinely cannot be server-rendered.
+There is JavaScript, in two small files, and both are there for the same reason: a browser
+event the server cannot answer fast enough. `palette.js` is the Ctrl+K handler, held
+outside the component so the shortcut survives navigation. `widget-drag.js` is the card
+drag — a gesture is a hundred frames of pointer movement, and asking the server about each
+one means the card lags by however far away the server is, which on a NAS over Wi-Fi you
+can see. It runs the whole drag in the browser and tells the circuit once, on drop.
+
+Everything else is server-rendered, and that is a claim about LabbyTwo rather than about
+everything you can install into it — a plugin is a separate DLL and may bring whatever it
+needs. The Terminal example vendors xterm.js, because a terminal emulator is the one thing
+here that genuinely cannot be server-rendered.
 
 ## Licence
 
