@@ -163,6 +163,14 @@ one shows a form generated from that provider's own field list, plus a **Test co
 button that runs the exact same probe the monitor will run — so a green test means
 monitoring works.
 
+**⧉ Duplicate** takes everything across including the credentials, and opens the editor on
+the copy so you can change the one field that differs. Nothing is written until you save.
+
+Past six connections the page grows a **filter**, a **Down only** toggle, **Test all**, and
+a checkbox on every row. What you tick can be enabled, disabled, silenced or deleted
+together — and select-all takes what the filter is *showing*, never everything, so "Down
+only → select all → Silence" means the rows in front of you and not the twenty behind them.
+
 | Provider | What it reports |
 |---|---|
 | **Web service** | Any HTTP(S) URL — response time, status code, optional body match. Use this for anything without a dedicated integration. |
@@ -269,6 +277,11 @@ is worth saying. Four things do:
   exception and is always sent, because "do not wake me" is the wrong answer to a tornado.
 - **Silences** — "stop telling me about this for an hour", from the connections list or
   `Ctrl+K`, for the hour you spend restarting the thing on purpose.
+- **Silence all** — the same thing for the whole installation, for when *you* are the one
+  breaking it. Rebooting the NAS takes fifteen services down inside a minute, and quiet
+  hours are no help at two on a Saturday afternoon. While it is on, a banner on every page
+  says so and carries the way out, which is what makes "until I resume" a safe option to
+  offer here and not on a single connection.
 - **Dependencies** — a connection can sit *behind* another. While the VPN gateway is down,
   the ten containers behind it stay quiet, and the one message you get names the gateway.
 - **Routing** — each rule can name a channel, so the disk-space rule goes to email and the
@@ -411,7 +424,7 @@ greys out the rest with the reason.
 | Media — download clients | nothing — SABnzbd, NZBGet, qBittorrent and Transmission side by side |
 | Media — library size | nothing — counts from every library server that reports one |
 | Media — needs a look | nothing — paused downloaders, missing subtitles, requests waiting, anything not answering |
-| Internet speed | Internet speed test, Speedtest Tracker — download, upload, ping and jitter together, and how old the result is |
+| Internet speed | Internet speed test, Speedtest Tracker — download, upload, ping and jitter together, how old the result is, and a week of both speeds on one zero-based axis |
 | Clock | nothing |
 | Weather station | Ambient Weather — current conditions |
 | Weather — today's extremes | Ambient Weather — high/low, peak gust, rain, max UV, peak solar, sunrise and sunset |
@@ -979,6 +992,18 @@ which, by default, has no login. If you enable this, set `LABBY_AUTH_PASSWORD` t
 Settings warns you when you have not. Watchtower on a timer gets you the same updates
 without the dashboard ever holding the keys, and is the better choice if you do not
 specifically want the button.
+
+## When you delete the wrong thing
+
+Deleting a tab, a card or a connection puts a bar at the bottom of the window with **Undo**
+on it for twelve seconds. A tab comes back with its cards and its notes; a connection comes
+back with the cards that were bound to it still bound to it.
+
+It is deliberately one deep, and it is not a substitute for the backup below — a connection's
+recorded history goes with the connection and does not come back, which the bar says at the
+time rather than leaving you to find out. Every delete still confirms first: the dialog is
+for the twenty rows you selected without looking, the undo is for the one row you clicked
+by mistake.
 
 ## Backing up and sharing
 
