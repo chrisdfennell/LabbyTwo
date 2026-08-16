@@ -183,6 +183,13 @@ else
                                 <ProviderActions Connection="connection" Compact="true" Ran="LoadAsync" />
 
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(connection)">Edit</button>
+                                @* An icon rather than the word, unlike the Duplicate on the
+                                   Tabs page. This actions cell is already the widest thing
+                                   on the page and must not wrap, so a sixth worded button
+                                   is paid for by every other column. *@
+                                <button class="btn btn-sm btn-outline-secondary" title="Duplicate"
+                                        aria-label="Duplicate @connection.Name"
+                                        @onclick="() => Duplicate(connection)">⧉</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = connection">✕</button>
                             </div>
                         </td>
@@ -342,6 +349,31 @@ else
         _draftProvider = Registry.Provider(connection.Provider);
         // Editing a clone means Cancel leaves the stored connection untouched.
         _draft = connection with { Settings = connection.Settings.Clone() };
+    }
+
+    /// <summary>
+    /// A second one of something you already set up — another Sonarr, a second NAS, the
+    /// same Git server with a different token. Everything but the identity comes across,
+    /// credentials included, which is the whole point: a copy that loses the API key has
+    /// saved you the easy half of the typing.
+    ///
+    /// It opens the editor rather than writing the copy and telling you about it. Nothing
+    /// is stored until Save, so Cancel leaves nothing behind — and duplicating is always
+    /// followed by changing the one field that differs, so this is the same number of
+    /// clicks with none of the litter. Sort is inherited on purpose: the list orders by
+    /// sort then name, so "Sonarr (copy)" lands directly under "Sonarr".
+    /// </summary>
+    private void Duplicate(Connection connection)
+    {
+        _draftProvider = Registry.Provider(connection.Provider);
+        _draft = connection with
+        {
+            Id = Ids.New(),
+            Name = $"{connection.Name} (copy)",
+            Settings = connection.Settings.Clone(),
+            // A hold belongs to the thing that was making noise, not to its copy.
+            SilencedUntil = null,
+        };
     }
 
     private async Task CloseEditor()
