@@ -10,100 +10,202 @@
         <h1>🎨 Appearance</h1>
         <p class="subtitle">Applies to every browser that opens this dashboard — it is stored with the rest of your setup, not per-device.</p>
     </div>
-    <a class="btn btn-sm btn-outline-secondary" href="settings">Back to settings</a>
+    <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmReset = true">Reset to defaults</button>
+        <a class="btn btn-sm btn-outline-secondary" href="settings">Back to settings</a>
+    </div>
 </div>
 
 <div class="row g-3">
-    <div class="col-lg-6">
+    <div class="col-lg-4">
         <div class="widget h-100">
-            <div class="widget-head"><h2 class="widget-title">Theme</h2></div>
+            <div class="widget-head"><h2 class="widget-title">Colour</h2></div>
             <div class="widget-body">
+                <label class="form-label">Theme</label>
                 <div class="d-flex gap-2 flex-wrap mb-3">
                     @foreach (var (value, label, hint) in Themes)
                     {
-                        <button class="btn btn-sm @(_theme == value ? "btn-primary" : "btn-outline-secondary")"
-                                title="@hint" @onclick="() => SetThemeAsync(value)">@label</button>
+                        <button class="btn btn-sm @(_look.Theme == value ? "btn-primary" : "btn-outline-secondary")"
+                                title="@hint" @onclick="() => SetAsync(Appearance.ThemeKey, value)">@label</button>
                     }
+                </div>
+
+                @* Only meaningful once something dark is on screen, so it says so rather than
+                   sitting there looking broken for somebody who chose light. *@
+                <label class="form-label" for="palette">Dark shade</label>
+                <select id="palette" class="form-select mb-1" value="@_look.DarkPalette"
+                        @onchange="e => SetAsync(Appearance.DarkPaletteKey, e.Value?.ToString(), Appearance.DarkPalettes)">
+                    @foreach (var (value, label, hint) in Appearance.DarkPalettes)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
+                <div class="form-text mb-3">
+                    @(_look.Theme == "light"
+                        ? "Nothing to see while the theme is light — this changes the dark end only."
+                        : Hint(Appearance.DarkPalettes, _look.DarkPalette)
+                          + " Only the surfaces change; text and the up/down colours stay as they are.")
                 </div>
 
                 <label class="form-label" for="accent">Accent colour</label>
-                <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
-                    @foreach (var preset in Presets)
+                <div class="swatches mb-2">
+                    @foreach (var (value, name) in Appearance.AccentPresets)
                     {
-                        <button class="color-swatch @(_accent == preset ? "is-active" : "")"
-                                style="background: @preset" title="@preset"
-                                aria-label="@preset" @onclick="() => SetAccentAsync(preset)"></button>
+                        <button class="color-swatch @(SameColour(_look.Accent, value) ? "is-active" : "")"
+                                style="background: @value" title="@name"
+                                aria-label="@name" @onclick="() => SetAccentAsync(value)"></button>
                     }
-                    <input type="color" id="accent" class="form-control form-control-color"
-                           value="@_accent" @onchange="e => SetAccentAsync(e.Value?.ToString())" />
                 </div>
+                <div class="d-flex align-items-center gap-2">
+                    <input type="color" id="accent" class="form-control form-control-color"
+                           value="@_look.Accent" @onchange="e => SetAccentAsync(e.Value?.ToString())" />
+                    <span class="tile-meta">or pick your own</span>
+                </div>
+                <div class="form-text">Used for links, buttons, the active tab and every chart.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Shape and type</h2></div>
+            <div class="widget-body">
+                <label class="form-label" for="radius">Corners</label>
+                <select id="radius" class="form-select mb-1" value="@_look.Radius"
+                        @onchange="e => SetAsync(Appearance.RadiusKey, e.Value?.ToString(), Appearance.Radii)">
+                    @foreach (var (value, label, hint) in Appearance.Radii)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
+                <div class="form-text mb-3">@Hint(Appearance.Radii, _look.Radius)</div>
+
+                <label class="form-label" for="surface">Cards</label>
+                <select id="surface" class="form-select mb-1" value="@_look.Surface"
+                        @onchange="e => SetAsync(Appearance.SurfaceKey, e.Value?.ToString(), Appearance.Surfaces)">
+                    @foreach (var (value, label, hint) in Appearance.Surfaces)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
                 <div class="form-text mb-3">
-                    Used for links, buttons, the active tab and every chart.
+                    @Hint(Appearance.Surfaces, _look.Surface)
+                    On true black a raised card keeps its border, because nothing is darker than
+                    #000 for a shadow to fall on.
                 </div>
 
+                <label class="form-label" for="density">Density</label>
+                <select id="density" class="form-select mb-3" value="@_look.Density"
+                        @onchange="e => SetDensityAsync(e.Value?.ToString())">
+                    <option value="compact">Compact — more on screen</option>
+                    <option value="comfortable">Comfortable</option>
+                    <option value="roomy">Roomy — easier across a room</option>
+                </select>
+
+                <label class="form-label" for="text">Text size</label>
+                <select id="text" class="form-select mb-1" value="@_look.TextScale"
+                        @onchange="e => SetAsync(Appearance.TextScaleKey, e.Value?.ToString(), Appearance.TextScales)">
+                    @foreach (var (value, label, hint) in Appearance.TextScales)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
+                <div class="form-text mb-3">
+                    Separate from density on purpose: density is how much air there is, this is how
+                    big the words are. Compact and huge together is a dense wall display you can read
+                    from the hallway.
+                </div>
+
+                <label class="form-label" for="font">Typeface</label>
+                <select id="font" class="form-select mb-1" value="@_look.Font"
+                        @onchange="e => SetAsync(Appearance.FontKey, e.Value?.ToString(), Appearance.Fonts)">
+                    @foreach (var (value, label, hint) in Appearance.Fonts)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
+                <div class="form-text">
+                    The system's own fonts, so nothing is downloaded and this still works with no
+                    internet.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Preview</h2></div>
+            <div class="widget-body">
+                @* A real card rather than a picture of one, so it is styled by the same rules
+                   as the dashboard and cannot drift from it. *@
+                <div class="widget mb-3">
+                    <div class="widget-head">
+                        <span style="color: var(--accent)">◆</span>
+                        <h2 class="widget-title">@Brand</h2>
+                    </div>
+                    <div class="metric-value">457<span class="metric-unit">Mbps</span></div>
+                    <div class="d-flex gap-2 align-items-center mt-2 mb-2">
+                        <span class="status-dot status-up"></span><span class="tile-meta">Something that is up</span>
+                    </div>
+                    <div class="d-flex gap-2 align-items-center mb-2">
+                        <span class="status-dot status-down"></span><span class="tile-meta">Something that is not</span>
+                    </div>
+                    <div class="usage-bar mb-3"><span style="width: 62%"></span></div>
+                    <button class="btn btn-primary btn-sm">A button</button>
+                    <a class="ms-2" href="settings/appearance">and a link</a>
+                </div>
+
+                <div class="panel p-3">
+                    <div class="tile-meta mb-1">And a panel, which tables sit in</div>
+                    <code>cert_days_left = 45</code>
+                </div>
+
+                <hr class="my-3" />
+
+                <label class="form-label" for="brand">What this dashboard is called</label>
+                <input id="brand" class="form-control" value="@_look.BrandName" maxlength="40"
+                       placeholder="LabbyTwo" @onchange="e => SetBrandAsync(e.Value?.ToString())" />
+                <div class="form-text mb-3">Shown in the sidebar.</div>
+
                 <label class="form-label" for="units">Units</label>
-                <select id="units" class="form-select mb-1" value="@_units"
+                <select id="units" class="form-select mb-1" value="@_look.UnitSystem"
                         @onchange="e => SetUnitsAsync(e.Value?.ToString())">
                     @foreach (var option in Units.Options)
                     {
                         <option value="@option.Value">@option.Label</option>
                     }
                 </select>
-                <div class="form-text mb-3">
-                    Readings are always recorded in one unit so history stays comparable — this
-                    changes what you are shown, on tiles, on the alerts page and in the
-                    notifications themselves. Existing alert thresholds keep meaning the same thing.
-                </div>
-
-                <label class="form-label" for="density">Density</label>
-                <select id="density" class="form-select" value="@_density"
-                        @onchange="e => SetDensityAsync(e.Value?.ToString())">
-                    <option value="compact">Compact — more on screen</option>
-                    <option value="comfortable">Comfortable</option>
-                    <option value="roomy">Roomy — easier across a room</option>
-                </select>
-                <div class="form-text">Roomy suits a wall-mounted tablet; compact suits a laptop.</div>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-6">
-        <div class="widget h-100">
-            <div class="widget-head"><h2 class="widget-title">Name</h2></div>
-            <div class="widget-body">
-                <label class="form-label" for="brand">What this dashboard is called</label>
-                <input id="brand" class="form-control" value="@_brand" maxlength="40"
-                       placeholder="LabbyTwo" @onchange="e => SetBrandAsync(e.Value?.ToString())" />
                 <div class="form-text">
-                    Shown in the sidebar. Call it after your lab, your house, or leave it as it is.
-                </div>
-
-                <hr class="my-3" />
-
-                <p class="tile-meta mb-2">Preview</p>
-                <div class="panel p-3">
-                    <div class="d-flex align-items-center gap-2 mb-2">
-                        <span style="color: var(--accent)">◆</span>
-                        <strong>@(_brand is { Length: > 0 } ? _brand : "LabbyTwo")</strong>
-                    </div>
-                    <div class="d-flex gap-2 align-items-center mb-2">
-                        <span class="status-dot status-up"></span><span class="tile-meta">Something that is up</span>
-                    </div>
-                    <div class="usage-bar mb-3"><span style="width: 62%"></span></div>
-                    <button class="btn btn-primary btn-sm">A button</button>
-                    <a class="ms-2" href="settings/appearance">and a link</a>
+                    Readings are always recorded in one unit so history stays comparable — this
+                    changes what you are shown. Existing alert thresholds keep meaning the same thing.
                 </div>
             </div>
         </div>
     </div>
 </div>
 
+@if (_confirmReset)
+{
+    <ConfirmDialog Title="Reset the appearance?"
+                   Message="Theme, accent, corners, cards, density, text size and typeface all go back to their defaults. The dashboard's name and your units are left alone."
+                   ConfirmText="Reset it"
+                   OnCancel="() => _confirmReset = false"
+                   OnConfirm="ResetAsync" />
+}
+
 @code {
-    private string _theme = Appearance.Default.Theme;
-    private string _accent = Appearance.Default.Accent;
-    private string _density = Appearance.Default.Density;
-    private string _brand = Appearance.Default.BrandName;
-    private string _units = Appearance.Default.UnitSystem;
+    private Appearance _look = Appearance.Default;
+    private bool _confirmReset;
+
+    private string Brand => _look.BrandName is { Length: > 0 } name ? name : Appearance.Default.BrandName;
+
+    /// <summary>
+    /// The note for whichever option is chosen. It lives under the box rather than inside the
+    /// option, because a select is as wide as its own box and not as wide as its longest
+    /// choice — "Outlined — A hairline border and no sha…" is what that costs.
+    /// </summary>
+    private static string Hint((string Value, string Label, string Hint)[] options, string value) =>
+        options.FirstOrDefault(option => option.Value == value).Hint ?? "";
 
     private static readonly (string Value, string Label, string Hint)[] Themes =
     [
@@ -112,53 +214,78 @@
         ("light", "Light", "Always light"),
     ];
 
-    private static readonly string[] Presets =
-        ["#4da3ff", "#35d07f", "#a78bfa", "#ff8a5c", "#f472b6", "#22d3ee", "#facc15"];
+    protected override async Task OnInitializedAsync() =>
+        _look = Appearance.From(await AppSettings.AllAsync());
 
-    protected override async Task OnInitializedAsync()
-    {
-        var look = Appearance.From(await AppSettings.AllAsync());
-        (_theme, _accent, _density, _brand) = (look.Theme, look.Accent, look.Density, look.BrandName);
-        _units = look.UnitSystem;
-    }
-
-    // The theme is read while the page is server-rendered, so a change only shows once the
-    // document is rebuilt — a reload of the current page is the honest way to apply it.
+    /// <summary>
+    /// The look is read while the page is server-rendered, so a change only shows once the
+    /// document is rebuilt — a reload of the current page is the honest way to apply it.
+    /// </summary>
     private async Task SaveAsync(string key, string value)
     {
         await AppSettings.SaveAsync(key, value);
         Nav.NavigateTo(Nav.Uri, forceLoad: true);
     }
 
-    private async Task SetThemeAsync(string value)
+    /// <summary>
+    /// One setter for every choice that comes from a fixed list. The list is the same one the
+    /// options were rendered from, so a value that is not in it came from something other than
+    /// this page and is ignored rather than stored.
+    /// </summary>
+    private async Task SetAsync(string key, string? value, (string Value, string Label, string Hint)[] allowed)
     {
-        _theme = value;
-        await SaveAsync(Appearance.ThemeKey, value);
+        if (value is null || !allowed.Any(option => option.Value == value))
+            return;
+
+        await SaveAsync(key, value);
     }
+
+    private Task SetAsync(string key, string value) => SaveAsync(key, value);
 
     private async Task SetAccentAsync(string? value)
     {
         if (!Appearance.IsValidColor(value))
             return;
-        _accent = value!;
+
         await SaveAsync(Appearance.AccentKey, value!);
     }
 
-    private async Task SetDensityAsync(string? value)
-    {
-        _density = value is "compact" or "roomy" ? value : "comfortable";
-        await SaveAsync(Appearance.DensityKey, _density);
-    }
+    /// <summary>A picker returns "#4DA3FF" for the swatch that stored "#4da3ff".</summary>
+    private static bool SameColour(string a, string b) =>
+        string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-    private async Task SetUnitsAsync(string? value)
-    {
-        _units = value == Units.Metric ? Units.Metric : Units.Imperial;
-        await SaveAsync(Appearance.UnitsKey, _units);
-    }
+    private async Task SetDensityAsync(string? value) =>
+        await SaveAsync(Appearance.DensityKey, value is "compact" or "roomy" ? value : "comfortable");
 
-    private async Task SetBrandAsync(string? value)
+    private async Task SetUnitsAsync(string? value) =>
+        await SaveAsync(Appearance.UnitsKey, value == Units.Metric ? Units.Metric : Units.Imperial);
+
+    private async Task SetBrandAsync(string? value) =>
+        await SaveAsync(Appearance.BrandKey,
+            value?.Trim() is { Length: > 0 } name ? name : Appearance.Default.BrandName);
+
+    /// <summary>
+    /// The look only. The dashboard's name and the unit system are settings that live on this
+    /// page for convenience rather than parts of the theme, and somebody clicking "reset the
+    /// appearance" is not asking to be renamed or to have their temperatures change scale.
+    /// </summary>
+    private async Task ResetAsync()
     {
-        _brand = value?.Trim() is { Length: > 0 } name ? name : Appearance.Default.BrandName;
-        await SaveAsync(Appearance.BrandKey, _brand);
+        _confirmReset = false;
+        var defaults = Appearance.Default;
+
+        await AppSettings.SaveAsync(new Dictionary<string, string>
+        {
+            [Appearance.ThemeKey] = defaults.Theme,
+            [Appearance.AccentKey] = defaults.Accent,
+            [Appearance.DensityKey] = defaults.Density,
+            [Appearance.RadiusKey] = defaults.Radius,
+            [Appearance.SurfaceKey] = defaults.Surface,
+            [Appearance.DarkPaletteKey] = defaults.DarkPalette,
+            [Appearance.TextScaleKey] = defaults.TextScale,
+            [Appearance.FontKey] = defaults.Font,
+        });
+
+        Nav.NavigateTo(Nav.Uri, forceLoad: true);
     }
 }
