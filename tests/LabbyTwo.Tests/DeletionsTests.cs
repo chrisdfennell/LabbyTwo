@@ -126,6 +126,44 @@ public sealed class DeletionsTests : IDisposable
         Assert.Null(widgets.Single(w => w.Id == "loose").ConnectionId);
     }
 
+    /// <summary>
+    /// Deleting twenty things at once is when a way back matters most, so a bulk delete
+    /// goes down the same path and lands as one offer rather than as twenty that have
+    /// already replaced each other.
+    /// </summary>
+    [Fact]
+    public async Task UndoingABulkDeleteBringsThemAllBackBoundAsTheyWere()
+    {
+        await _config.SaveTabAsync(new Tab { Id = "tab", Slug = "home", Name = "Home" });
+
+        foreach (var name in (string[])["Sonarr", "Radarr", "Prowlarr"])
+        {
+            await _config.SaveConnectionAsync(new Connection { Id = name, Provider = "http", Name = name });
+            await _config.SaveWidgetAsync(new Widget
+            {
+                Id = $"w-{name}", TabId = "tab", Type = "metric", ConnectionId = name,
+            });
+        }
+
+        var all = await _config.ConnectionsAsync();
+        await _deletions.ConnectionsAsync([.. all]);
+
+        Assert.Empty(await _config.ConnectionsAsync());
+
+        var offer = _undo.Current();
+        Assert.NotNull(offer);
+        Assert.Contains("3 connections", offer.Description);
+
+        Assert.True(await _undo.UndoAsync());
+
+        Assert.Equal(3, (await _config.ConnectionsAsync()).Count);
+
+        // Each card back on its own connection, not all on whichever was restored last.
+        var widgets = await _config.WidgetsAsync();
+        foreach (var name in (string[])["Sonarr", "Radarr", "Prowlarr"])
+            Assert.Equal(name, widgets.Single(w => w.Id == $"w-{name}").ConnectionId);
+    }
+
     [Fact]
     public async Task DeletingAConnectionSaysWhatUndoCannotBringBack()
     {

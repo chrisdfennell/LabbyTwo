@@ -886,6 +886,28 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .5rem;
 }
 
+/* ---------- acting on several rows at once ---------- */
+
+/* Sits inside the panel, above the table, in the accent rather than the panel colour so
+   that "nineteen selected" is not something you can scroll past on the way to Delete. */
+.bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+    padding: .5rem .75rem;
+    border-bottom: 1px solid var(--edge);
+    background: var(--accent-soft);
+    font-size: .9rem;
+}
+
+/* The rows the bar is talking about. Tinted rather than outlined: an outline on a table
+   row draws a box across cells that already have their own dividers, and the result reads
+   as a rendering fault. */
+.table > tbody > tr.is-selected > * {
+    background: var(--accent-soft);
+}
+
 /* ---------- undo ---------- */
 
 /* Centred at the bottom of the window. Not a corner, because a corner is where a

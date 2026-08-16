@@ -78,13 +78,55 @@ else
     else
     {
     <div class="panel">
-        @if (Shown.Count != _connections.Count)
+        @* The bulk bar takes the place of the count when there is a selection, rather than
+           appearing under it. Two lines of chrome above a table both saying something about
+           how many rows there are is one line too many. *@
+        @if (Selected.Count > 0)
+        {
+            <div class="bulk-bar">
+                <span><strong>@Selected.Count</strong> selected</span>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => SetEnabledAsync(true)">Enable</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => SetEnabledAsync(false)">Disable</button>
+
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                            @onclick="() => _silencingSelected = !_silencingSelected">Silence</button>
+                    @if (_silencingSelected)
+                    {
+                        <div class="dropdown-menu show" style="position:absolute; z-index:5">
+                            @foreach (var (label, span) in SilenceOptions)
+                            {
+                                <button class="dropdown-item" type="button"
+                                        @onclick="() => SilenceSelectedAsync(DateTimeOffset.Now + span)">@label</button>
+                            }
+                            <button class="dropdown-item" type="button"
+                                    @onclick="() => SilenceSelectedAsync(null)">Resume alerts</button>
+                        </div>
+                    }
+                </div>
+
+                <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDeleteSelected = true">Delete</button>
+                <button class="btn btn-sm btn-link ms-auto" @onclick="() => _selected.Clear()">Clear selection</button>
+            </div>
+        }
+        else if (Shown.Count != _connections.Count)
         {
             <div class="tile-meta px-3 pt-2">Showing @Shown.Count of @_connections.Count.</div>
         }
         <table class="table table-hover align-middle mb-0">
             <thead>
                 <tr>
+                    @if (Selectable)
+                    {
+                        @* Selects what is *shown*, not everything. The filter is the thing
+                           that makes a selection worth having — "Down only" then select-all
+                           then Silence is the whole point — and a box that quietly picked up
+                           rows scrolled out of sight by a filter would be a trap. *@
+                        <th style="width:2.25rem">
+                            <input type="checkbox" class="form-check-input" aria-label="Select all shown"
+                                   checked="@AllShownSelected" @onchange="ToggleAllShown" />
+                        </th>
+                    }
                     <th style="width:2.5rem"></th>
                     <th>Name</th>
                     <th>Type</th>
@@ -96,7 +138,16 @@ else
                 @foreach (var connection in Shown)
                 {
                     var state = Health.State(connection.Id);
-                    <tr>
+                    <tr class="@(_selected.Contains(connection.Id) ? "is-selected" : "")">
+                        @if (Selectable)
+                        {
+                            <td>
+                                <input type="checkbox" class="form-check-input"
+                                       aria-label="@($"Select {connection.Name}")"
+                                       checked="@_selected.Contains(connection.Id)"
+                                       @onchange="() => Toggle(connection.Id)" />
+                            </td>
+                        }
                         <td><span class="status-dot @DotClass(connection, state)"></span></td>
                         <td>
                             <div class="d-flex align-items-center gap-2">
@@ -239,6 +290,17 @@ else
                    OnConfirm="DeleteAsync" />
 }
 
+@if (_confirmDeleteSelected)
+{
+    @* Still confirmed, even though it can be undone. Undo covers the misclick; this covers
+       not having noticed that "select all" picked up nineteen rows rather than the two you
+       could see. *@
+    <ConfirmDialog Title="@($"Delete {Selected.Count} connections?")"
+                   Message="@($"{Names(Selected)} — and the history recorded against them — will be removed. Widgets using them will ask for a new one.")"
+                   OnCancel="() => _confirmDeleteSelected = false"
+                   OnConfirm="DeleteSelectedAsync" />
+}
+
 @code {
     private IReadOnlyList<Connection> _connections = [];
     private DateTimeOffset _now = DateTimeOffset.Now;
@@ -303,6 +365,83 @@ else
 
     private async Task LoadMaintenanceAsync() =>
         _maintenance = Maintenance.From(await AppSettings.AllAsync());
+
+    // ---------- acting on several at once ----------
+
+    private readonly HashSet<string> _selected = [];
+    private bool _silencingSelected;
+    private bool _confirmDeleteSelected;
+
+    /// <summary>
+    /// Same threshold as the filter, because these solve the same problem: a page long
+    /// enough that doing something to it a row at a time stops being reasonable. Below it,
+    /// a checkbox column is a column of chrome earning nothing.
+    /// </summary>
+    private bool Selectable => _connections.Count > 6;
+
+    /// <summary>
+    /// The selection, less anything that has since been filtered away or deleted. Kept as
+    /// a view rather than pruned on every change: a row hidden by a filter and then shown
+    /// again should come back still ticked, but must not be acted on while it is out of
+    /// sight — "Down only, select all, Delete" has to mean the rows on screen.
+    /// </summary>
+    private IReadOnlyList<Connection> Selected =>
+        [.. Shown.Where(connection => _selected.Contains(connection.Id))];
+
+    private bool AllShownSelected => Shown.Count > 0 && Shown.All(c => _selected.Contains(c.Id));
+
+    private void Toggle(string id)
+    {
+        if (!_selected.Add(id))
+            _selected.Remove(id);
+    }
+
+    private void ToggleAllShown()
+    {
+        // Reading the current state rather than the event argument: the header box is also
+        // driven by the rows, so "are they all on" is the only thing worth asking.
+        if (AllShownSelected)
+            foreach (var connection in Shown)
+                _selected.Remove(connection.Id);
+        else
+            foreach (var connection in Shown)
+                _selected.Add(connection.Id);
+    }
+
+    private static string Names(IReadOnlyList<Connection> connections) =>
+        connections.Count <= 3
+            ? string.Join(", ", connections.Select(c => $"“{c.Name}”"))
+            : $"“{connections[0].Name}”, “{connections[1].Name}” and {connections.Count - 2} more";
+
+    private async Task SetEnabledAsync(bool enabled)
+    {
+        foreach (var connection in Selected.Where(c => c.Enabled != enabled))
+            await Config.SaveConnectionAsync(connection with { Enabled = enabled });
+
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private async Task SilenceSelectedAsync(DateTimeOffset? until)
+    {
+        _silencingSelected = false;
+        foreach (var connection in Selected)
+            await Config.SilenceAsync(connection.Id, until);
+
+        _now = DateTimeOffset.Now;
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        _confirmDeleteSelected = false;
+        // One call, so twenty deletions are one row on the undo bar rather than nineteen
+        // that have already scrolled past.
+        await Deletions.ConnectionsAsync(Selected);
+        _selected.Clear();
+        await LoadAsync();
+    }
 
     private string Name(string id) =>
         _connections.FirstOrDefault(c => c.Id == id)?.Name ?? "";

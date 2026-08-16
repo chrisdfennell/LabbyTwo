@@ -45,34 +45,61 @@ public sealed class Deletions(ConfigStore config, NotesStore notes, UndoService 
         });
     }
 
-    public async Task ConnectionAsync(Connection connection, CancellationToken ct = default)
+    public Task ConnectionAsync(Connection connection, CancellationToken ct = default) =>
+        ConnectionsAsync([connection], ct);
+
+    /// <summary>
+    /// One or twenty, down one path. A bulk delete that skipped the capture would be the
+    /// one delete in the app with no way back, which is precisely backwards: deleting
+    /// twenty things at once is when you most want one.
+    /// </summary>
+    public async Task ConnectionsAsync(IReadOnlyCollection<Connection> connections, CancellationToken ct = default)
     {
+        if (connections.Count == 0)
+            return;
+
+        var ids = connections.Select(connection => connection.Id).ToHashSet();
+
         // Deleting a connection un-binds the cards that used it rather than removing them,
         // so they survive as "the connection this widget used is gone". Undo therefore has
-        // to re-bind them, or it puts the connection back and leaves the dashboard still
-        // covered in that message — an undo that visibly does not undo.
+        // to re-bind them, or it puts the connections back and leaves the dashboard still
+        // covered in that message — an undo that visibly does not undo. Which card went
+        // with which connection is recorded, not just that it was bound to something.
         var bound = (await config.WidgetsAsync(ct))
-            .Where(widget => widget.ConnectionId == connection.Id)
-            .Select(widget => widget.Id)
-            .ToHashSet();
+            .Where(widget => widget.ConnectionId is { } id && ids.Contains(id))
+            .Select(widget => (Widget: widget.Id, Connection: widget.ConnectionId!))
+            .ToList();
 
-        await config.DeleteConnectionAsync(connection.Id, ct);
+        foreach (var connection in connections)
+            await config.DeleteConnectionAsync(connection.Id, ct);
 
-        undo.Add(Describe("connection", connection.Name), async token =>
-        {
-            await config.SaveConnectionAsync(connection, token);
+        var one = connections.Count == 1;
 
-            if (bound.Count == 0)
-                return;
+        undo.Add(
+            one ? Describe("connection", connections.First().Name)
+                : $"Deleted {connections.Count} connections.",
+            async token =>
+            {
+                foreach (var connection in connections)
+                    await config.SaveConnectionAsync(connection, token);
 
-            foreach (var widget in (await config.WidgetsAsync(token)).Where(w => bound.Contains(w.Id)))
-                await config.SaveWidgetAsync(widget with { ConnectionId = connection.Id }, token);
-        },
-        // Said out loud because it is the one thing here that undo cannot deliver. The
-        // samples and status events go with the connection and are not captured: a month
-        // of history for twenty connections is not something to hold in memory against a
-        // twelve-second maybe.
-        caveat: "Its recorded history is not coming back.");
+                if (bound.Count == 0)
+                    return;
+
+                var widgets = await config.WidgetsAsync(token);
+                foreach (var (widgetId, connectionId) in bound)
+                {
+                    if (widgets.FirstOrDefault(widget => widget.Id == widgetId) is { } widget)
+                        await config.SaveWidgetAsync(widget with { ConnectionId = connectionId }, token);
+                }
+            },
+            // Said out loud because it is the one thing here that undo cannot deliver. The
+            // samples and status events go with the connection and are not captured: a
+            // month of history for twenty connections is not something to hold in memory
+            // against a twelve-second maybe.
+            caveat: one
+                ? "Its recorded history is not coming back."
+                : "Their recorded history is not coming back.");
     }
 
     private static string Describe(string kind, string name) =>
