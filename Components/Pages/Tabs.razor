@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @inject ConfigStore Config
+@inject Deletions Deletions
 @inject Registry Registry
 @inject NavigationManager Nav
 @inject ShareTransfer Share
@@ -296,7 +297,7 @@ else
     private async Task DeleteAsync()
     {
         if (_confirmDelete is not null)
-            await Config.DeleteTabAsync(_confirmDelete.Id);
+            await Deletions.TabAsync(_confirmDelete);
         _confirmDelete = null;
     }
 

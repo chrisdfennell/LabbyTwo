@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @inject ConfigStore Config
+@inject Deletions Deletions
 @inject Registry Registry
 @inject HealthMonitor Health
 @inject AppSettingsStore AppSettings
@@ -459,7 +460,7 @@ else
     private async Task DeleteAsync()
     {
         if (_confirmDelete is not null)
-            await Config.DeleteConnectionAsync(_confirmDelete.Id);
+            await Deletions.ConnectionAsync(_confirmDelete);
         _confirmDelete = null;
     }
 

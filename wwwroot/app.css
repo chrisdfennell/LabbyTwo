@@ -886,6 +886,51 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .5rem;
 }
 
+/* ---------- undo ---------- */
+
+/* Centred at the bottom of the window. Not a corner, because a corner is where a
+   dashboard puts things you are meant to ignore, and this one has about twelve seconds to
+   be noticed. Sits above the cards but below the Blazor error bar, which has a better
+   claim on the bottom of the screen than an undo does. */
+.undo-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 1.25rem;
+    transform: translateX(-50%);
+    z-index: 1070;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    max-width: min(34rem, calc(100vw - 2rem));
+    padding: .6rem .75rem .6rem 1rem;
+    border: 1px solid var(--edge);
+    border-radius: .6rem;
+    /* Deliberately the raised surface rather than the page's own, so it reads as
+       something laid on top of the dashboard rather than part of it. */
+    background: var(--panel-2);
+    box-shadow: 0 12px 32px var(--shadow);
+    font-size: .9rem;
+}
+
+.undo-text { min-width: 0; }
+
+/* On its own line: it is the part people need to read, and running it on after the
+   sentence is how it gets skipped. */
+.undo-caveat {
+    display: block;
+    color: var(--muted);
+    font-size: .8rem;
+}
+
+.undo-dismiss {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    line-height: 1;
+    padding: 0 .15rem;
+}
+.undo-dismiss:hover { color: var(--text); }
+
 /* ---------- maintenance window ---------- */
 
 /* Warn-coloured rather than red: nothing is wrong, something is deliberately off. Red

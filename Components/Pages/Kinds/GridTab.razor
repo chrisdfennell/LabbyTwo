@@ -1,5 +1,6 @@
 @implements IDisposable
 @inject ConfigStore Config
+@inject Deletions Deletions
 @inject ShareTransfer Share
 @inject Registry Registry
 @inject IJSRuntime JS
@@ -296,7 +297,7 @@ else
     private async Task DeleteConfirmedAsync()
     {
         if (_confirmDelete is { } widget)
-            await Config.DeleteWidgetAsync(widget.Id);
+            await Deletions.WidgetAsync(widget);
         _confirmDelete = null;
     }
 
