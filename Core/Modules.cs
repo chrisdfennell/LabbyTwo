@@ -126,7 +126,15 @@ public static class Modules
     /// The "+sha" suffix a source-linked build appends is dropped: it makes two identical
     /// versions look different, which would turn the mismatch warning into noise.
     /// </summary>
-    private static string Stamp(Assembly assembly) =>
+    /// <summary>
+    /// The version an assembly says it was built as — "v1.3.6" on anything the release
+    /// workflow stamped, and empty on a local build nobody did.
+    ///
+    /// Public because the plugin updater needs the same answer before discovery has run, and
+    /// two pieces of code deciding independently what version this is would eventually
+    /// disagree about whether a plugin matches.
+    /// </summary>
+    public static string Stamp(Assembly assembly) =>
         assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
             ?? assembly.GetName().Version?.ToString()
             ?? "";

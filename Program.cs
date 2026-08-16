@@ -60,8 +60,31 @@ var pluginDirectory = Path.GetFullPath(options.PluginPath, builder.Environment.C
 // fails to load must say so on the console, not only on the Settings page.
 using (var startupLogging = LoggerFactory.Create(logging => logging.AddConsole()))
 {
-    builder.Services.AddModules(typeof(Program).Assembly, pluginDirectory,
-        startupLogging.CreateLogger("Modules"));
+    var startupLog = startupLogging.CreateLogger("Modules");
+
+    // Before discovery, not after, and this is the whole reason it is here rather than in a
+    // background job: replacing a DLL that is already loaded does nothing until the next
+    // restart. Updating afterwards would leave every plugin stale for the entire life of the
+    // container that updated them — which, with Watchtower restarting things unattended, is
+    // every container. A few seconds here means one restart is enough.
+    //
+    // Off unless asked for, and it cannot fail the boot: UpdateAsync never throws, and the
+    // timeout is what stops a slow GitHub from holding the dashboard down.
+    if (await PluginAutoUpdate.EnabledAsync(options, builder.Environment))
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+        using var window = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+
+        var result = await PluginUpdater.UpdateAsync(
+            pluginDirectory, Modules.Stamp(typeof(Program).Assembly), http, startupLog, window.Token);
+
+        if (result.Updated.Count > 0)
+            startupLog.LogInformation("Updated {Count} plugin(s): {Names}", result.Updated.Count, string.Join(", ", result.Updated));
+        else if (result.Reason is { Length: > 0 } reason)
+            startupLog.LogInformation("Plugins not updated: {Reason}", reason);
+    }
+
+    builder.Services.AddModules(typeof(Program).Assembly, pluginDirectory, startupLog);
 }
 
 builder.Services.AddSingleton<Registry>();
