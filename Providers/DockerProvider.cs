@@ -25,7 +25,10 @@ public sealed class DockerProvider : IConnectionProvider
         new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10") { Advanced = true },
     ];
 
-    public sealed record ContainerInfo(string Name, string Image, string State, string Status);
+    /// <param name="Id">The full container id. Carried so a row can tell whether it is
+    /// LabbyTwo's own container, and so a restart can name the one thing that is unambiguous
+    /// — two stacks can each have a container called "app".</param>
+    public sealed record ContainerInfo(string Name, string Image, string State, string Status, string Id = "");
 
     /// <summary>
     /// "No such file or directory" is a true but useless thing to show someone. By far the
@@ -123,9 +126,34 @@ public sealed class DockerProvider : IConnectionProvider
                 name,
                 entry.TryGetProperty("Image", out var image) ? image.GetString() ?? "" : "",
                 entry.TryGetProperty("State", out var state) ? state.GetString() ?? "" : "",
-                entry.TryGetProperty("Status", out var status) ? status.GetString() ?? "" : ""));
+                entry.TryGetProperty("Status", out var status) ? status.GetString() ?? "" : "",
+                entry.TryGetProperty("Id", out var full) ? full.GetString() ?? "" : ""));
         }
         return [.. containers.OrderByDescending(c => c.State == "running").ThenBy(c => c.Name)];
+    }
+
+    /// <summary>
+    /// Restarts one container.
+    ///
+    /// Restart rather than stop and start, and deliberately the only thing offered: every
+    /// outcome of a restart is recoverable on its own, and a container this stopped would
+    /// stay stopped until somebody found a terminal. Given the socket is root on the host,
+    /// the smallest verb that does the job is the right one.
+    ///
+    /// Addressed by id where there is one — two stacks can each own a container called
+    /// "app", and a name that matches twice is the kind of ambiguity you find out about by
+    /// restarting the wrong thing.
+    /// </summary>
+    public static async Task RestartAsync(Connection connection, ContainerInfo container, CancellationToken ct)
+    {
+        var target = container.Id is { Length: > 0 } id ? id : container.Name;
+
+        await DockerSocket.PostAsync(
+            connection.Settings.Get("endpoint", DockerSocket.DefaultEndpoint),
+            // Longer than a probe: Docker holds the request open while the container stops,
+            // and a slow one taking ten seconds to shut down is normal rather than a fault.
+            TimeSpan.FromSeconds(60),
+            $"/containers/{target}/restart", null, ct);
     }
 
     private static Task<string> GetAsync(Connection connection, string path, CancellationToken ct) =>

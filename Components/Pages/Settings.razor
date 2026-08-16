@@ -280,6 +280,27 @@
                         does the same job without the dashboard holding the keys.
                     </p>
                 }
+
+                @* Separate from updating, and not gated on it. Restarting is the useful thing
+                   even on a box that lets Watchtower do the updates — a plugin has just been
+                   replaced, a setting wants reloading — and it needs only to know which
+                   container this is, not whether a newer image exists. *@
+                @if (_self?.Self is { } running)
+                {
+                    <hr class="my-3" />
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <button class="btn btn-sm btn-outline-secondary" disabled="@_restartingSelf"
+                                @onclick="() => _confirmRestart = true">
+                            @(_restartingSelf ? "Restarting…" : "Restart LabbyTwo")
+                        </button>
+                        <span class="tile-meta">@running.Container</span>
+                    </div>
+                    <div class="form-text">
+                        Stops and starts this container. The page goes away and comes back on its own —
+                        which is what you want after updating a plugin, since the new DLL is only read
+                        while LabbyTwo is starting.
+                    </div>
+                }
             </div>
         </div>
     </div>
@@ -659,7 +680,40 @@ docker compose restart labbytwo</code></pre>
                    OnConfirm="StartUpdateAsync" />
 }
 
+@if (_confirmRestart)
+{
+    <ConfirmDialog Title="Restart LabbyTwo?"
+                   Message="This page will go away and come back when the container has restarted. Anything you have open elsewhere will reconnect on its own."
+                   ConfirmText="Restart it"
+                   OnCancel="() => _confirmRestart = false"
+                   OnConfirm="RestartSelfAsync" />
+}
+
 @code {
+    // ---- restarting the container this runs in ----
+
+    private bool _confirmRestart;
+    private bool _restartingSelf;
+
+    private async Task RestartSelfAsync()
+    {
+        _confirmRestart = false;
+        _restartingSelf = true;
+        try
+        {
+            await Updater.RestartSelfAsync();
+        }
+        catch (Exception ex)
+        {
+            // Docker stops this process partway through answering, so the exception that
+            // arrives is usually the circuit dropping rather than a refusal. Only the ones
+            // that explain themselves — no socket, cannot identify the container — are worth
+            // showing, and those arrive before anything is asked of Docker at all.
+            _pluginResult = ex.GetBaseException().Message;
+            _restartingSelf = false;
+        }
+    }
+
     // ---- keeping the plugins in step with the host ----
 
     private bool _updatingPlugins;

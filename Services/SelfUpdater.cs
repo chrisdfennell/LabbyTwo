@@ -35,6 +35,81 @@ public sealed class SelfUpdater(ConfigStore config, IHttpClientFactory httpFacto
     public sealed record Status(bool Ready, bool Behind, Self? Self, string? Reason);
 
     /// <summary>
+    /// Restarts the container LabbyTwo is running in.
+    ///
+    /// The call does not return in the useful sense: Docker stops this process partway
+    /// through answering, so the circuit drops and the page has to notice and reconnect.
+    /// That is the honest behaviour of asking a program to restart itself, and the button
+    /// says so rather than appearing to hang.
+    ///
+    /// It exists because the plugin updater needs one. Plugins are replaced during startup,
+    /// so "update them, then restart" is the whole flow, and until now the second half meant
+    /// finding a terminal.
+    /// </summary>
+    public async Task RestartSelfAsync(CancellationToken ct = default)
+    {
+        var endpoint = await EndpointAsync()
+            ?? throw new InvalidOperationException(
+                "The Docker socket is not mounted, so nothing here can restart the container.");
+
+        var self = await IdentifyAsync(endpoint, ct)
+            ?? throw new InvalidOperationException(
+                "LabbyTwo could not work out which container it is running in, so it will not "
+                + "restart one and hope.");
+
+        await DockerSocket.PostAsync(endpoint, Timeout, $"/containers/{self.Container}/restart", null, ct);
+    }
+
+    /// <summary>
+    /// The container's own inspect payload, or null if this process cannot be placed.
+    ///
+    /// Asking for /containers/{hostname}/json is the cheap path and works whenever the
+    /// hostname is still the short id Docker assigned. It is not always: Compose and
+    /// Watchtower both create containers, a hostname can be set in the compose file, and a
+    /// name that matches no container 404s — which is what produced "could not work out
+    /// which container it is running in" on a box where the socket was mounted perfectly
+    /// well, and sent the reader off to fix the one thing that was not wrong.
+    ///
+    /// So when the cheap path misses, the list is read and the container whose id *starts
+    /// with* the hostname is taken. That is the same match Docker itself does for a short
+    /// id, and it costs one extra call on the only path that was already failing.
+    /// </summary>
+    private static async Task<string?> InspectAsync(string endpoint, CancellationToken ct)
+    {
+        var hostname = Environment.MachineName;
+
+        try
+        {
+            return await DockerSocket.GetAsync(endpoint, Timeout, $"/containers/{hostname}/json", ct);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        try
+        {
+            var listed = await DockerSocket.GetAsync(endpoint, Timeout, "/containers/json", ct);
+            using var containers = JsonDocument.Parse(listed);
+            if (containers.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+
+            foreach (var entry in containers.RootElement.EnumerateArray())
+            {
+                var id = entry.TryGetProperty("Id", out var raw) ? raw.GetString() ?? "" : "";
+                if (id.Length == 0 || !id.StartsWith(hostname, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                return await DockerSocket.GetAsync(endpoint, Timeout, $"/containers/{id}/json", ct);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// The socket to use: whichever the user configured on a Docker connection, falling
     /// back to the standard path. Reusing their connection means the endpoint they already
     /// got working — a named pipe, a TCP address — is the one this uses too.
@@ -115,15 +190,8 @@ public sealed class SelfUpdater(ConfigStore config, IHttpClientFactory httpFacto
     /// </summary>
     private static async Task<Self?> IdentifyAsync(string endpoint, CancellationToken ct)
     {
-        string inspected;
-        try
-        {
-            inspected = await DockerSocket.GetAsync(endpoint, Timeout, $"/containers/{Environment.MachineName}/json", ct);
-        }
-        catch (InvalidOperationException)
-        {
+        if (await InspectAsync(endpoint, ct) is not { } inspected)
             return null;
-        }
 
         using var container = JsonDocument.Parse(inspected);
         var name = container.RootElement.TryGetProperty("Name", out var rawName)
