@@ -1,0 +1,90 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject Registry Registry
+
+@* The last sweep's result, read back rather than re-run. A scan takes seconds and puts a
+   packet on every address in the range; doing one because somebody opened a dashboard would
+   be the card scanning the network every time a tab is switched. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a network scan.</p>
+}
+else if (_provider is null)
+{
+    <p class="tile-meta mb-0">This connection is not a network scan.</p>
+}
+else if (_devices.Count == 0)
+{
+    <p class="tile-meta mb-0">
+        Nothing recorded yet. The first sweep runs on the next schedule — or press <strong>Scan now</strong>
+        on the connection.
+    </p>
+}
+else
+{
+    <div class="lan-devices">
+        @foreach (var device in _shown)
+        {
+            <div class="lan-device">
+                <span class="status-dot status-up flex-none"></span>
+                <span class="lan-name text-truncate" title="@device.Address">@device.Label</span>
+
+                @if (ShowPorts && device.OpenPorts.Count > 0)
+                {
+                    <span class="lan-ports flex-none">@string.Join(" ", device.OpenPorts)</span>
+                }
+
+                <span class="tile-meta flex-none">@device.Milliseconds.ToString("0") ms</span>
+            </div>
+        }
+    </div>
+
+    @if (_devices.Count > _shown.Count)
+    {
+        <div class="tile-meta mt-2">+@(_devices.Count - _shown.Count) more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private LanScanProvider? _provider;
+    private IReadOnlyList<LanScanProvider.Device> _devices = [];
+    private IReadOnlyList<LanScanProvider.Device> _shown = [];
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 12), 1, 200);
+    private bool ShowPorts => Context.Widget.Settings.GetBool("show_ports", true);
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        _provider = Registry.Provider(Context.Connection.Provider) as LanScanProvider;
+        if (_provider is null)
+            return;
+
+        var seen = await _provider.LastSeenAsync(Context.Connection);
+
+        // Named devices first: an address with a name is one you can recognise, and a column
+        // of bare numbers is what makes a scan hard to read.
+        _devices = [.. seen
+            .OrderByDescending(device => device.Name.Length > 0)
+            .ThenBy(device => device.Label, StringComparer.OrdinalIgnoreCase)];
+
+        _shown = [.. _devices.Take(Limit)];
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

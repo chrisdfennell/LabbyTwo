@@ -1,6 +1,6 @@
 # Example plugins
 
-Thirteen plugins that build, load and do something worth having. They are meant to be
+Fourteen plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
@@ -11,6 +11,7 @@ same way yours will.
 | Plugin | Adds | What it is for |
 |---|---|---|
 | [TerminalPlugin](LabbyTwo.TerminalPlugin) | provider + widget + tab kind + endpoint | A real shell in the dashboard — SSH to a host, or into a running container. |
+| [LanScanPlugin](LabbyTwo.LanScanPlugin) | provider + widget | Sweeps a subnet and reports what answered, and what is new since last time. |
 | [GluetunPlugin](LabbyTwo.GluetunPlugin) | provider | Whether your VPN tunnel is up, which country it exits from, and the forwarded port. |
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
 | [GoogleCalendarPlugin](LabbyTwo.GoogleCalendarPlugin) | provider + widget + tab kind + endpoint | A Google calendar you can write to — month, week and list views, and adding events. |
