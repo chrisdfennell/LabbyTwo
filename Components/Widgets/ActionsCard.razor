@@ -1,0 +1,118 @@
+@implements IDisposable
+@inject Registry Registry
+@inject HealthMonitor Health
+
+@* Recent workflow runs. The question this answers is "did the thing I just pushed build",
+   which is otherwise a tab switch and a wait — and the answer is usually yes, which is
+   exactly why it belongs on a dashboard rather than in a browser tab. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a GitHub connection.</p>
+}
+else if (_provider is null)
+{
+    <p class="tile-meta mb-0">This connection is not a GitHub server.</p>
+}
+else if (_error is { Length: > 0 })
+{
+    <p class="tile-meta mb-0">@_error</p>
+}
+else if (_runs is null)
+{
+    <p class="tile-meta mb-0">Loading…</p>
+}
+else if (_runs.Count == 0)
+{
+    <p class="tile-meta mb-0">No workflow runs on the repositories being watched.</p>
+}
+else
+{
+    <div class="ci-runs">
+        @foreach (var run in _runs)
+        {
+            <a class="ci-run" href="@run.Url" target="_blank" rel="noopener" title="@Title(run)">
+                <span class="ci-mark @MarkClass(run)" aria-hidden="true">@Mark(run)</span>
+                <span class="ci-what min-w-0">
+                    <span class="ci-name text-truncate">@run.Name</span>
+                    <span class="ci-where text-truncate">@run.Repo · @run.Branch</span>
+                </span>
+                <span class="ci-when flex-none">@Ago.Since(run.At)</span>
+            </a>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<CiRun>? _runs;
+    private GitHubProvider? _provider;
+    private string _error = "";
+
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 6), 1, 20);
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (Context.Connection is null)
+            return;
+
+        _provider = Registry.Provider(Context.Connection.Provider) as GitHubProvider;
+        if (_provider is null)
+            return;
+
+        try
+        {
+            _error = "";
+            _runs = await _provider.RunsAsync(Context.Connection, Limit, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // A card that has gone quiet because a token expired should say so rather than
+            // sit on the last good answer for ever.
+            _error = ex.GetBaseException().Message;
+            _runs = null;
+        }
+    }
+
+    /// <summary>Emoji rather than a coloured dot, because "cancelled" is not a shade of red.</summary>
+    private static string Mark(CiRun run) => run switch
+    {
+        { Running: true } => "◍",
+        { Ok: true } => "✓",
+        { Conclusion: "cancelled" or "skipped" } => "–",
+        _ => "✕",
+    };
+
+    private static string MarkClass(CiRun run) => run switch
+    {
+        { Running: true } => "is-running",
+        { Ok: true } => "is-ok",
+        { Conclusion: "cancelled" or "skipped" } => "is-skipped",
+        _ => "is-failed",
+    };
+
+    private static string Title(CiRun run) =>
+        run.Running
+            ? $"{run.Name} — running, started {Ago.Since(run.At)}"
+            : $"{run.Name} — {run.Conclusion} in {Length(run.Duration)}";
+
+    private static string Length(TimeSpan span) => span.TotalMinutes switch
+    {
+        < 1 => $"{span.Seconds}s",
+        < 60 => $"{(int)span.TotalMinutes}m {span.Seconds}s",
+        _ => $"{(int)span.TotalHours}h {span.Minutes}m",
+    };
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

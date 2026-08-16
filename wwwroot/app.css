@@ -886,6 +886,39 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .5rem;
 }
 
+/* ---------- workflow runs ---------- */
+
+.ci-runs { display: grid; gap: .1rem; }
+
+.ci-run {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: .35rem .4rem;
+    border-radius: .35rem;
+    color: var(--text);
+}
+.ci-run:hover { background: var(--panel-2); text-decoration: none; }
+
+/* Fixed width so the names line up down the card whatever the mark is — a column of
+   labels that shifts by a character between rows is hard to read down. */
+.ci-mark {
+    width: 1.1rem;
+    flex: none;
+    text-align: center;
+    font-weight: 700;
+    line-height: 1;
+}
+.ci-mark.is-ok { color: var(--up); }
+.ci-mark.is-failed { color: var(--down); }
+.ci-mark.is-skipped { color: var(--muted); }
+.ci-mark.is-running { color: var(--accent); animation: maintenance-pulse 1.4s ease-in-out infinite; }
+
+.ci-what { display: grid; flex: 1; }
+.ci-name { font-size: .9rem; }
+.ci-where { color: var(--muted); font-size: .78rem; }
+.ci-when { color: var(--muted); font-size: .78rem; }
+
 /* ---------- acting on several rows at once ---------- */
 
 /* Sits inside the panel, above the table, in the accent rather than the panel colour so
