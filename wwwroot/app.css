@@ -1016,6 +1016,25 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     font-size: .8rem;
 }
 
+/* ---------- the plugin catalogue ---------- */
+
+.plugin-catalogue { display: grid; gap: .15rem; }
+
+.plugin-row {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .3rem .4rem;
+    border-radius: var(--radius-inner);
+}
+.plugin-row:hover { background: var(--panel-2); }
+
+.plugin-name { font-size: .9rem; }
+
+/* Pushes the buttons right on the rows that have one on each side of the gap. The install
+   button carries its own ms-auto for the rows that do not. */
+.plugin-row .badge { margin-left: auto; }
+
 /* ---------- network scan ---------- */
 
 .lan-devices { display: grid; gap: .15rem; }

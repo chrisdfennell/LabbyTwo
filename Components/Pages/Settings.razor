@@ -632,12 +632,67 @@ docker compose restart labbytwo</code></pre>
                     </div>
                 }
 
-                @* Keeping thirteen plugins in step with the host by hand is thirteen downloads
-                   after every update, which is why the warning above used to be the end of the
-                   story. *@
+                @* Browse what this release publishes, and install without a terminal. The
+                   catalogue is the release itself: every bundled plugin is attached to it, so
+                   there is no index to keep in step with what actually ships. *@
+                <hr class="my-3" />
+
+                <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@_browsing"
+                            @onclick="BrowseAsync">
+                        @(_browsing ? "Looking…" : _available is null ? "Browse available plugins" : "Refresh the list")
+                    </button>
+                    @if (_available is not null)
+                    {
+                        <span class="tile-meta">@_available.Count published for @Catalog.HostVersion</span>
+                    }
+                </div>
+
+                @if (_browseError is { Length: > 0 })
+                {
+                    <div class="tile-meta text-warning mb-2">@_browseError</div>
+                }
+
+                @if (_available is { Count: > 0 })
+                {
+                    <div class="plugin-catalogue mb-2">
+                        @foreach (var plugin in _available)
+                        {
+                            var installed = IsInstalled(plugin.Name);
+                            <div class="plugin-row">
+                                <span class="plugin-name text-truncate" title="@plugin.Name">
+                                    @Short(plugin.Name)
+                                </span>
+                                <span class="tile-meta flex-none">@Download(plugin.Bytes)</span>
+
+                                @if (installed)
+                                {
+                                    <span class="badge text-bg-secondary flex-none">installed</span>
+                                    <button class="btn btn-sm btn-outline-danger flex-none"
+                                            disabled="@(_workingOn is { Length: > 0 })"
+                                            @onclick="() => RemovePluginAsync(plugin.Name)">Remove</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary flex-none ms-auto"
+                                            disabled="@(_workingOn is { Length: > 0 })"
+                                            @onclick="() => InstallPluginAsync(plugin.Name)">
+                                        @(_workingOn == plugin.Name ? "Installing…" : "Install")
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <div class="form-text mb-3">
+                        Installed into your plugins folder and loaded on the next start — assemblies are
+                        read while LabbyTwo boots, so nothing appears until it restarts. There is a button
+                        for that under Updates.
+                    </div>
+                }
+
                 @if (Catalog.Plugins.Any())
                 {
-                    <hr class="my-3" />
 
                     <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
                         <button class="btn btn-sm btn-outline-secondary" disabled="@_updatingPlugins"
@@ -690,6 +745,93 @@ docker compose restart labbytwo</code></pre>
 }
 
 @code {
+    // ---- installing plugins ----
+
+    private IReadOnlyList<PluginUpdater.Available>? _available;
+    private bool _browsing;
+    private string _browseError = "";
+    private string _workingOn = "";
+
+    /// <summary>
+    /// Every plugin here is called LabbyTwo.SomethingPlugin, and a column of that prefix
+    /// repeated fourteen times is fourteen chances to read the wrong row.
+    /// </summary>
+    private static string Short(string name) =>
+        name.StartsWith("LabbyTwo.", StringComparison.Ordinal) ? name["LabbyTwo.".Length..] : name;
+
+    /// <summary>The archive size. Named Download because Size is already the database's.</summary>
+    private static string Download(long bytes) =>
+        bytes <= 0 ? "" : bytes < 1024 * 1024 ? $"{bytes / 1024} KB" : $"{bytes / 1024d / 1024d:0.#} MB";
+
+    /// <summary>
+    /// Matched against what discovery actually loaded rather than against the folder, so a
+    /// DLL that is present and broken does not read as installed and working.
+    /// </summary>
+    private bool IsInstalled(string name) =>
+        Catalog.Plugins.Any(plugin => string.Equals(plugin.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    private async Task BrowseAsync()
+    {
+        _browsing = true;
+        _browseError = "";
+        try
+        {
+            _available = await PluginUpdater.AvailableAsync(Catalog.HostVersion, HttpFactory.CreateClient());
+        }
+        catch (Exception ex)
+        {
+            _available = null;
+            _browseError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _browsing = false;
+        }
+    }
+
+    private async Task InstallPluginAsync(string name)
+    {
+        _workingOn = name;
+        _pluginResult = "";
+        try
+        {
+            await PluginUpdater.InstallAsync(
+                Catalog.PluginDirectory, Catalog.HostVersion, name, HttpFactory.CreateClient());
+
+            _pluginResult = $"Installed {Short(name)}. Restart LabbyTwo to load it.";
+        }
+        catch (Exception ex)
+        {
+            _pluginResult = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _workingOn = "";
+        }
+    }
+
+    private Task RemovePluginAsync(string name)
+    {
+        _workingOn = name;
+        try
+        {
+            var removed = PluginUpdater.Remove(Catalog.PluginDirectory, name);
+
+            _pluginResult = removed.Count > 0
+                ? $"Removed {removed.Count} file(s) for {Short(name)}. Restart LabbyTwo to unload it."
+                : $"Nothing of {Short(name)} left to remove — restart to unload it.";
+        }
+        catch (Exception ex)
+        {
+            _pluginResult = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _workingOn = "";
+        }
+        return Task.CompletedTask;
+    }
+
     // ---- restarting the container this runs in ----
 
     private bool _confirmRestart;

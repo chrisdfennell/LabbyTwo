@@ -70,63 +70,143 @@ public static class PluginUpdater
         if (installed.Count == 0)
             return Result.Nothing("No plugins installed.");
 
-        JsonDocument release;
+        IReadOnlyList<Available> published;
         try
         {
-            using var request = new HttpRequestMessage(
-                HttpMethod.Get, $"https://api.github.com/repos/{Repository}/releases/tags/{hostVersion}");
-            request.Headers.TryAddWithoutValidation("User-Agent", "LabbyTwo");
-            request.Headers.TryAddWithoutValidation("Accept", "application/vnd.github+json");
-
-            using var response = await http.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-                return Result.Nothing($"No published release for {hostVersion}.");
-
-            release = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            published = await AvailableAsync(hostVersion, http, ct);
         }
         catch (Exception ex)
         {
-            return Result.Nothing($"Could not reach GitHub: {ex.GetBaseException().Message}");
+            return Result.Nothing(ex.GetBaseException().Message);
         }
 
-        using var _ = release;
+        var updated = new List<string>();
+
+        foreach (var plugin in published)
+        {
+            // Only what is already here. This is an updater; installing something nobody
+            // asked for is what the install button is for, and doing it automatically would
+            // turn switching this on into installing all fourteen.
+            if (!installed.Contains(plugin.Name))
+                continue;
+
+            try
+            {
+                await ReplaceAsync(directory, plugin.Name, plugin.Url, http, ct);
+                updated.Add(plugin.Name);
+            }
+            catch (Exception ex)
+            {
+                // One plugin that will not download must not stop the other twelve.
+                log?.LogWarning(ex, "Could not update the {Plugin} plugin", plugin.Name);
+            }
+        }
+
+        return new Result(updated, null);
+    }
+
+    /// <param name="Name">The assembly's own name, which is also what is on disk.</param>
+    /// <param name="Bytes">The archive's size, so a list can say what a click will fetch.</param>
+    public sealed record Available(string Name, string Url, long Bytes);
+
+    /// <summary>
+    /// Every plugin published for this version of LabbyTwo.
+    ///
+    /// The release is the catalogue: each bundled plugin is attached as
+    /// "LabbyTwo.TerminalPlugin-v1.3.9.zip", so the part before the version is the assembly
+    /// name and the list needs no index file to maintain alongside it. A plugin published
+    /// for a *different* version is not offered at all — installing one would reproduce
+    /// exactly the half-loading this whole area exists to prevent.
+    /// </summary>
+    public static async Task<IReadOnlyList<Available>> AvailableAsync(
+        string hostVersion, HttpClient http, CancellationToken ct = default)
+    {
+        if (hostVersion.Length == 0)
+            throw new InvalidOperationException(
+                "This build is not stamped with a version, so there is no release to list.");
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, $"https://api.github.com/repos/{Repository}/releases/tags/{hostVersion}");
+        request.Headers.TryAddWithoutValidation("User-Agent", "LabbyTwo");
+        request.Headers.TryAddWithoutValidation("Accept", "application/vnd.github+json");
+
+        using var response = await http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"No published release for {hostVersion}.");
+
+        using var release = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
 
         if (!release.RootElement.TryGetProperty("assets", out var assets)
             || assets.ValueKind != JsonValueKind.Array)
         {
-            return Result.Nothing($"The {hostVersion} release has nothing attached.");
+            return [];
         }
 
-        var updated = new List<string>();
+        var suffix = $"-{hostVersion}.zip";
+        var found = new List<Available>();
 
         foreach (var asset in assets.EnumerateArray())
         {
             var file = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
             var url = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
+            var size = asset.TryGetProperty("size", out var s) && s.TryGetInt64(out var bytes) ? bytes : 0;
 
-            // "LabbyTwo.TerminalPlugin-v1.3.6.zip" — the part before the version is the
-            // assembly's own name, which is what is on disk.
-            var suffix = $"-{hostVersion}.zip";
             if (!file.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) || url.Length == 0)
                 continue;
 
-            var name = file[..^suffix.Length];
-            if (!installed.Contains(name))
-                continue;   // not installed here — this is not an installer
+            found.Add(new Available(file[..^suffix.Length], url, size));
+        }
 
+        return [.. found.OrderBy(plugin => plugin.Name, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// Installs one by name, whether or not it is already here.
+    ///
+    /// The same download and unpack as an update — the only difference is that this one is
+    /// asked for rather than inferred, which is the entire reason the updater refuses to do
+    /// it on its own.
+    /// </summary>
+    public static async Task InstallAsync(
+        string directory, string hostVersion, string name, HttpClient http, CancellationToken ct = default)
+    {
+        var plugin = (await AvailableAsync(hostVersion, http, ct))
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Nothing called “{name}” is published for {hostVersion}.");
+
+        Directory.CreateDirectory(directory);
+        await ReplaceAsync(directory, plugin.Name, plugin.Url, http, ct);
+    }
+
+    /// <summary>
+    /// Takes one out. The files it brought with it go too, except any a still-installed
+    /// plugin also uses.
+    /// </summary>
+    public static IReadOnlyList<string> Remove(string directory, string name)
+    {
+        var removed = new List<string>();
+
+        foreach (var file in PluginManifest.RemovableFor(directory, name))
+        {
             try
             {
-                await ReplaceAsync(directory, name, url, http, ct);
-                updated.Add(name);
+                var path = Path.Combine(directory, file);
+                if (!File.Exists(path))
+                    continue;
+
+                File.Delete(path);
+                removed.Add(file);
             }
-            catch (Exception ex)
+            catch (IOException)
             {
-                // One plugin that will not download must not stop the other twelve.
-                log?.LogWarning(ex, "Could not update the {Plugin} plugin", name);
+                // Windows holds a loaded assembly open, so a plugin cannot always delete
+                // itself while running. What could go, went; the rest goes on the restart
+                // that is needed anyway.
             }
         }
 
-        return new Result(updated, null);
+        PluginManifest.Forget(directory, name);
+        return removed;
     }
 
     /// <summary>
@@ -160,14 +240,19 @@ public static class PluginUpdater
             var unpacked = Path.Combine(staging, "unpacked");
             ZipFile.ExtractToDirectory(archive, unpacked);
 
+            var written = new List<string>();
+
             foreach (var source in Directory.GetFiles(unpacked, "*", SearchOption.AllDirectories))
             {
                 // Flattened deliberately: the plugin loader scans one folder, and an archive
                 // with a stray subdirectory in it would otherwise install a plugin nothing
                 // ever looks at.
-                var target = Path.Combine(directory, Path.GetFileName(source));
-                File.Copy(source, target, overwrite: true);
+                var leaf = Path.GetFileName(source);
+                File.Copy(source, Path.Combine(directory, leaf), overwrite: true);
+                written.Add(leaf);
             }
+
+            PluginManifest.Record(directory, name, written);
         }
         finally
         {
@@ -179,6 +264,98 @@ public static class PluginUpdater
             {
                 // A leftover temp folder is not worth failing an update over.
             }
+        }
+    }
+}
+
+/// <summary>
+/// What each installed archive put in the plugins folder.
+///
+/// Kept because removal cannot be guessed at. A plugin's zip is not one DLL — the terminal
+/// one carries SSH.NET beside it — so "delete the file named after it" leaves the library
+/// behind, and "delete everything that arrived with it" would take a shared dependency out
+/// from under a plugin still using it. Recording what each one wrote makes both answerable.
+///
+/// A plain JSON file in the plugins folder rather than a table: it describes that folder, it
+/// has to survive a container being replaced, and it is read before there is a database.
+/// Losing it costs nothing worse than removal falling back to the obvious file.
+/// </summary>
+public static class PluginManifest
+{
+    private const string FileName = ".labby-plugins.json";
+
+    public static Dictionary<string, List<string>> Read(string directory)
+    {
+        var path = Path.Combine(directory, FileName);
+        if (!File.Exists(path))
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, List<string>>>(File.ReadAllText(path)) ?? [];
+        }
+        catch (Exception ex) when (ex is JsonException or IOException)
+        {
+            return [];
+        }
+    }
+
+    public static void Record(string directory, string name, IReadOnlyList<string> files)
+    {
+        try
+        {
+            var all = Read(directory);
+            all[name] = [.. files];
+            File.WriteAllText(
+                Path.Combine(directory, FileName),
+                JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException)
+        {
+            // A manifest that cannot be written is not worth failing an install over — the
+            // plugin is already on disk and working. Removal falls back to the obvious file.
+        }
+    }
+
+    /// <summary>
+    /// The files that belong to this plugin and to nothing else. A dependency shared with
+    /// another installed plugin is left where it is: an orphaned DLL is inert, and taking one
+    /// out from under a plugin that is still using it is not.
+    /// </summary>
+    public static IReadOnlyList<string> RemovableFor(string directory, string name)
+    {
+        var all = Read(directory);
+
+        if (!all.TryGetValue(name, out var mine))
+        {
+            // Nothing recorded — installed by hand, or before the manifest existed. The file
+            // named after it is the one thing that is certainly its.
+            var guess = name + ".dll";
+            return File.Exists(Path.Combine(directory, guess)) ? [guess] : [];
+        }
+
+        var others = all
+            .Where(entry => !string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(entry => entry.Value)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return [.. mine.Where(file => !others.Contains(file))];
+    }
+
+    public static void Forget(string directory, string name)
+    {
+        try
+        {
+            var all = Read(directory);
+            if (!all.Remove(name))
+                return;
+
+            File.WriteAllText(
+                Path.Combine(directory, FileName),
+                JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException)
+        {
         }
     }
 }
