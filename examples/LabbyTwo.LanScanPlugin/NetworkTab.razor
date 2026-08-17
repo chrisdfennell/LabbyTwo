@@ -46,21 +46,25 @@
 else
 {
     <div class="row g-3 mb-3">
+        @* h-100 on every tile, because a widget sizes to its content and these four do not
+           have the same amount of it — one line of sub-text short and the box is visibly
+           stubbier than the three beside it. *@
         <div class="col-6 col-lg-3">
-            <div class="widget">
+            <div class="widget h-100">
                 <div class="widget-head"><span class="widget-title">Answering</span></div>
                 <div class="metric-value">@_devices.Count</div>
+                <div class="tile-meta">@_devices.Count(d => d.Mac.Length > 0) with a hardware address</div>
             </div>
         </div>
         <div class="col-6 col-lg-3">
-            <div class="widget">
+            <div class="widget h-100">
                 <div class="widget-head"><span class="widget-title">Named</span></div>
                 <div class="metric-value">@_devices.Count(d => d.Name.Length > 0)</div>
                 <div class="tile-meta">of @_devices.Count</div>
             </div>
         </div>
         <div class="col-6 col-lg-3">
-            <div class="widget">
+            <div class="widget h-100">
                 <div class="widget-head"><span class="widget-title">Last swept</span></div>
                 <div class="metric-value" style="font-size:1.4rem">
                     @(_state?.At is { } at ? at.ToString("HH:mm") : "—")
@@ -69,7 +73,7 @@ else
             </div>
         </div>
         <div class="col-6 col-lg-3">
-            <div class="widget">
+            <div class="widget h-100">
                 <div class="widget-head"><span class="widget-title">Subnet</span></div>
                 <div class="metric-value" style="font-size:1.1rem">@_scan.Settings.Get("subnet")</div>
                 <div class="tile-meta">@Subnet.Count(_scan.Settings.Get("subnet")) addresses</div>
@@ -156,7 +160,20 @@ else
             <p class="tile-meta mt-2">
                 No hardware addresses from here. ARP only reaches the same network segment, and LabbyTwo
                 is on a Docker bridge — replies from the LAN arrive routed through the gateway, so the
-                addresses never reach it. Host networking or a macvlan would show them; nothing else will.
+                addresses never reach it. Two ways to have them anyway, on the connection's settings:
+                let something already on the LAN write its table out on a timer and point
+                <strong>ARP table</strong> at that file, or put LabbyTwo on the LAN itself with host
+                networking or a macvlan — which costs you reaching other containers by name.
+                <strong>Ask devices their name</strong> is routed rather than broadcast, so it works from
+                here regardless, and brings back hardware addresses from anything running Windows.
+            </p>
+        }
+        else if (_devices.Any(device => device.Mac.Length == 0))
+        {
+            <p class="tile-meta mt-2">
+                @_devices.Count(device => device.Mac.Length == 0) of @_devices.Count have no hardware
+                address. Anything that does not answer NetBIOS — phones, most appliances — needs the
+                <strong>ARP table</strong> setting to be filled in from the LAN side.
             </p>
         }
     }
