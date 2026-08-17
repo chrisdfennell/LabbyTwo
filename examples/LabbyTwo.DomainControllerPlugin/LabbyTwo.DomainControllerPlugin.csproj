@@ -1,0 +1,21 @@
+<!-- Plain SDK, and no dependencies. Everything here is a socket: the point of this plugin
+     is that it needs nothing installed on the domain controller and no credentials. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+
+    <!-- The packet building and parsing are internal because nothing outside this plugin
+         should call them, and they are also the part most worth testing: a byte offset in a
+         protocol reader is silent, and a clock offset that is wrong by an epoch reports a
+         perfectly healthy DC as seventy years out. -->
+    <InternalsVisibleTo Include="LabbyTwo.Tests" />
+  </ItemGroup>
+
+</Project>
