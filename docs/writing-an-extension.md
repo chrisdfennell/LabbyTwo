@@ -149,7 +149,10 @@ charts.
   often rather than a cached one dressed up as a new measurement. The Test button ignores
   it and always makes the request.
 - **Implement `IAlertChannel` instead** and your provider becomes somewhere notifications
-  are *sent*, with the same generated form and encrypted storage. See `WebhookProvider`.
+  are *sent*, with the same generated form and encrypted storage. See `WebhookProvider`, or
+  `NtfyPlugin` in [`examples/`](../examples) for one that arrives as a plugin. `ProbeAsync`
+  is only a shape check on a channel — the Test button calls `SendAsync` and delivers a
+  real notification, which is the test worth having.
 - **Implement `IGitForge` as well** and your provider becomes a Git server: the Git
   summary, repositories and open-work cards and the whole Git server page will bind to it,
   with no change to any of them. Derive from `CachedGitForge` and you get the caching that
@@ -539,9 +542,9 @@ warnings as errors, and each release attaches a zip of each one, so a merged plu
 installable by everybody from the next release. [`examples/README.md`](../examples/README.md)
 lists what one needs to be merged.
 
-## Fourteen that work
+## Twenty-five that work
 
-[`examples/`](../examples) has fourteen plugins that build and run, covering every extension
+[`examples/`](../examples) has twenty-five plugins that build and run, covering every extension
 point on this page. Start from whichever is closest to what you are writing:
 
 | If you are writing | Read |
@@ -560,6 +563,15 @@ point on this page. Start from whichever is closest to what you are writing:
 | Work on a timer | `DropPlugin` — a tab kind, an endpoint and a background job in one DLL |
 | Something that sweeps rather than asks | `LanScanPlugin` — a range of addresses, a bounded fan-out, remembering what it saw last time, and a card and a page over the same data |
 | Something that streams, or that acts rather than watches | `TerminalPlugin` — a WebSocket from an endpoint, a third-party library shipped beside the DLL, and a permission boundary that is checked where it matters |
+| Somewhere notifications are sent | `NtfyPlugin` — an `IAlertChannel`, and why the message body is JSON rather than headers |
+| An endpoint another machine reads | `MetricsExportPlugin` — a token where a login cannot go, and Prometheus' text format |
+| A page for people who have no login | `StatusPagePlugin` — `RequiresAuthorization => false`, HTML written by the endpoint, and deciding what a stranger gets told |
+| Something that is *told* rather than asks | `InboxPlugin` — a route other machines POST to, its own table, a timeline tab and a purge job |
+| Work at a wall-clock time | `WakePlugin` — a one-minute job with a schedule, and why a missed minute stays missed |
+| An importer for something that is not a file | `DockerLabelsPlugin` — a pure importer, plus an endpoint that produces the file it reads |
+| Buttons that depend on what is happening right now | `MoonrakerPlugin` — `ActionsFor` reading state the probe cached, so Pause is absent unless something is printing |
+| A provider that reads a file rather than a network | `WireGuardPlugin` — and treating a stale file as a fault rather than as a reading |
+| A binary protocol, with no library | `MinecraftPlugin` — varint framing over a raw TCP socket |
 
 ### The rules
 

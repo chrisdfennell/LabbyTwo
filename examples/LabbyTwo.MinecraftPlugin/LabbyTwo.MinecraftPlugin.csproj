@@ -1,0 +1,14 @@
+<!-- Plain SDK. Players online is a number, so the built-in metric and chart cards draw it. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

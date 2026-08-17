@@ -1,0 +1,14 @@
+<!-- Plain SDK: a provider that holds the token, and an endpoint that answers the scrape. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,107 @@
+@inject Db Database
+@inject ConfigStore Config
+
+@* What has come in, newest first. Read-only on purpose: an event is a record of something
+   that already happened, and editing it would make the timeline a worse record than the
+   thing it describes. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "📬" : Tab.Icon) @Tab.Name</h1>
+        <p class="subtitle">
+            @if (_events.Count == 0)
+            {
+                <text>Nothing has been posted here yet.</text>
+            }
+            else
+            {
+                @($"{_events.Count} event{(_events.Count == 1 ? "" : "s")}")
+                @if (_inboxName is { Length: > 0 })
+                {
+                    <text> from @_inboxName</text>
+                }
+            }
+        </p>
+    </div>
+</div>
+
+@if (_error.Length > 0)
+{
+    <div class="alert alert-warning py-2">@_error</div>
+}
+
+@if (_events.Count == 0 && _error.Length == 0)
+{
+    <div class="widget">
+        <div class="widget-body">
+            <p class="mb-2">Post something to it and it will appear here:</p>
+            <pre class="mb-0"><code>curl -fsS -X POST "@(_exampleUrl)" \
+     -d "Nightly backup finished"</code></pre>
+            <p class="form-text mt-2 mb-0">
+                Add <code>&amp;level=down</code> to raise an alert, and <code>&amp;source=backup</code>
+                to say what is reporting.
+            </p>
+        </div>
+    </div>
+}
+else
+{
+    <div class="widget">
+        <div class="widget-body p-0">
+            <ul class="list-group list-group-flush">
+                @foreach (var entry in _events)
+                {
+                    <li class="list-group-item d-flex gap-3 align-items-start">
+                        <span title="@entry.Level">@entry.Emoji</span>
+                        <div class="flex-grow-1">
+                            <div class="d-flex gap-2 flex-wrap align-items-baseline">
+                                <strong>@entry.Title</strong>
+                                @if (entry.Source is { Length: > 0 })
+                                {
+                                    <span class="badge text-bg-secondary">@entry.Source</span>
+                                }
+                            </div>
+                            @if (entry.Body is { Length: > 0 })
+                            {
+                                <div class="text-body-secondary small mt-1 text-break">@entry.Body</div>
+                            }
+                        </div>
+                        <span class="text-body-secondary small text-nowrap" title="@entry.Created.ToString("f")">
+                            @Ago.Since(entry.Created)
+                        </span>
+                    </li>
+                }
+            </ul>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private IReadOnlyList<InboxStore.Event> _events = [];
+    private string _error = "";
+    private string _inboxName = "";
+    private string _exampleUrl = $"{ExtensionRoutes.PathFor(InboxEndpoints.RouteKey)}?k=YOUR-TOKEN";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var connectionId = Tab.Settings.Get("connection");
+
+        try
+        {
+            if (connectionId is { Length: > 0 })
+                _inboxName = (await Config.ConnectionAsync(connectionId))?.Name ?? "";
+
+            _events = await new InboxStore(Database).RecentAsync(
+                connectionId is { Length: > 0 } ? connectionId : null,
+                Tab.Settings.GetInt("limit", 50));
+        }
+        catch (Exception ex)
+        {
+            // A tab that cannot read its table should say so rather than look empty —
+            // "nothing has arrived" and "the query failed" need very different responses.
+            _error = ex.GetBaseException().Message;
+        }
+    }
+}

@@ -1,0 +1,15 @@
+<!-- Plain SDK. No widget: everything this reports is a number, and the built-in metric,
+     gauge, chart and readings-table cards already draw numbers. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>
