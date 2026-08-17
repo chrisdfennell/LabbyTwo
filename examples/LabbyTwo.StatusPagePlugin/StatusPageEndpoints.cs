@@ -82,7 +82,31 @@ public sealed class StatusPageEndpoints(
             rows.Add(new Row(connection.Name, connection.Icon, state?.IsUp, state?.ChangedAt, uptime));
         }
 
-        var html = Page(settings, rows, days, refresh, now);
+        // Anything broken first. A status page is read by somebody who wants one answer, and
+        // making them scan thirty green rows for the red one is the whole failure mode of a
+        // status page. Within each group the dashboard's own order is kept.
+        rows = [.. rows.OrderBy(row => row.IsUp switch { false => 0, null => 1, true => 2 })];
+
+        // "Was it down earlier, or is it just me?" is the second question this page gets
+        // asked, and without this it can only answer the first. Names and times only — the
+        // message on an event is written for whoever fixes it and regularly contains an
+        // internal address.
+        var changes = new List<Change>();
+        if (settings.GetBool("show_history", true))
+        {
+            var names = connections.ToDictionary(c => c.Id, c => c.Name);
+            foreach (var change in await history.RecentEventsAsync(null, 200, ct))
+            {
+                if (!names.TryGetValue(change.ConnectionId, out var name))
+                    continue;   // not published, so not this page's business
+
+                changes.Add(new Change(name, change.IsUp, change.At.ToLocalTime()));
+                if (changes.Count == 8)
+                    break;
+            }
+        }
+
+        var html = Page(settings, rows, changes, days, refresh, now);
 
         // Never cached. A status page served from a phone's cache is a status page that is
         // confidently wrong about the thing you opened it to check.
@@ -91,6 +115,9 @@ public sealed class StatusPageEndpoints(
     }
 
     private sealed record Row(string Name, string Icon, bool? IsUp, DateTimeOffset? Since, HistoryStore.Uptime Uptime);
+
+    /// <summary>One state change, stripped of the message before it leaves the building.</summary>
+    private sealed record Change(string Name, bool IsUp, DateTimeOffset At);
 
     /// <summary>
     /// The publish list, or null for "everything monitored". Matched on the name as typed,
@@ -107,7 +134,9 @@ public sealed class StatusPageEndpoints(
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static string Page(SettingsBag settings, IReadOnlyList<Row> rows, int days, int refresh, DateTimeOffset now)
+    private static string Page(
+        SettingsBag settings, IReadOnlyList<Row> rows, IReadOnlyList<Change> changes,
+        int days, int refresh, DateTimeOffset now)
     {
         var title = settings.Get("title", "Service status");
         var footer = settings.Get("footer");
@@ -169,6 +198,24 @@ public sealed class StatusPageEndpoints(
             html.Append("</span></li>");
         }
         html.Append("</ul>");
+
+        if (changes.Count > 0)
+        {
+            html.Append("<h2>Recent changes</h2><ul class=\"changes\">");
+            foreach (var change in changes)
+            {
+                html.Append("<li>");
+                html.Append($"<span class=\"dot {(change.IsUp ? "up" : "down")}\"></span>");
+                html.Append("<span class=\"what\">")
+                    .Append(H($"{change.Name} {(change.IsUp ? "came back" : "went down")}"))
+                    .Append("</span>");
+                html.Append("<span class=\"when\" title=\"").Append(H(change.At.ToString("f"))).Append("\">")
+                    .Append(H(Ago.Since(change.At, now)))
+                    .Append("</span>");
+                html.Append("</li>");
+            }
+            html.Append("</ul>");
+        }
 
         if (footer is { Length: > 0 })
             html.Append("<p class=\"footer\">").Append(H(footer)).Append("</p>");
@@ -233,6 +280,14 @@ public sealed class StatusPageEndpoints(
         .dot.up { background:var(--up); }
         .dot.down { background:var(--down); }
         .state { min-width:5.5rem; text-align:right; }
+        h2 { font-size:1rem; margin:1.75rem 0 .6rem; color:var(--muted); font-weight:600; }
+        .changes { list-style:none; margin:0; padding:0; background:var(--card);
+                   border:1px solid var(--line); border-radius:.6rem; overflow:hidden; }
+        .changes li { display:flex; align-items:center; gap:.6rem; padding:.6rem 1rem;
+                      border-top:1px solid var(--line); font-size:.9375rem; }
+        .changes li:first-child { border-top:0; }
+        .changes .what { flex:1; min-width:0; }
+        .changes .when { color:var(--muted); font-size:.875rem; white-space:nowrap; font-variant-numeric:tabular-nums; }
         .footer { margin:1.5rem 0 0; color:var(--muted); }
         .stamp { margin:.5rem 0 0; color:var(--muted); font-size:.8125rem; }
         @media (max-width:30rem) {

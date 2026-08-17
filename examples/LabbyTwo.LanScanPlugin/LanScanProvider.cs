@@ -54,6 +54,26 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
             Help: "Reverse DNS for anything that answered. Turn it off if your resolver is slow — it is "
                 + "the slowest part of a scan by a distance.")
         { Advanced = true },
+
+        new("netbios", "Ask devices their name", FieldKind.Bool, Default: "true",
+            Help: "A NetBIOS query on UDP 137, which unlike ARP is routed and so works from a container "
+                + "on a bridge. Most home routers register no reverse-DNS names at all, so this is "
+                + "usually what puts names in the list. Windows also returns its hardware address here; "
+                + "Samba does not."),
+
+        new("labels", "Name them yourself", FieldKind.Textarea,
+            "192.168.86.45 Kitchen tablet\n192.168.86.52 Chris's laptop",
+            Help: "One per line: address, a space, then what to call it. Wins over anything discovered, "
+                + "because you know which one is the printer and the network does not."),
+
+        new("arp_source", "ARP table", FieldKind.Text, Arp.DefaultPath, Default: Arp.DefaultPath,
+            Help: "Where to read hardware addresses from. The default is this container's own table, "
+                + "which is empty on a Docker bridge — ARP does not cross a router, so the addresses "
+                + "never reach it. To have them anyway without moving LabbyTwo onto the LAN, let "
+                + "something already on it write the table out on a timer and point this at that file. "
+                + "On the NAS: * * * * * /usr/sbin/arp -an > /share/Container/labbytwo/arp-table "
+                + "then mount it in read-only. Both that format and /proc/net/arp are read.")
+        { Advanced = true },
     ];
 
     /// <summary>
@@ -115,6 +135,7 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
             var timeout = Math.Clamp(connection.Settings.GetInt("timeout", 500), 50, 10_000);
             var ports = Ports(connection.Settings.Get("ports"));
             var resolve = connection.Settings.GetBool("names", true);
+            var netbios = connection.Settings.GetBool("netbios", true);
 
             // Bounded rather than all at once. A thousand simultaneous pings is a burst your
             // own switch may drop, which shows up as devices that "went missing" and did not.
@@ -125,7 +146,7 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
                 await limit.WaitAsync(ct);
                 try
                 {
-                    return await ProbeOneAsync(address, timeout, ports, resolve, ct);
+                    return await ProbeOneAsync(address, timeout, ports, resolve, netbios, ct);
                 }
                 finally
                 {
@@ -137,11 +158,26 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
 
             // After the sweep, never before: pinging a host is what puts it in the kernel's
             // ARP cache, so there is nothing to read until the addresses have been probed.
-            var macs = Arp.Table();
+            // A table fed in from the LAN is already complete, but reading it here costs
+            // nothing and keeps one code path.
+            var macs = Arp.Table(connection.Settings.Get("arp_source"));
             if (macs.Count > 0)
             {
+                // ARP wins over NetBIOS where both answered: it is the address the machine
+                // is actually using on the wire, whereas the NetBIOS one is whatever the
+                // adapter chose to report about itself.
                 up = [.. up.Select(device => macs.TryGetValue(device.Address, out var mac)
                     ? device with { Mac = mac, Vendor = Oui.Vendor(mac) }
+                    : device)];
+            }
+
+            // Last, so a name somebody typed beats every one that was discovered. They know
+            // which one is the printer; the network does not.
+            var labels = Labels(connection.Settings.Get("labels"));
+            if (labels.Count > 0)
+            {
+                up = [.. up.Select(device => labels.TryGetValue(device.Address, out var label)
+                    ? device with { Name = label }
                     : device)];
             }
 
@@ -166,9 +202,15 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
                 summary += " · first scan, so none are counted as new";
 
             // Said once in the message rather than as a warning, because it is a fact about
-            // the deployment rather than a fault: on a bridge there is nothing to fix.
-            if (up.Count > 0 && up.All(device => device.Mac.Length == 0))
-                summary += " · no hardware addresses from here";
+            // the deployment rather than a fault. Now that NetBIOS can bring some addresses
+            // back on its own, "none at all" and "some" are worth telling apart — the first
+            // means the ARP source is not set up, the second means it is working and only
+            // the machines that do not answer NetBIOS are missing.
+            var withMac = up.Count(device => device.Mac.Length > 0);
+            if (up.Count > 0 && withMac == 0)
+                summary += " · no hardware addresses — see the ARP table setting";
+            else if (withMac < up.Count)
+                summary += $" · {withMac} of {up.Count} with a hardware address";
 
             return ProbeResult.Up(stopwatch.Elapsed, summary, new Dictionary<string, double>
             {
@@ -210,7 +252,7 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
     }
 
     private static async Task<Device?> ProbeOneAsync(
-        IPAddress address, int timeout, IReadOnlyList<int> ports, bool resolve, CancellationToken ct)
+        IPAddress address, int timeout, IReadOnlyList<int> ports, bool resolve, bool netbios, CancellationToken ct)
     {
         var answered = false;
         double elapsed = 0;
@@ -264,7 +306,25 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
             }
         }
 
-        return new Device(address.ToString(), name, elapsed, open);
+        // Asked second, and only when reverse DNS came back empty — which on most home
+        // routers is nearly always. This is the step that turns a list of bare addresses
+        // into a list of machines, and on Windows it also brings back the hardware address
+        // that ARP could not reach from here.
+        var mac = "";
+        if (netbios)
+        {
+            var status = await Nbstat.AskAsync(address, Math.Min(timeout, 1_500), ct);
+            if (status is not null)
+            {
+                if (name.Length == 0 && status.Name.Length > 0)
+                    name = status.Name;
+
+                mac = status.Mac;
+            }
+        }
+
+        return new Device(address.ToString(), name, elapsed, open, mac,
+            mac.Length > 0 ? Oui.Vendor(mac) : "");
     }
 
     private static async Task<bool> OpenAsync(IPAddress address, int port, int timeout, CancellationToken ct)
@@ -282,6 +342,33 @@ public sealed class LanScanProvider(AppSettingsStore settings) : IConnectionProv
         {
             return false;   // refused, filtered, or timed out — all mean "not open"
         }
+    }
+
+    /// <summary>
+    /// "address name" per line. Split on the first run of whitespace, which an address
+    /// cannot contain, so the name keeps its spaces without needing quotes.
+    /// </summary>
+    internal static Dictionary<string, string> Labels(string raw)
+    {
+        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var line in raw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var split = line.IndexOfAny([' ', '\t']);
+            if (split <= 0)
+                continue;
+
+            var address = line[..split].Trim();
+
+            // An '=' between the two is how people write a mapping; it belongs to neither
+            // side. Accepting both spellings costs one call.
+            var name = line[(split + 1)..].TrimStart().TrimStart('=').Trim();
+
+            if (IPAddress.TryParse(address, out _) && name.Length > 0)
+                labels[address] = name;
+        }
+
+        return labels;
     }
 
     private static IReadOnlyList<int> Ports(string raw) =>
