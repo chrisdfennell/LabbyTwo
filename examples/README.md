@@ -1,6 +1,6 @@
 # Example plugins
 
-Fourteen plugins that build, load and do something worth having. They are meant to be
+Twenty-five plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
@@ -11,6 +11,17 @@ same way yours will.
 | Plugin | Adds | What it is for |
 |---|---|---|
 | [TerminalPlugin](LabbyTwo.TerminalPlugin) | provider + widget + tab kind + endpoint | A real shell in the dashboard — SSH to a host, or into a running container. |
+| [MetricsExportPlugin](LabbyTwo.MetricsExportPlugin) | provider + endpoint | Publishes every reading at `/ext/metrics` in Prometheus' format. LabbyTwo has always read Prometheus; this is the other direction. |
+| [StatusPagePlugin](LabbyTwo.StatusPagePlugin) | provider + endpoint | A read-only status page for people without a login, on a link you can hand out. |
+| [NtfyPlugin](LabbyTwo.NtfyPlugin) | alert channel | Push notifications through ntfy — the first of the alert channels to arrive as a plugin. |
+| [InboxPlugin](LabbyTwo.InboxPlugin) | provider + endpoint + tab kind + job | A URL your scripts and appliances POST to. The inverse of a webhook, with a dead-man's-switch alert. |
+| [WakePlugin](LabbyTwo.WakePlugin) | provider + job | Wakes a machine with a magic packet, by hand or on a schedule, and tells you whether it is awake. |
+| [DockerLabelsPlugin](LabbyTwo.DockerLabelsPlugin) | importer + endpoint | Containers describe themselves with `labbytwo.*` labels; the dashboard reads them. |
+| [RssPlugin](LabbyTwo.RssPlugin) | provider + widget | Any RSS or Atom feed as a headlines card, and an alert for a feed that has gone quiet. |
+| [MoonrakerPlugin](LabbyTwo.MoonrakerPlugin) | provider | A Klipper 3D printer: progress, both temperatures, and pause/resume/cancel buttons that appear only when they apply. |
+| [OllamaPlugin](LabbyTwo.OllamaPlugin) | provider | Local models pulled, loaded, and the VRAM they hold — so an eviction is a chart rather than a mystery. |
+| [WireGuardPlugin](LabbyTwo.WireGuardPlugin) | provider | Peers and last-handshake times, read from a `wg show all dump` file the host writes. |
+| [MinecraftPlugin](LabbyTwo.MinecraftPlugin) | provider | Players online, version and MOTD over the game's own Server List Ping. No dependency. |
 | [LanScanPlugin](LabbyTwo.LanScanPlugin) | provider + widget + tab kind | Sweeps a subnet and reports what answered, and what is new since last time. |
 | [GluetunPlugin](LabbyTwo.GluetunPlugin) | provider | Whether your VPN tunnel is up, which country it exits from, and the forwarded port. |
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |

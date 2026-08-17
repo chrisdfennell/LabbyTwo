@@ -26,6 +26,12 @@
          that plugin that can do damage, so it is tested here rather than left to the plugin
          being loaded at runtime and hoped about. -->
     <ProjectReference Include="..\..\examples\LabbyTwo.LanScanPlugin\LabbyTwo.LanScanPlugin.csproj" />
+
+    <!-- The Docker label importer, for DockerLabelsImporterTests. An importer is a pure
+         function of a file, which is exactly the thing worth testing without a running app —
+         and this one reads two different Docker output shapes, which is two ways to be
+         wrong about somebody's real containers. -->
+    <ProjectReference Include="..\..\examples\LabbyTwo.DockerLabelsPlugin\LabbyTwo.DockerLabelsPlugin.csproj" />
   </ItemGroup>
 
 </Project>

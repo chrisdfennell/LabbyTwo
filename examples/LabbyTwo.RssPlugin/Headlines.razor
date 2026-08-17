@@ -1,0 +1,54 @@
+@inject RssProvider Feed
+
+@* The one card in this batch that had to be written. A headline is not a number, so the
+   built-in metric, chart and gauge cards have nowhere to put it. *@
+
+@if (Context.Connection is null)
+{
+    <p class="text-body-secondary mb-0">No feed chosen.</p>
+}
+else if (_items.Count == 0)
+{
+    <p class="text-body-secondary mb-0">Nothing read yet.</p>
+}
+else
+{
+    <ul class="list-unstyled mb-0 d-flex flex-column gap-2">
+        @foreach (var item in _items)
+        {
+            <li class="d-flex justify-content-between gap-2 align-items-baseline">
+                @if (item.Link is { Length: > 0 })
+                {
+                    <a href="@item.Link" target="_blank" rel="noopener noreferrer" class="text-truncate">@item.Title</a>
+                }
+                else
+                {
+                    <span class="text-truncate">@item.Title</span>
+                }
+
+                @if (ShowAge && item.Published is { } when)
+                {
+                    <span class="text-body-secondary small text-nowrap">@Ago.Since(when)</span>
+                }
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<RssProvider.FeedItem> _items = [];
+
+    private bool ShowAge => Context.Widget.Settings.GetBool("show_age", true);
+
+    protected override void OnParametersSet()
+    {
+        // Straight off the provider, which cached these on the last probe. Fetching here
+        // would mean one request per card per render, and four cards on a wall display
+        // would hammer somebody else's server on every tick.
+        _items = Context.Connection is null
+            ? []
+            : [.. Feed.ItemsFor(Context.Connection.Id).Take(Math.Clamp(Context.Widget.Settings.GetInt("count", 6), 1, 50))];
+    }
+}

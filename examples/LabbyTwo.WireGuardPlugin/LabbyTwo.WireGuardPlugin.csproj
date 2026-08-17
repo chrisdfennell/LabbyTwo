@@ -1,0 +1,15 @@
+<!-- Plain SDK. Per-peer readings come from MetricsFor, so the built-in chart and
+     readings-table cards can already draw every peer by name. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

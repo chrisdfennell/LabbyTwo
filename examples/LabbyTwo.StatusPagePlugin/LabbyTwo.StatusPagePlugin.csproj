@@ -1,0 +1,15 @@
+<!-- Plain SDK. The page is rendered by the endpoint rather than by a component, on purpose:
+     see the note at the top of StatusPageEndpoints.cs. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

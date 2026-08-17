@@ -1,0 +1,16 @@
+<!-- Plain SDK. The print progress is a number, so the built-in Gauge card already draws it,
+     and the pause/resume/cancel buttons appear on the built-in Controls card because they
+     are provider actions. Neither needed a widget of its own. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../LabbyTwo.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>
