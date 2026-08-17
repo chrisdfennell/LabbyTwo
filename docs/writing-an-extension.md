@@ -542,9 +542,9 @@ warnings as errors, and each release attaches a zip of each one, so a merged plu
 installable by everybody from the next release. [`examples/README.md`](../examples/README.md)
 lists what one needs to be merged.
 
-## Twenty-five that work
+## Twenty-six that work
 
-[`examples/`](../examples) has twenty-five plugins that build and run, covering every extension
+[`examples/`](../examples) has twenty-six plugins that build and run, covering every extension
 point on this page. Start from whichever is closest to what you are writing:
 
 | If you are writing | Read |
@@ -572,6 +572,8 @@ point on this page. Start from whichever is closest to what you are writing:
 | Buttons that depend on what is happening right now | `MoonrakerPlugin` — `ActionsFor` reading state the probe cached, so Pause is absent unless something is printing |
 | A provider that reads a file rather than a network | `WireGuardPlugin` — and treating a stale file as a fault rather than as a reading |
 | A binary protocol, with no library | `MinecraftPlugin` — varint framing over a raw TCP socket |
+| Something that overlaps a plugin you already have | `DomainControllerPlugin` — what it deliberately leaves to `TerminalPlugin` and the Prometheus provider, and why the "everything in one place" page is a grid tab rather than a new tab kind |
+| Wire-protocol parsing you cannot test against the real thing | `DomainControllerPlugin` — pure readers, `InternalsVisibleTo`, and pinning the failures that are silent rather than loud |
 
 ### The rules
 

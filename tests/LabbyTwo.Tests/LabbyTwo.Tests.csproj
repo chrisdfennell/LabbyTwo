@@ -32,6 +32,12 @@
          and this one reads two different Docker output shapes, which is two ways to be
          wrong about somebody's real containers. -->
     <ProjectReference Include="..\..\examples\LabbyTwo.DockerLabelsPlugin\LabbyTwo.DockerLabelsPlugin.csproj" />
+
+    <!-- The domain controller plugin, for its SNTP and DNS readers. Both are pure functions
+         of a byte array and both fail silently when wrong — an epoch confusion reports a
+         healthy DC as seventy years out — so they are pinned here rather than discovered
+         against somebody's real domain. -->
+    <ProjectReference Include="..\..\examples\LabbyTwo.DomainControllerPlugin\LabbyTwo.DomainControllerPlugin.csproj" />
   </ItemGroup>
 
 </Project>

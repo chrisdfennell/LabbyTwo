@@ -720,7 +720,7 @@ a merged plugin becomes installable by everyone from the next release.
 Plugin code runs unsandboxed inside the LabbyTwo process, which can read the database and
 the keyring. Install plugins you would trust with your credentials.
 
-[`examples/`](examples) has twenty-five that build and run, and most of them fill a real gap
+[`examples/`](examples) has twenty-six that build and run, and most of them fill a real gap
 rather than only demonstrating one: **Terminal** (a real shell on a tab — SSH to a host or
 into a running container, with a pty, so `htop` and `vim` work), **RSS** (any feed as a
 headlines card, with an alert for one that has gone quiet), **Klipper** (what the 3D printer
@@ -731,7 +731,9 @@ scripts and CI post to, so the things that *happen* rather than sit there have s
 report — including an alert for a nightly job that has gone quiet), **Wake on LAN** (a
 magic packet by hand or on a schedule, so the backup box is on at two and asleep by six),
 **Docker labels** (containers describe themselves and the dashboard reads them),
-**Prometheus export**
+**Domain controller** (Active Directory health with no agent — clock skew, because Kerberos
+refuses tickets five minutes out and the symptom is domain-wide login failures that never
+mention a clock), **Prometheus export**
 (everything LabbyTwo already measures, scrapeable at `/ext/metrics`, so the probes behind
 the dashboard become series you can keep), **Public status page** (a read-only page anyone
 with the link can open, without an account), **ntfy** (push notifications through a

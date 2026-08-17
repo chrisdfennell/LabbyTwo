@@ -1,6 +1,6 @@
 # Example plugins
 
-Twenty-five plugins that build, load and do something worth having. They are meant to be
+Twenty-six plugins that build, load and do something worth having. They are meant to be
 installed as much as read: most of them fill a real gap, and between them they cover every
 extension point and every rule in
 [writing-an-extension.md](../docs/writing-an-extension.md).
@@ -22,6 +22,7 @@ same way yours will.
 | [OllamaPlugin](LabbyTwo.OllamaPlugin) | provider | Local models pulled, loaded, and the VRAM they hold — so an eviction is a chart rather than a mystery. |
 | [WireGuardPlugin](LabbyTwo.WireGuardPlugin) | provider | Peers and last-handshake times, read from a `wg show all dump` file the host writes. |
 | [MinecraftPlugin](LabbyTwo.MinecraftPlugin) | provider | Players online, version and MOTD over the game's own Server List Ping. No dependency. |
+| [DomainControllerPlugin](LabbyTwo.DomainControllerPlugin) | provider | Active Directory health with no agent: clock skew, a real DNS query for the domain's zone, and LDAP/Kerberos/SMB. |
 | [LanScanPlugin](LabbyTwo.LanScanPlugin) | provider + widget + tab kind | Sweeps a subnet and reports what answered, and what is new since last time. |
 | [GluetunPlugin](LabbyTwo.GluetunPlugin) | provider | Whether your VPN tunnel is up, which country it exits from, and the forwarded port. |
 | [CalendarPlugin](LabbyTwo.CalendarPlugin) | provider + widget + tab kind | Any published `.ics` feed — what's on today, and a full agenda page. |
