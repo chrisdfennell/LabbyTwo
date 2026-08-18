@@ -190,17 +190,7 @@ public sealed class MediaStackTests : IDisposable
         Assert.DoesNotContain("disk_percent", await _stack.RecordedMetricsAsync());
     }
 
-    public void Dispose()
-    {
-        _services.Dispose();
-        try
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-    }
+    public void Dispose() => TestHost.Teardown(_services, _directory);
 }
 
 /// <summary>

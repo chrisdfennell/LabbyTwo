@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using LabbyTwo.Core;
 using LabbyTwo.Storage;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LabbyTwo.Tests;
 
@@ -19,17 +20,19 @@ public class ReorderCostTests : IDisposable
     private readonly string _directory =
         Path.Combine(Path.GetTempPath(), "labbytwo-reorder-" + Guid.NewGuid().ToString("n"));
 
+    private readonly ServiceProvider _services;
     private readonly ConfigStore _config;
 
     public ReorderCostTests()
     {
         Directory.CreateDirectory(_directory);
-        _config = TestHost.ConfigStore(_directory);
+        _services = TestHost.ReadyHost(_directory);
+        _config = _services.GetRequiredService<ConfigStore>();
     }
 
     public void Dispose()
     {
-        try { Directory.Delete(_directory, recursive: true); } catch (IOException) { }
+        TestHost.Teardown(_services, _directory);
         GC.SuppressFinalize(this);
     }
 

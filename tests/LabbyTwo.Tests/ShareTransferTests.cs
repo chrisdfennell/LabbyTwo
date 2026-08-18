@@ -3,7 +3,6 @@ using LabbyTwo.Services;
 using LabbyTwo.Services.Import;
 using LabbyTwo.Storage;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -48,18 +47,7 @@ public sealed class ShareTransferTests : IDisposable
 
     private T Get<T>() where T : notnull => _services.GetRequiredService<T>();
 
-    public void Dispose()
-    {
-        _services.Dispose();
-        SqliteConnection.ClearAllPools();
-        try
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-    }
+    public void Dispose() => TestHost.Teardown(_services, _directory);
 
     private async Task<(Tab Tab, Connection Nas)> SeedAsync()
     {

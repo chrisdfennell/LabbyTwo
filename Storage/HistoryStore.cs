@@ -43,17 +43,82 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         await tx.CommitAsync(ct);
     }
 
-    /// <summary>Only called on a transition, so the table stays small enough to scan.</summary>
-    public async Task RecordStatusAsync(string connectionId, bool isUp, string message, CancellationToken ct)
+    /// <summary>
+    /// Records a transition — and only a transition. The insert is conditional on the
+    /// newest event for this connection saying something different, which is what keeps
+    /// the promise the status page makes: every row here is a moment something actually
+    /// changed. A caller that has lost track of the previous state (a restart, which
+    /// leaves the monitor with nothing in memory) can call this freely rather than having
+    /// to decide, and a service that was up before the restart and is up after it does
+    /// not get a row saying it came up.
+    /// </summary>
+    /// <returns>True if a row was written, false if it repeated the current state.</returns>
+    public async Task<bool> RecordStatusAsync(string connectionId, bool isUp, string message, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
-        cmd.CommandText = "INSERT INTO status_events (connection_id, ts, is_up, message) VALUES ($c, $t, $u, $m)";
+        // IS NOT rather than <> so the first event for a connection — where the subquery
+        // is NULL — inserts instead of comparing against nothing and failing to.
+        cmd.CommandText = """
+            INSERT INTO status_events (connection_id, ts, is_up, message)
+            SELECT $c, $t, $u, $m
+            WHERE $u IS NOT (SELECT is_up FROM status_events
+                             WHERE connection_id = $c
+                             ORDER BY ts DESC, rowid DESC LIMIT 1)
+            """;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         cmd.Parameters.AddWithValue("$u", isUp ? 1 : 0);
         cmd.Parameters.AddWithValue("$m", message);
-        await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    /// <summary>
+    /// The newest status event for every connection that has one — what the monitor knew
+    /// before it was last stopped. Since the table holds only transitions, the timestamp
+    /// on each is when that state began, which is what lets a recovery notice after a
+    /// restart still say how long the outage lasted.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, StatusEvent>> LatestStatusAsync(CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT connection_id, ts, is_up, message FROM (
+                SELECT connection_id, ts, is_up, message,
+                       ROW_NUMBER() OVER (PARTITION BY connection_id ORDER BY ts DESC, rowid DESC) AS rank
+                FROM status_events)
+            WHERE rank = 1
+            """;
+        var latest = new Dictionary<string, StatusEvent>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            latest[reader.GetString(0)] = new StatusEvent(
+                reader.GetString(0),
+                DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(1)).ToLocalTime(),
+                reader.GetInt64(2) != 0,
+                reader.GetString(3));
+        }
+        return latest;
+    }
+
+    /// <summary>
+    /// When each connection last reported a number. The monitor uses it to decide what is
+    /// due after a restart: a provider that declares a MinimumInterval because its
+    /// upstream meters requests should not be asked again just because this process is
+    /// new, and a restart loop would otherwise be a quota loop.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, DateTimeOffset>> LastSampleAtAsync(CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT connection_id, MAX(ts) FROM samples GROUP BY connection_id";
+        var latest = new Dictionary<string, DateTimeOffset>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            latest[reader.GetString(0)] = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(1)).ToLocalTime();
+        return latest;
     }
 
     public async Task<IReadOnlyList<Sample>> SamplesAsync(string connectionId, string metric, TimeSpan window, CancellationToken ct = default)
@@ -132,11 +197,16 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         var start = now.Subtract(window);
         await using var connection = await db.OpenAsync(ct);
 
+        // rowid breaks the tie here for the same reason it does when reading events back:
+        // timestamps are whole seconds, so a service that drops and returns inside one
+        // second leaves two rows SQLite may order either way. Getting it backwards on the
+        // row just before the window means the whole window is measured from the wrong
+        // state, which is a percentage that is wrong rather than a list in an odd order.
         var priorCmd = connection.CreateCommand();
         priorCmd.CommandText = """
             SELECT is_up FROM status_events
             WHERE connection_id = $c AND ts < $start
-            ORDER BY ts DESC LIMIT 1
+            ORDER BY ts DESC, rowid DESC LIMIT 1
             """;
         priorCmd.Parameters.AddWithValue("$c", connectionId);
         priorCmd.Parameters.AddWithValue("$start", start.ToUnixTimeSeconds());
@@ -146,7 +216,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         cmd.CommandText = """
             SELECT ts, is_up FROM status_events
             WHERE connection_id = $c AND ts >= $start
-            ORDER BY ts
+            ORDER BY ts, rowid
             """;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$start", start.ToUnixTimeSeconds());
@@ -210,7 +280,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         priorCmd.CommandText = """
             SELECT is_up, ts FROM status_events
             WHERE connection_id = $c AND ts < $start
-            ORDER BY ts DESC LIMIT 1
+            ORDER BY ts DESC, rowid DESC LIMIT 1
             """;
         priorCmd.Parameters.AddWithValue("$c", connectionId);
         priorCmd.Parameters.AddWithValue("$start", windowStart.ToUnixTimeSeconds());
@@ -227,7 +297,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         }
 
         var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT ts, is_up FROM status_events WHERE connection_id = $c AND ts >= $start ORDER BY ts";
+        cmd.CommandText = "SELECT ts, is_up FROM status_events WHERE connection_id = $c AND ts >= $start ORDER BY ts, rowid";
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$start", windowStart.ToUnixTimeSeconds());
 
@@ -291,9 +361,13 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
+        // rowid breaks the tie. Timestamps are whole seconds, so a service that drops and
+        // comes back inside one second gives SQLite two rows it may return in either
+        // order — and "recovered, then went down" is the wrong way round to read on a
+        // status page. Newest means most recently inserted, as it does in LatestAsync.
         cmd.CommandText = connectionId is null
-            ? "SELECT connection_id, ts, is_up, message FROM status_events ORDER BY ts DESC LIMIT $limit"
-            : "SELECT connection_id, ts, is_up, message FROM status_events WHERE connection_id = $c ORDER BY ts DESC LIMIT $limit";
+            ? "SELECT connection_id, ts, is_up, message FROM status_events ORDER BY ts DESC, rowid DESC LIMIT $limit"
+            : "SELECT connection_id, ts, is_up, message FROM status_events WHERE connection_id = $c ORDER BY ts DESC, rowid DESC LIMIT $limit";
         if (connectionId is not null)
             cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$limit", limit);

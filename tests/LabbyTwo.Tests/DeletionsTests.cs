@@ -1,7 +1,6 @@
 using LabbyTwo.Core;
 using LabbyTwo.Services;
 using LabbyTwo.Storage;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LabbyTwo.Tests;
@@ -37,19 +36,7 @@ public sealed class DeletionsTests : IDisposable
         _deletions = new Deletions(_config, _notes, _undo);
     }
 
-    public void Dispose()
-    {
-        _services.Dispose();
-        SqliteConnection.ClearAllPools();
-        try
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-        catch (IOException)
-        {
-            // A leftover temp directory should not fail an otherwise passing run.
-        }
-    }
+    public void Dispose() => TestHost.Teardown(_services, _directory);
 
     [Fact]
     public async Task UndoingACardPutsItBackInItsOwnSlot()

@@ -3,7 +3,6 @@ using LabbyTwo.Services;
 using LabbyTwo.Services.Import;
 using LabbyTwo.Storage;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -50,20 +49,7 @@ public sealed class StorageTests : IDisposable
 
     private T Get<T>() where T : notnull => _services.GetRequiredService<T>();
 
-    public void Dispose()
-    {
-        _services.Dispose();
-        // SQLite pools connections, so the file stays locked until the pool is emptied.
-        SqliteConnection.ClearAllPools();
-        try
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-        catch (IOException)
-        {
-            // A leftover temp directory should not fail an otherwise passing run.
-        }
-    }
+    public void Dispose() => TestHost.Teardown(_services, _directory);
 
     // ---------- Sorting the nav ----------
 
