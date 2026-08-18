@@ -335,7 +335,10 @@ Two kinds, both delivered through the same channels.
 down, 🟢 with how long it was out when it comes back. Alert channels aren't probed (there is
 nothing meaningful to poll), so instead of a Test button they get **Send test
 notification**, which delivers a real message. Any single connection can be muted without
-un-monitoring it, and a restart never announces everything you own.
+un-monitoring it, and a restart picks up where it left off: LabbyTwo remembers what
+everything was doing, so it reports the thing that broke while it was down without
+announcing everything else you own — and the status page stays a record of changes that
+actually happened rather than one entry per restart.
 
 **Thresholds.** The failures that matter are usually gradual, not a service vanishing — a
 volume filling, a UPS draining, a temperature climbing. **Settings → Alerts** puts a rule

@@ -193,6 +193,21 @@ public sealed class Db
 
         // 7 — which channel a rule speaks through. Null keeps the old behaviour: everything.
         "ALTER TABLE alert_rules ADD COLUMN channel_id TEXT",
+
+        // 8 — status_events is meant to hold transitions, but until the monitor learned to
+        // remember what it saw before it was stopped, every restart appended one row per
+        // connection saying what was already true. On a host that updates itself that is a
+        // timeline of state changes that never happened. Drop the rows that repeat the
+        // state before them, per connection, keeping the first — which is what marks when
+        // monitoring began and what the uptime maths measures from.
+        """
+        DELETE FROM status_events WHERE rowid IN (
+            SELECT rowid FROM (
+                SELECT rowid, is_up,
+                       LAG(is_up) OVER (PARTITION BY connection_id ORDER BY ts, rowid) AS previous
+                FROM status_events)
+            WHERE previous IS NOT NULL AND previous = is_up)
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

@@ -87,6 +87,20 @@ public sealed class HealthMonitor(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await RestoreAsync(stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            // Starting from nothing is the old behaviour, not a reason not to start.
+            log.LogWarning(ex, "Could not restore the last known status of anything");
+        }
+
         // Let the app finish starting before the first sweep, so the dashboard paints
         // immediately instead of waiting behind a dozen network timeouts.
         await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
@@ -109,6 +123,76 @@ public sealed class HealthMonitor(
             }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
+    }
+
+    /// <summary>
+    /// Loads what the monitor knew when it was last stopped. Called once before the first
+    /// sweep, and public so it can be exercised without starting a background service and
+    /// waiting on real time.
+    ///
+    /// Probe state lives in memory, so without this every restart is a blank slate — and a
+    /// blank slate is not neutral: the dashboard says "checking" for things it has watched
+    /// for months, a service that was down while the app was off comes back as a first
+    /// observation rather than a recovery, and every connection that declares a
+    /// MinimumInterval because its upstream meters requests is due at once, which turns a
+    /// restart loop into a quota loop.
+    ///
+    /// Nothing here probes anything. It only restores what was already recorded, so the
+    /// first sweep compares against the truth rather than against nothing.
+    /// </summary>
+    public async Task RestoreAsync(CancellationToken ct = default)
+    {
+        var connections = (await config.ConnectionsAsync(ct)).Where(IsMonitored).ToList();
+        if (connections.Count == 0)
+            return;
+
+        var status = await history.LatestStatusAsync(ct);
+        var sampled = await history.LastSampleAtAsync(ct);
+        var threshold = Math.Max(1, options.Value.FailuresBeforeDown);
+        var restored = 0;
+
+        foreach (var connection in connections)
+        {
+            if (!status.TryGetValue(connection.Id, out var last))
+                continue;
+
+            // When it was last actually asked, which is what IsDue needs. A probe that
+            // reports numbers leaves a sample behind; one that only reports up or down
+            // leaves the status event and nothing else — and that event is as old as the
+            // last change, not the last probe. Both are lower bounds, so take the later,
+            // and being too early only ever costs one extra probe.
+            var lastProbe = sampled.TryGetValue(connection.Id, out var at) && at > last.At ? at : last.At;
+
+            _states[connection.Id] = new ProbeState(
+                connection.Id,
+                last.IsUp,
+                last.Message,
+                // Not recorded, and a restored state is a status rather than a measurement.
+                // Nothing on a page reads it; the metrics endpoint does, so for the couple
+                // of seconds before the first sweep a scrape sees a zero-length probe. The
+                // alternative is a nullable that every caller has to unwrap for ever.
+                TimeSpan.Zero,
+                lastProbe,
+                // status_events holds transitions, so the event's time is when this state
+                // began — which is what lets a recovery still say how long it was down.
+                last.At,
+                // It was already DOWN, so it had passed the threshold before the restart.
+                // Counting from zero again would make the first failed probe look like a
+                // wobble and delay the recovery notice by a sweep.
+                last.IsUp ? 0 : threshold,
+                new Dictionary<string, double>(),
+                new Dictionary<string, string>());
+            restored++;
+        }
+
+        if (restored == 0)
+            return;
+
+        log.LogInformation("Restored the last known status of {Count} connection(s)", restored);
+
+        // Only now, and only if something changed: a page that repaints to show exactly
+        // what it already showed is a wasted render on every start.
+        Updated?.Invoke();
     }
 
     private async Task SweepAsync(CancellationToken ct)
@@ -208,8 +292,14 @@ public sealed class HealthMonitor(
         }
         else if (previous is null)
         {
-            // First observation: record it so uptime has a starting point. No alert — a
-            // restart shouldn't announce everything you own.
+            // A connection this process has never seen — added a moment ago, or one whose
+            // history was never written. Record it so uptime has a starting point, with no
+            // alert, since there is nothing it changed from. This is no longer the path a
+            // restart takes: RestoreAsync has already restored what was known, so a
+            // service that was up before and is up now stays quiet, and one that went down
+            // while the app was off is reported above as the change it really is. The
+            // write is conditional in the store either way, so a repeat costs a row of
+            // nothing rather than a state change that never happened.
             await history.RecordStatusAsync(connection.Id, isUp ?? false, result.Message, ct);
         }
     }

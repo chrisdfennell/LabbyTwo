@@ -6,7 +6,6 @@ using LabbyTwo.Providers;
 using LabbyTwo.Services;
 using LabbyTwo.Storage;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -255,15 +254,6 @@ public sealed class SelfUpdaterTests : IDisposable
     public void Dispose()
     {
         _docker.Dispose();
-        _services.Dispose();
-        SqliteConnection.ClearAllPools();
-        try
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-        catch (IOException)
-        {
-            // A stray temp directory should not fail the run.
-        }
+        TestHost.Teardown(_services, _directory);
     }
 }

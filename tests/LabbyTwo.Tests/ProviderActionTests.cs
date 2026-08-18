@@ -311,16 +311,5 @@ public sealed class ActionRunnerTests : IDisposable
         Assert.False(stored!.IsSilenced(DateTimeOffset.Now));
     }
 
-    public void Dispose()
-    {
-        _services.Dispose();
-        try
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-        catch (IOException)
-        {
-            // A test that cannot tidy up after itself is not a failing test.
-        }
-    }
+    public void Dispose() => TestHost.Teardown(_services, _directory);
 }
