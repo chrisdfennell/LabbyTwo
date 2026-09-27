@@ -155,13 +155,27 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         // Timestamps are whole seconds, so two probes in the same second tie — and with
         // GROUP BY plus MAX(ts) SQLite may then return either row. Ordering by rowid as
         // well makes "newest" mean the most recently inserted, deterministically.
+        //
+        // Walked one metric at a time rather than ranked in one pass. The index is
+        // (connection_id, metric, ts), so ranking had to read every sample the connection
+        // had ever kept — a month of them, filtered to the window afterwards — and ten
+        // cards do this while the page is being drawn. The recursive part hops from one
+        // metric name to the next through the index, and each metric's newest value is
+        // then a single seek from the end of its range: a handful of lookups, however
+        // big the table has grown.
         cmd.CommandText = """
+            WITH RECURSIVE metrics(metric) AS (
+                SELECT MIN(metric) FROM samples WHERE connection_id = $id
+                UNION ALL
+                SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $id AND metric > metrics.metric)
+                FROM metrics WHERE metrics.metric IS NOT NULL)
             SELECT metric, value FROM (
-                SELECT metric, value,
-                       ROW_NUMBER() OVER (PARTITION BY metric ORDER BY ts DESC, rowid DESC) AS rank
-                FROM samples
-                WHERE connection_id = $id AND ts >= $since)
-            WHERE rank = 1
+                SELECT metric,
+                       (SELECT value FROM samples
+                        WHERE connection_id = $id AND metric = metrics.metric AND ts >= $since
+                        ORDER BY ts DESC, rowid DESC LIMIT 1) AS value
+                FROM metrics WHERE metric IS NOT NULL)
+            WHERE value IS NOT NULL
             """;
         cmd.Parameters.AddWithValue("$id", connectionId);
         cmd.Parameters.AddWithValue("$since", DateTimeOffset.UtcNow.Subtract(window).ToUnixTimeSeconds());

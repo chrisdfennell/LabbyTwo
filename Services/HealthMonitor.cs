@@ -89,11 +89,20 @@ public sealed class HealthMonitor(
     {
         try
         {
-            await RestoreAsync(stoppingToken);
+            // Bounded, because nothing is watched until it returns. Restoring is a
+            // courtesy — it saves the dashboard saying "checking" after a restart — and a
+            // courtesy must never be the reason monitoring does not start. It reads the
+            // whole samples table once, which on a big database is not instant.
+            await RestoreAsync(stoppingToken).WaitAsync(RestoreDeadline, stoppingToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             return;
+        }
+        catch (TimeoutException)
+        {
+            log.LogWarning("Restoring the last known status took longer than {Seconds}s; monitoring starts without it",
+                RestoreDeadline.TotalSeconds);
         }
         catch (Exception ex)
         {
@@ -328,6 +337,9 @@ public sealed class HealthMonitor(
     /// One probe, right now — the Test button when adding a connection. Runs the exact
     /// code path the monitor runs, so a green test means monitoring will work too.
     /// </summary>
+    /// <summary>How long startup waits to restore the last known status before sweeping anyway.</summary>
+    public TimeSpan RestoreDeadline { get; set; } = TimeSpan.FromSeconds(30);
+
     /// <summary>
     /// Longest a single probe may take. Past the HTTP client's thirty seconds, so an
     /// ordinary timeout still reports its own clearer message first.
