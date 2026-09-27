@@ -231,7 +231,7 @@ public sealed class NzbGetProvider(IHttpClientFactory httpFactory) : IConnection
     [
         new("download_mbps", "Download", " Mbps", 2),
         new("remaining_mb", "Queue remaining", " MB"),
-        new("free_disk_gb", "Free disk", " GB", 1),
+        new("free_disk_gb", "Free disk", " GB", 1) { Capacity = CapacityLimit.RunsOutAtZero },
         new("download_paused", "Paused"),
         new("latency_ms", "Response time", " ms"),
     ];

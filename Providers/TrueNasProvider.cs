@@ -26,7 +26,7 @@ public sealed class TrueNasProvider(IHttpClientFactory httpFactory) : IConnectio
 
     public IReadOnlyList<MetricSpec> Metrics =>
     [
-        new("disk_percent", "Fullest pool", "%", 1),
+        new("disk_percent", "Fullest pool", "%", 1) { Capacity = CapacityLimit.Percent },
         new("pool_count", "Pools"),
         new("pools_degraded", "Pools not healthy"),
         new("uptime_days", "Uptime", " days", 1),
@@ -37,6 +37,7 @@ public sealed class TrueNasProvider(IHttpClientFactory httpFactory) : IConnectio
     [
         new("Pool nearly full", "disk_percent", Comparison.Above, 80, ClearThreshold: 75, ForMinutes: 10,
             Why: "ZFS slows down badly past about 80%, well before it is actually full."),
+        CapacityMetric.FullWithin("Pool full within 30 days", "disk_percent"),
         new("Pool not healthy", "pools_degraded", Comparison.Above, 0,
             Why: "A degraded or faulted pool is one more failure from data loss."),
     ];

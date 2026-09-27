@@ -32,7 +32,7 @@ public sealed class SabnzbdProvider(IHttpClientFactory httpFactory) : IConnectio
         new("queue", "In the queue"),
         new("speed_mbps", "Speed", " MB/s", 2),
         new("remaining_gb", "Left to fetch", " GB", 1),
-        new("disk_free_gb", "Free disk", " GB", 1),
+        new("disk_free_gb", "Free disk", " GB", 1) { Capacity = CapacityLimit.RunsOutAtZero },
         new("paused", "Paused"),
         new("latency_ms", "Response time", " ms"),
     ];

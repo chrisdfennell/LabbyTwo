@@ -17,6 +17,19 @@ public sealed record MetricSpec(string Key, string Label, string Unit = "", int 
         value.ToString($"F{decimals ?? Decimals}") + Unit;
 
     /// <summary>
+    /// Set on a metric that fills towards a limit — a volume's percent used, the free space
+    /// left on a download disk — which is what makes it forecastable: LabbyTwo fits a trend
+    /// to its recent history and says when it runs out. Null for everything else, because a
+    /// CPU reading or a temperature has a trend but no "full", and a forecast of when the
+    /// CPU reaches 100% would be nonsense said confidently.
+    ///
+    /// A property rather than a constructor parameter for the reason FieldSpec's newer
+    /// settings are: plugins are compiled against the constructor, and changing it would
+    /// break every one of them the moment its metrics were read.
+    /// </summary>
+    public CapacityLimit? Capacity { get; init; }
+
+    /// <summary>
     /// Metric names that mean the same thing everywhere — latency, CPU, temperature.
     /// A provider gets these for free and only declares what is specific to it, so
     /// twelve providers don't each repeat the definition of <c>latency_ms</c>.
@@ -27,7 +40,7 @@ public sealed record MetricSpec(string Key, string Label, string Unit = "", int 
         new("rtt_ms", "Round-trip time", " ms", 1),
         new("cpu_percent", "CPU", "%"),
         new("ram_percent", "Memory", "%"),
-        new("disk_percent", "Disk used", "%"),
+        new("disk_percent", "Disk used", "%") { Capacity = CapacityLimit.Percent },
         new("temp_c", "Temperature", "°C", 1),
         new("humidity", "Humidity", "%"),
         new("uptime_days", "Uptime", " days", 1),
@@ -86,4 +99,21 @@ public sealed record MetricSpec(string Key, string Label, string Unit = "", int 
         ("_hours", " h", 1),
         ("_count", "", 0),
     ];
+}
+
+/// <summary>
+/// Where a capacity metric runs out, and from which side it approaches.
+/// </summary>
+/// <param name="Full">The value that means "no room left" — 100 for a percentage used, 0 for free space.</param>
+/// <param name="Rising">True when the metric climbs towards <see cref="Full"/>, false when it falls to it.</param>
+public sealed record CapacityLimit(double Full, bool Rising = true)
+{
+    /// <summary>A percentage used, full at 100.</summary>
+    public static CapacityLimit Percent { get; } = new(100);
+
+    /// <summary>Something that is used up — free gigabytes — and runs out at zero.</summary>
+    public static CapacityLimit RunsOutAtZero { get; } = new(0, Rising: false);
+
+    /// <summary>Whether a reading is at or past the limit.</summary>
+    public bool IsFull(double value) => Rising ? value >= Full : value <= Full;
 }

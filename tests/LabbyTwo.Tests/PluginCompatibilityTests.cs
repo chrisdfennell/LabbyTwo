@@ -40,6 +40,17 @@ public class PluginCompatibilityTests
     }
 
     [Fact]
+    public void TheMetricSpecConstructorPluginsCallStillExists()
+    {
+        // Capacity went on as a property for exactly this reason: every provider plugin
+        // declares its metrics with this constructor.
+        var constructor = typeof(MetricSpec).GetConstructor([typeof(string), typeof(string), typeof(string), typeof(int)]);
+
+        Assert.NotNull(constructor);
+        Assert.Null(new MetricSpec("fan_rpm", "Fan").Capacity);
+    }
+
+    [Fact]
     public void NewSettingsAreOptionalRatherThanRequired()
     {
         // Constructed the old way, then refined — which is exactly what an old plugin does,

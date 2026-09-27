@@ -37,7 +37,7 @@ public sealed class ImmichProvider(IHttpClientFactory httpFactory) : IConnection
         new("photos", "Photos"),
         new("videos", "Videos"),
         new("library_gb", "Library size", " GB", 1),
-        new("disk_percent", "Disk used", "%", 1),
+        new("disk_percent", "Disk used", "%", 1) { Capacity = CapacityLimit.Percent },
         new("disk_free_gb", "Disk free", " GB", 1),
         new("users", "Users"),
         new("latency_ms", "Response time", " ms"),

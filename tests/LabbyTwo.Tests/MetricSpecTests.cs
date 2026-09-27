@@ -121,6 +121,17 @@ public class MetricSpecTests
             var declared = provider.Metrics.Select(m => m.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var suggestion in provider.SuggestedRules)
             {
+                // A forecast rule is on the metric it forecasts, which has to be declared —
+                // and declared as filling towards a limit, or there is never a forecast.
+                if (CapacityMetric.TryParse(suggestion.Metric, out var measured))
+                {
+                    Assert.True(provider.Metrics.Any(m =>
+                            string.Equals(m.Key, measured, StringComparison.OrdinalIgnoreCase) && m.Capacity is not null),
+                        $"{provider.Type} suggests a forecast of \"{measured}\", which it does not declare as a capacity.");
+                    Assert.NotEmpty(suggestion.Name);
+                    continue;
+                }
+
                 // A suggestion for a metric the provider never emits would be offered,
                 // accepted, and then silently never fire.
                 Assert.True(declared.Contains(suggestion.Metric),

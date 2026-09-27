@@ -924,6 +924,35 @@ public sealed class CameraWidget : IWidgetType
 }
 
 /// <summary>
+/// Everything that fills towards a limit, soonest first — "full in about 7 weeks". A gauge
+/// says how full a volume is today; this says whether that matters, which is the question
+/// people actually open the dashboard to answer.
+/// </summary>
+public sealed class RunningOutWidget : IWidgetType
+{
+    public string Type => "running-out";
+    public string DisplayName => "Running out";
+    public string Icon => "⏳";
+    public string Description =>
+        "When each volume, pool or disk will be full at the current rate, soonest first. " +
+        "Bind it to nothing to watch everything.";
+    public IReadOnlyList<string> ProviderTypes => AnyProvider.Types;
+    public bool NeedsConnection => false;
+    public int DefaultWidth => 4;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("metric", "Only this metric", FieldKind.Text, "disk_percent",
+            Help: "Optional. Blank lists everything that fills towards a limit."),
+        new("within_days", "Only what fills within (days)", FieldKind.Number,
+            Help: "Optional. Blank lists everything, however far off."),
+        new("show_idle", "Also list what is not filling", FieldKind.Bool, Default: "true",
+            Help: "On shows every volume, so a quiet card means nothing is filling rather than nothing is watched."),
+        new("limit", "Most to list", FieldKind.Number, Default: "8"),
+    ];
+    public Type Component => typeof(RunningOutCard);
+}
+
+/// <summary>
 /// Marker for widgets that work with any probed connection. Kept as a single list so the
 /// generic widgets don't have to name every provider — the picker treats an entry of "*"
 /// as "anything".

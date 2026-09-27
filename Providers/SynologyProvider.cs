@@ -34,7 +34,7 @@ public sealed class SynologyProvider(IHttpClientFactory httpFactory, ILogger<Syn
         new("cpu_percent", "CPU", "%", 1),
         new("ram_percent", "Memory", "%", 1),
         new("temp_c", "Temperature", "°C", 1),
-        new("disk_percent", "Fullest volume", "%", 1),
+        new("disk_percent", "Fullest volume", "%", 1) { Capacity = CapacityLimit.Percent },
         new("uptime_days", "Uptime", " days", 1),
         new("latency_ms", "Response time", " ms"),
     ];
@@ -43,6 +43,8 @@ public sealed class SynologyProvider(IHttpClientFactory httpFactory, ILogger<Syn
     [
         new("Volume nearly full", "disk_percent", Comparison.Above, 90, ClearThreshold: 85, ForMinutes: 10,
             Why: "The one that actually loses data if ignored."),
+
+        CapacityMetric.FullWithin("Volume full within 30 days", "disk_percent"),
 
         new("Running hot", "temp_c", Comparison.Above, 60, ClearThreshold: 55, ForMinutes: 15,
             Why: "Usually a failed fan or a blocked vent."),
