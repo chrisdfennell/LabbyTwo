@@ -35,3 +35,24 @@ jobs:
             dotnet build "$plugin" --configuration Release -warnaserror
             echo "::endgroup::"
           done
+
+      # For the WebSocket client built into Node 22, which the smoke test uses to drive
+      # the runner's Chrome. The runner's own Node is older and has no such thing.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Everything above passed for v1.6.2, which then never started for anyone who had
+      # the status page plugin installed: a deadlock in the container, with no error and
+      # no log line after "Scanning plugins". Building the plugins proves they compile, not
+      # that the app runs with them. So this starts the published app with every one of
+      # them loaded, fills in a dashboard, and requires it to answer, draw its cards in a
+      # real browser and keep probing — each step with a deadline, and a stack dump of
+      # every thread if one passes. The release runs this workflow, so a release that
+      # would not start is never tagged.
+      #
+      # The step's own timeout is only a backstop. The script's deadlines are what should
+      # fire, because they are the ones that print why.
+      - name: Start the app with every plugin loaded
+        timeout-minutes: 10
+        run: bash scripts/smoke-boot.sh
