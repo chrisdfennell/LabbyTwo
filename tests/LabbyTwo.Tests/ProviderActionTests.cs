@@ -162,6 +162,13 @@ public class QnapActionTests
     [InlineData("Good", false)]
     [InlineData("Normal", false)]
     [InlineData("--", false)]
+    [InlineData("OK", false)]      // what QTS 5 actually says, and the one that was missing
+    [InlineData("ok", false)]
+    [InlineData("good", false)]
+    [InlineData("GOOD", false)]
+    [InlineData("normal", false)]
+    [InlineData("Ready", false)]
+    [InlineData(" Good ", false)]
     [InlineData("Warning", true)]
     [InlineData("Abnormal", true)]
     [InlineData("Error", true)]

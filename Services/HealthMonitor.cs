@@ -268,7 +268,7 @@ public sealed class HealthMonitor(
         {
             log.Log(isUp == true ? LogLevel.Information : LogLevel.Warning,
                 "{Connection} is {Status}: {Message}", connection.Name, isUp == true ? "UP" : "DOWN", result.Message);
-            await history.RecordStatusAsync(connection.Id, isUp ?? false, result.Message, ct);
+            await RecordStatusAsync(connection, isUp ?? false, result.Message, ct);
 
             // How long the previous state lasted, so a recovery notice can say "was down
             // for 6 minutes" rather than just "is back".
@@ -300,7 +300,27 @@ public sealed class HealthMonitor(
             // while the app was off is reported above as the change it really is. The
             // write is conditional in the store either way, so a repeat costs a row of
             // nothing rather than a state change that never happened.
-            await history.RecordStatusAsync(connection.Id, isUp ?? false, result.Message, ct);
+            await RecordStatusAsync(connection, isUp ?? false, result.Message, ct);
+        }
+    }
+
+    /// <summary>
+    /// Writes the status event, and survives not being able to. By the time this runs the
+    /// in-memory state has already moved on, so a throw here was not a retry later — the
+    /// next sweep sees no change and the alert for this one is simply never sent. It also
+    /// failed the whole sweep's WhenAll, which skipped the Updated event and the prune for
+    /// every other connection. A missing row in the timeline is the smaller loss, so it is
+    /// logged and the handlers still run, the same bargain RecordAsync makes for samples.
+    /// </summary>
+    private async Task RecordStatusAsync(Connection connection, bool isUp, string message, CancellationToken ct)
+    {
+        try
+        {
+            await history.RecordStatusAsync(connection.Id, isUp, message, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            log.LogWarning(ex, "Could not record the status of {Connection}", connection.Name);
         }
     }
 

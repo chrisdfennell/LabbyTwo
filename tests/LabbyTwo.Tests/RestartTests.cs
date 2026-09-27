@@ -169,6 +169,37 @@ public sealed class RestartTests : IDisposable
     }
 
     [Fact]
+    public async Task AStatusThatCannotBeWrittenIsStillAnnounced()
+    {
+        var connection = await WatchedAsync();
+        await Get<HealthMonitor>().RefreshAsync(connection);
+
+        // The database refusing the write — locked, full, or here simply missing the table.
+        // By then the monitor has already moved on in memory, so a throw was never a retry:
+        // the next sweep saw no change, and the outage went unreported for good.
+        await using (var db = await Get<Db>().OpenAsync())
+        {
+            var drop = db.CreateCommand();
+            drop.CommandText = "DROP TABLE status_events";
+            await drop.ExecuteNonQueryAsync();
+        }
+
+        var changes = new List<HealthMonitor.StatusChange>();
+        Get<HealthMonitor>().StatusChanged += change =>
+        {
+            changes.Add(change);
+            return Task.CompletedTask;
+        };
+
+        _provider.Reachable = false;
+        await Get<HealthMonitor>().RefreshAsync(connection);
+
+        var change = Assert.Single(changes);
+        Assert.False(change.IsUp);
+        Assert.False(Get<HealthMonitor>().State(connection.Id)!.IsUp);
+    }
+
+    [Fact]
     public async Task ARestartDoesNotMakeAMeteredConnectionDueAgain()
     {
         // The forecast case: the upstream recomputes hourly and counts requests, so being

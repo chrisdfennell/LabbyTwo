@@ -35,7 +35,7 @@ public sealed class WeatherAlertJob(
     // Warning ids already announced, so a warning in force for six hours is announced once
     // rather than seventy-two times. In memory only: the cost of losing it is one repeat
     // after a restart, and the alternative is a database table for a set of strings.
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _announced = new();
+    private readonly Announced _announced = new();
 
     private bool _primed;
 
@@ -67,7 +67,7 @@ public sealed class WeatherAlertJob(
 
             foreach (var warning in warnings)
             {
-                if (!_announced.TryAdd(Key(connection, warning), now))
+                if (!_announced.Saw(Key(connection, warning), now))
                     continue;
 
                 // On the first run after a restart, anything already under way is recorded
@@ -83,7 +83,7 @@ public sealed class WeatherAlertJob(
         }
 
         _primed = true;
-        Forget(now);
+        _announced.Forget(now);
     }
 
     private async Task SendAsync(Connection connection, WeatherAlertsProvider.Warning warning, CancellationToken ct)
@@ -126,15 +126,46 @@ public sealed class WeatherAlertJob(
         $"{connection.Id}|{warning.Id}";
 
     /// <summary>
-    /// Ids are only worth remembering while they could still be in the feed. A day is well
-    /// past the life of any warning, and stops this growing for as long as the app runs.
+    /// The warnings already announced, by when each was last seen in the feed. Its own
+    /// type so the remembering can be tested without a weather service to ask.
     /// </summary>
-    private void Forget(DateTimeOffset now)
+    public sealed class Announced
     {
-        foreach (var (key, at) in _announced)
+        private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSeen = new();
+
+        /// <summary>
+        /// Notes that this warning is in the feed now, and says whether it is new. Every
+        /// sighting moves the time forward — not only the first — because what
+        /// <see cref="Forget"/> needs to know is whether the warning is still around, not
+        /// how long ago it began. Keeping the first sighting instead forgot a winter storm
+        /// warning a day after it was issued while it was still in force, and announced it
+        /// again as news; again the day after, and past quiet hours each time if severe.
+        /// </summary>
+        public bool Saw(string key, DateTimeOffset now)
         {
-            if (now - at > TimeSpan.FromDays(1))
-                _announced.TryRemove(key, out _);
+            var isNew = true;
+            _lastSeen.AddOrUpdate(key, now, (_, _) =>
+            {
+                isNew = false;
+                return now;
+            });
+            return isNew;
         }
+
+        /// <summary>
+        /// Ids are only worth remembering while they could still be in the feed. One that
+        /// has not appeared for a day has left it, and dropping those stops this growing
+        /// for as long as the app runs.
+        /// </summary>
+        public void Forget(DateTimeOffset now)
+        {
+            foreach (var (key, at) in _lastSeen)
+            {
+                if (now - at > TimeSpan.FromDays(1))
+                    _lastSeen.TryRemove(key, out _);
+            }
+        }
+
+        public bool Contains(string key) => _lastSeen.ContainsKey(key);
     }
 }

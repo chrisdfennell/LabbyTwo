@@ -53,13 +53,17 @@ public sealed class MetricAlertServiceTests : IDisposable
         public IReadOnlyList<FieldSpec> Fields => [];
         public List<Alert> Sent { get; } = [];
 
+        /// <summary>When set, a send does not finish until the test says so — a slow webhook.</summary>
+        public TaskCompletionSource? Hold { get; set; }
+
         public Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct) =>
             Task.FromResult(ProbeResult.Up(TimeSpan.Zero));
 
         public Task SendAsync(Connection channel, Alert alert, CancellationToken ct)
         {
-            Sent.Add(alert);
-            return Task.CompletedTask;
+            lock (Sent)
+                Sent.Add(alert);
+            return Hold?.Task ?? Task.CompletedTask;
         }
     }
 
@@ -310,6 +314,84 @@ public sealed class MetricAlertServiceTests : IDisposable
         await Get<MetricAlertService>().EvaluateAsync(start.AddMinutes(1), CancellationToken.None);
 
         Assert.Empty(Get<MetricAlertService>().Firing);
+    }
+
+    [Fact]
+    public async Task OneFailedProbeDoesNotMakeAFiringAlertFireAgain()
+    {
+        var connection = await SetUpAsync(DiskAbove(90));
+        var start = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+
+        await TickAsync(connection, 95, start);
+        Assert.Single(_channel.Sent);
+
+        // A dropped packet: the probe fails and carries no metrics. That is not the rule or
+        // the connection going away, so the breach must still be there afterwards.
+        _provider.Reachable = false;
+        await Get<HealthMonitor>().RefreshAsync(connection);
+        await Get<MetricAlertService>().EvaluateAsync(start.AddMinutes(1), CancellationToken.None);
+        Assert.Single(Get<MetricAlertService>().Firing);
+
+        _provider.Reachable = true;
+        await TickAsync(connection, 95, start.AddMinutes(2));
+
+        // Still the one alert, not a second "firing" for the same breach.
+        Assert.Single(_channel.Sent);
+    }
+
+    [Fact]
+    public async Task ARecoveryAfterAFailedProbeIsStillAnnounced()
+    {
+        var connection = await SetUpAsync(DiskAbove(90));
+        var start = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+
+        await TickAsync(connection, 95, start);
+
+        _provider.Reachable = false;
+        await Get<HealthMonitor>().RefreshAsync(connection);
+        await Get<MetricAlertService>().EvaluateAsync(start.AddMinutes(1), CancellationToken.None);
+
+        _provider.Reachable = true;
+        await TickAsync(connection, 50, start.AddMinutes(2));
+
+        Assert.Equal(2, _channel.Sent.Count);
+        Assert.Equal(AlertLevel.Up, _channel.Sent[1].Level);
+        Assert.Empty(Get<MetricAlertService>().Firing);
+    }
+
+    [Fact]
+    public async Task TwoPassesAtOnceSendOneAlert()
+    {
+        // "Test all" finishes several sweeps close together. With the send slow, the second
+        // pass used to read the breach before the first had written it, and both sent.
+        var connection = await SetUpAsync(DiskAbove(90));
+        _provider.Value = 95;
+        await Get<HealthMonitor>().RefreshAsync(connection);
+
+        _channel.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var at = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var evaluator = Get<MetricAlertService>();
+
+        var first = evaluator.EvaluateAsync(at, CancellationToken.None);
+        await WaitUntilAsync(() => _channel.Sent.Count > 0);
+
+        var second = evaluator.EvaluateAsync(at.AddSeconds(1), CancellationToken.None);
+        await Task.Delay(100);
+
+        _channel.Hold.SetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Single(_channel.Sent);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Timed out waiting for the send to start.");
+            await Task.Delay(10);
+        }
     }
 
     private sealed class Env(string root) : IHostEnvironment

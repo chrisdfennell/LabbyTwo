@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LabbyTwo.Core;
 using LabbyTwo.Providers;
+using LabbyTwo.Services;
 
 namespace LabbyTwo.Tests;
 
@@ -185,5 +186,39 @@ public class WeatherServicesTests
         {
             Thread.CurrentThread.CurrentCulture = original;
         }
+    }
+
+    [Fact]
+    public void AWarningStillInForceIsNotAnnouncedAgainTheNextDay()
+    {
+        // A winter storm warning runs for days. Remembered by when it was first seen, it was
+        // forgotten after one and announced again as news — every day it stayed up.
+        var announced = new WeatherAlertJob.Announced();
+        var issued = DateTimeOffset.Parse("2026-01-10T06:00:00Z");
+
+        Assert.True(announced.Saw("nws|storm", issued));
+
+        // Still in the feed every five minutes for the next three days.
+        for (var at = issued.AddMinutes(5); at < issued.AddDays(3); at = at.AddMinutes(5))
+        {
+            Assert.False(announced.Saw("nws|storm", at));
+            announced.Forget(at);
+        }
+    }
+
+    [Fact]
+    public void AWarningThatHasLeftTheFeedIsForgottenAfterADay()
+    {
+        var announced = new WeatherAlertJob.Announced();
+        var issued = DateTimeOffset.Parse("2026-01-10T06:00:00Z");
+
+        announced.Saw("nws|frost", issued);
+        announced.Saw("nws|frost", issued.AddHours(6));   // last seen here, then expired
+
+        announced.Forget(issued.AddHours(29));
+        Assert.True(announced.Contains("nws|frost"));
+
+        announced.Forget(issued.AddHours(31));
+        Assert.False(announced.Contains("nws|frost"));
     }
 }
