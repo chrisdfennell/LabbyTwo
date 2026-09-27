@@ -38,6 +38,7 @@ public sealed class SelfUpdaterTests : IDisposable
         public int Port { get; }
         public string ImageName { get; set; } = "fennch/labbytwo:latest";
         public string[] RepoDigests { get; set; } = ["fennch/labbytwo@sha256:deadbeef"];
+        public string[]? Dns { get; set; }
         public List<string> Paths { get; } = [];
         public string? CreateBody { get; private set; }
 
@@ -75,6 +76,7 @@ public sealed class SelfUpdaterTests : IDisposable
                     {
                         Name = "/labbytwo-labbytwo-1",
                         Config = new { Image = ImageName },
+                        HostConfig = new { Dns },
                     });
                 }
                 else if (path.Contains("/images/") && path.EndsWith("/json"))
@@ -233,6 +235,22 @@ public sealed class SelfUpdaterTests : IDisposable
         Assert.True(root.GetProperty("HostConfig").GetProperty("AutoRemove").GetBoolean());
 
         Assert.Contains("POST /v1.41/containers/update123/start", _docker.Paths);
+    }
+
+    [Fact]
+    public async Task Gives_watchtower_the_same_dns_servers_as_this_container()
+    {
+        // A container that only resolves anything because of "dns:" in its compose file
+        // would otherwise start a helper that cannot find Docker Hub.
+        _docker.Dns = ["192.168.1.1", "1.1.1.1"];
+        await ConnectAsync();
+
+        await Get<SelfUpdater>().StartUpdateAsync();
+
+        using var request = JsonDocument.Parse(_docker.CreateBody!);
+        var dns = request.RootElement.GetProperty("HostConfig").GetProperty("Dns")
+            .EnumerateArray().Select(d => d.GetString()!).ToArray();
+        Assert.Equal(["192.168.1.1", "1.1.1.1"], dns);
     }
 
     [Fact]
