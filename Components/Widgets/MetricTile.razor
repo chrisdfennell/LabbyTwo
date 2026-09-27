@@ -61,13 +61,20 @@ else
 
         // Prefer the live probe; fall back to the last stored sample so a tile still reads
         // sensibly right after a restart, before the first sweep lands.
+        //
+        // Worked out afresh every time and assigned once at the end. It used to be kept
+        // between loads, so a metric that stopped reporting showed its last value for ever,
+        // and switching the tile to another metric in the editor showed the old metric's
+        // number under the new one's name. Assigned at the end rather than cleared at the
+        // start so a render during the await does not flash "no data yet".
+        double? value = null;
         var state = Health.State(Context.Connection.Id);
         if (state?.Metrics.TryGetValue(Metric, out var live) == true)
-            _value = live;
+            value = live;
 
         var samples = await History.SamplesAsync(Context.Connection.Id, Metric, TimeSpan.FromHours(6));
         _series = [.. samples.Select(s => s.Value)];
-        _value ??= samples.Count > 0 ? samples[^1].Value : null;
+        _value = value ?? (samples.Count > 0 ? samples[^1].Value : null);
     }
 
     private void OnUpdated() => _ = InvokeAsync(async () =>

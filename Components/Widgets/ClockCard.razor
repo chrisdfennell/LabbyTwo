@@ -15,16 +15,33 @@
     private bool Seconds => Context.Widget.Settings.GetBool("seconds");
     private string TimeFormat => Seconds ? "HH:mm:ss" : "HH:mm";
 
-    protected override void OnInitialized()
+    private TimeSpan _period;
+
+    protected override void OnParametersSet()
     {
         // Ticking every second when seconds aren't shown would push a re-render down the
         // circuit 59 times for nothing.
         var period = Seconds ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(20);
-        _timer = new Timer(_ => InvokeAsync(() =>
+
+        // Decided here rather than once at start-up, so turning seconds on in the editor
+        // makes them tick instead of jumping by twenty at a time until the next reload.
+        // The time is caught up at once too, or it would sit on the old format until the
+        // first tick.
+        if (_timer is null)
+        {
+            _timer = new Timer(_ => InvokeAsync(() =>
+            {
+                _now = DateTimeOffset.Now;
+                StateHasChanged();
+            }), null, period, period);
+        }
+        else if (period != _period)
         {
             _now = DateTimeOffset.Now;
-            StateHasChanged();
-        }), null, period, period);
+            _timer.Change(period, period);
+        }
+
+        _period = period;
     }
 
     public void Dispose() => _timer?.Dispose();

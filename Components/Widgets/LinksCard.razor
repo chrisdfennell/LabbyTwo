@@ -15,9 +15,11 @@ else
                 }
                 else if (ShowFavicons)
                 {
-                    @* A site with no icon 404s here, and the browser then shows the alt
-                       text — a link emoji — rather than a broken-image glyph. *@
-                    <img class="link-favicon" loading="lazy" alt="🔗"
+                    @* A site with no icon still answers with an image — a small link glyph
+                       from the endpoint — because a 404 here is a broken-image frame in a
+                       box this size, not the alt text. The alt is empty because the icon is
+                       decoration: the link's name follows it. *@
+                    <img class="link-favicon" loading="lazy" alt=""
                          src="@($"api/favicon?url={Uri.EscapeDataString(link.Url)}")" />
                 }
                 else

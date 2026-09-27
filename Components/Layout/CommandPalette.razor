@@ -54,6 +54,7 @@
     private int _selected;
     private List<Entry> _all = [];
     private ElementReference _input;
+    private DotNetObjectReference<CommandPalette>? _self;
 
     private List<Entry> _matches => Filter();
 
@@ -84,7 +85,11 @@
     {
         if (!firstRender)
             return;
-        await JS.InvokeVoidAsync("labbyPalette.register", DotNetObjectReference.Create(this));
+        // Kept so it can be released with the component. Created inline, the reference was
+        // never disposed, and every page load left one pinning a dead palette in memory for
+        // as long as the circuit lived.
+        _self = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("labbyPalette.register", _self);
     }
 
     private async Task BuildAsync()
@@ -218,5 +223,9 @@
         StateHasChanged();
     });
 
-    public void Dispose() => Config.Changed -= OnChanged;
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        _self?.Dispose();
+    }
 }

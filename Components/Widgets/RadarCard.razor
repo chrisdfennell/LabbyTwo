@@ -37,6 +37,8 @@ else
     private string _url = "";
     private long _tick;
     private Timer? _timer;
+    private (string Url, int Minutes)? _timerFor;
+    private bool _disposed;
 
     private int Height => Math.Clamp(Context.Widget.Settings.GetInt("height", 320), 120, 1200);
     private bool ShowAttribution => Context.Widget.Settings.GetBool("attribution", true);
@@ -68,17 +70,38 @@ else
                 settings.Get("station"),
                 settings.Get("custom_url"));
 
+        // The await above is long enough for the card to have been taken off the page, and
+        // a timer started after Dispose would tick into a dead component for ever.
+        if (_disposed)
+            return;
+
         // Only image sources need refreshing; an embedded map animates on its own, and
         // reloading its iframe would just restart somebody else's JavaScript.
+        (string Url, int Minutes)? wanted = _source.Kind == RadarKind.Image && _url.Length > 0
+            ? (_url, RefreshMinutes)
+            : null;
+
+        // Left alone unless what it refreshes has changed. Parents hand over a new context
+        // on every render, and the weather tab renders on every sweep — every thirty
+        // seconds — so restarting the timer here meant a five-minute refresh was always
+        // pushed another five minutes away and the picture never changed at all.
+        if (wanted == _timerFor)
+            return;
+
         _timer?.Dispose();
-        _timer = _source.Kind == RadarKind.Image && _url.Length > 0
+        _timerFor = wanted;
+        _timer = wanted is { } due
             ? new Timer(_ => InvokeAsync(() =>
             {
                 _tick = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 StateHasChanged();
-            }), null, TimeSpan.FromMinutes(RefreshMinutes), TimeSpan.FromMinutes(RefreshMinutes))
+            }), null, TimeSpan.FromMinutes(due.Minutes), TimeSpan.FromMinutes(due.Minutes))
             : null;
     }
 
-    public void Dispose() => _timer?.Dispose();
+    public void Dispose()
+    {
+        _disposed = true;
+        _timer?.Dispose();
+    }
 }

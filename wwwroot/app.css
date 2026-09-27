@@ -377,6 +377,37 @@ h1[tabindex]:focus { outline: none; }
     .widget-skeleton span { animation: none; }
 }
 
+/* A card that threw, in place of the card. Muted like any other caption, with one small
+   mark in the down colour so it can be found on a busy page without shouting across it. */
+.card-failed {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .45rem;
+    color: var(--muted);
+    font-size: .8rem;
+}
+
+.card-failed-mark {
+    width: .45rem;
+    height: .45rem;
+    border-radius: 50%;
+    background: var(--down);
+    flex: none;
+}
+
+.card-failed-retry {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.card-failed-retry:hover { color: var(--down); }
+
 /* The uptime card reuses the status page's own day strip — see .uptime-strip further
    down. Two visual languages for the same idea would be worse than none, and the classes
    already existed. */

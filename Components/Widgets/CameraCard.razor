@@ -34,6 +34,7 @@ else
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
     private System.Threading.Timer? _timer;
+    private (string Url, int Seconds)? _timerFor;
     private long _tick;
 
     private string Url => Context.Widget.Settings.Get("url").Trim();
@@ -59,10 +60,21 @@ else
 
     protected override void OnParametersSet()
     {
+        (string Url, int Seconds)? wanted = Url.Length == 0 || RefreshSeconds == 0
+            ? null
+            : (Url, RefreshSeconds);
+
+        // Only restarted when the picture or its period changed. Parents hand over a new
+        // context on every render, and a page that re-renders more often than the period
+        // would otherwise keep pushing the next frame away and never show it.
+        if (wanted == _timerFor)
+            return;
+
         _timer?.Dispose();
         _timer = null;
+        _timerFor = wanted;
 
-        if (Url.Length == 0 || RefreshSeconds == 0)
+        if (wanted is null)
             return;
 
         var period = TimeSpan.FromSeconds(RefreshSeconds);

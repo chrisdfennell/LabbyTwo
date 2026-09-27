@@ -8,7 +8,9 @@ window.labbyPalette = {
             document.removeEventListener('keydown', this._handler);
         }
         this._handler = event => {
-            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+            // event.key can be missing: some autofill and IME events arrive as a keydown
+            // with no key at all, and each one would otherwise be an error in the console.
+            if ((event.ctrlKey || event.metaKey) && (event.key || '').toLowerCase() === 'k') {
                 event.preventDefault();
                 dotNetRef.invokeMethodAsync('OpenAsync');
             }

@@ -111,10 +111,14 @@ else
         _current ??= samples[^1].Value;
 
         // Compared against the oldest reading still inside the last hour, so the arrow
-        // means "since an hour ago" rather than "since the previous probe".
+        // means "since an hour ago" rather than "since the previous probe". With nothing
+        // in that hour there is no trend to show: falling back to the oldest sample in the
+        // window, as this once did, labelled a change since yesterday as the last hour's.
         var cutoff = DateTimeOffset.Now.AddHours(-1);
-        var anHourAgo = samples.FirstOrDefault(s => s.At >= cutoff) ?? samples[0];
-        _trend = samples.Count > 1 ? samples[^1].Value - anHourAgo.Value : null;
+        var anHourAgo = samples.FirstOrDefault(s => s.At >= cutoff);
+        _trend = anHourAgo is not null && !ReferenceEquals(anHourAgo, samples[^1])
+            ? samples[^1].Value - anHourAgo.Value
+            : null;
     }
 
     private void OnUpdated() => _ = InvokeAsync(async () =>

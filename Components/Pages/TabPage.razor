@@ -26,7 +26,12 @@ else
 {
     @* The page knows nothing about grids, embeds or notes — it renders whatever the
        registered kind points at, which is what lets a new kind be one more class. *@
-    <DynamicComponent Type="_kind.Component" Parameters="_parameters" @key="_tab.Id" />
+    @* The last line of defence, behind each card's own. A tab kind that throws — a
+       plugin's, say — should cost that tab, not the sidebar and every other page the
+       circuit would take with it. Keyed on the tab so moving to another one starts clean. *@
+    <CardBoundary Name="@($"The “{_tab.Name}” tab")" Version="@($"{_tab.Kind}|{_tab.Settings.ToJson()}")" @key="_tab.Id">
+        <DynamicComponent Type="_kind.Component" Parameters="_parameters" />
+    </CardBoundary>
 }
 
 @code {
