@@ -311,6 +311,13 @@ now="$(date +%s)"
   widget clock "" "" "{}"
   widget markdown "Notes" "" '{"content":"Smoke test"}'
 
+  # Three days of a disk filling, so the forecast job has a real series to fit at startup
+  # and the "Running out" card draws a row rather than only its empty state.
+  for h in $(seq 1 72); do
+    echo "INSERT INTO samples (connection_id, metric, ts, value) VALUES ('smoke-self', 'disk_percent', $((now - h * 3600)), $((80 - h / 6)));"
+  done
+  widget running-out "Running out" "" "{}"
+
   n=0
   for provider in $(declared_types IConnectionProvider); do
     n=$((n + 1))

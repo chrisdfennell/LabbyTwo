@@ -27,7 +27,9 @@ public sealed class DiskSpaceProvider : IConnectionProvider
 
     public IReadOnlyList<MetricSpec> Metrics =>
     [
-        new("disk_percent", "Used", "%", 1),
+        // Capacity is what opts a metric into "full in about 7 weeks" forecasts and the
+        // days-until-full alert. Leave it off anything without a limit to run into.
+        new("disk_percent", "Used", "%", 1) { Capacity = CapacityLimit.Percent },
         new("free_gb", "Free", " GB", 1),
         new("total_gb", "Capacity", " GB", 1),
     ];

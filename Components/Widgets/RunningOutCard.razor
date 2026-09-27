@@ -1,0 +1,117 @@
+@implements IDisposable
+@inject CapacityForecasts Forecasts
+@inject ConfigStore Config
+@inject Registry Registry
+
+@* When things run out, soonest first. Everything here is read from memory: the forecasts
+   are worked out in the background every quarter of an hour, because each one reads a
+   fortnight of history and doing that while the page is drawn is how a dashboard stops
+   opening. *@
+
+@if (!Forecasts.HasRun)
+{
+    <p class="tile-meta mb-0">Working out trends…</p>
+}
+else if (_rows.Count == 0)
+{
+    <p class="tile-meta mb-0">@EmptyText</p>
+}
+else
+{
+    <div class="d-grid gap-1">
+        @foreach (var row in _rows)
+        {
+            <div class="d-flex justify-content-between align-items-baseline gap-2" title="@row.Forecast.Explain()">
+                <span class="text-truncate">
+                    @row.Name <span class="tile-meta">· @row.Label</span>
+                </span>
+                <span class="flex-none text-end">
+                    <span class="tile-meta me-1">@row.Now</span>
+                    <span style="color: @Colour(row.Forecast)">@row.Forecast.Describe()</span>
+                    @if (row.Forecast is { State: ForecastState.Filling, Confidence: ForecastConfidence.Low })
+                    {
+                        <span class="tile-meta"> (rough)</span>
+                    }
+                </span>
+            </div>
+        }
+    </div>
+    @if (_hidden > 0)
+    {
+        <div class="tile-meta mt-1">and @_hidden more</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Row(string Name, string Label, string Now, CapacityForecast Forecast);
+
+    private List<Row> _rows = [];
+    private int _hidden;
+
+    private string Metric => Context.Widget.Settings.Get("metric").Trim();
+    private double WithinDays => Context.Widget.Settings.GetDouble("within_days", 0);
+    private bool ShowIdle => Context.Widget.Settings.GetBool("show_idle", true);
+    private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 50);
+
+    private string EmptyText =>
+        WithinDays > 0 || !ShowIdle
+            ? "Nothing is filling up."
+            : "Nothing that fills up is being watched yet — a NAS, a Proxmox node or a download client will appear here once it has reported.";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Forecasts.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var connections = (await Config.ConnectionsAsync()).ToDictionary(c => c.Id);
+
+        var rows = Forecasts.All
+            .Where(e => Context.Connection is null || e.ConnectionId == Context.Connection.Id)
+            .Where(e => Metric.Length == 0 || string.Equals(e.Metric, Metric, StringComparison.OrdinalIgnoreCase))
+            .Where(e => connections.ContainsKey(e.ConnectionId))
+            .Where(e => ShowIdle || e.Forecast.State is ForecastState.Filling or ForecastState.Full)
+            .Where(e => WithinDays <= 0 || e.Forecast.State == ForecastState.Full
+                        || e.Forecast is { State: ForecastState.Filling, DaysLeft: { } days } && days <= WithinDays)
+            .OrderBy(e => e.Forecast.SortKey)
+            .ThenBy(e => connections[e.ConnectionId].Name, StringComparer.OrdinalIgnoreCase)
+            .Select(e =>
+            {
+                var connection = connections[e.ConnectionId];
+                var spec = Registry.Metric(connection, e.Metric);
+                return new Row(connection.Name, spec.Label, spec.Format(e.Forecast.Current), e.Forecast);
+            })
+            .ToList();
+
+        _hidden = Math.Max(0, rows.Count - Limit);
+        _rows = [.. rows.Take(Limit)];
+    }
+
+    /// <summary>
+    /// Red inside a week, amber inside a month, plain further out, and muted for anything
+    /// that is not heading anywhere — so the eye goes to the line that needs a disk ordered.
+    /// </summary>
+    private static string Colour(CapacityForecast forecast) => forecast switch
+    {
+        { State: ForecastState.Full } => "var(--down)",
+        { State: ForecastState.Filling, DaysLeft: < 7 } => "var(--down)",
+        { State: ForecastState.Filling, DaysLeft: < 30 } => "var(--warn)",
+        { State: ForecastState.Filling } => "inherit",
+        _ => "var(--muted)",
+    };
+
+    // Raised off the render thread, after a background pass.
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Forecasts.Changed -= OnChanged;
+}

@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject QnapProvider Qnap
+@inject CapacityForecasts Forecasts
 
 @if (Context.Connection is null)
 {
@@ -73,6 +74,19 @@ else
         </div>
     }
 
+    @* The probe records only the fullest volume, so that is the one with a history to
+       forecast from — and the one that runs out first anyway. Shown only when it is
+       heading somewhere: "not filling" under every volume bar would be noise. *@
+    @if (Fullest is { } fullest
+         && Forecasts.Get(Context.Connection.Id, "disk_percent") is { State: ForecastState.Filling or ForecastState.Full } forecast)
+    {
+        <div class="tile-meta mb-2" title="@forecast.Explain()">
+            ⏳ @fullest.Label is
+            <span style="color: @(forecast.State == ForecastState.Full || forecast.DaysLeft < 7 ? "var(--down)" : forecast.DaysLeft < 30 ? "var(--warn)" : "inherit")">@forecast.Describe()</span>
+            at the current rate.
+        </div>
+    }
+
     @* Physical drives, under the volumes they make up. This is the reading that arrives
        before the array notices, so it is worth the space even when everything is fine —
        a healthy list is how you know the check is actually running. *@
@@ -112,6 +126,8 @@ else
 
     /// <summary>On by default — a card that hides a failing drive is worse than no card.</summary>
     private bool ShowDisks => Context.Widget.Settings.GetBool("show_disks", true);
+
+    private QnapProvider.VolumeInfo? Fullest => _volumes.Count > 0 ? _volumes.MaxBy(volume => volume.UsedPercent) : null;
 
     private double SlowestFan => _info is { Fans.Count: > 0 } ? _info.Fans.Min(fan => fan.Rpm) : 0;
 

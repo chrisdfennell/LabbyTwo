@@ -35,7 +35,7 @@ public sealed class ProxmoxBackupProvider(IHttpClientFactory httpFactory) : ICon
 
     public IReadOnlyList<MetricSpec> Metrics =>
     [
-        new("disk_percent", "Fullest datastore", "%", 1),
+        new("disk_percent", "Fullest datastore", "%", 1) { Capacity = CapacityLimit.Percent },
         new("free_gb", "Free space", " GB", 1),
         new("snapshots", "Snapshots"),
         new("hours_since_backup", "Since the last backup", " h", 1),
@@ -49,6 +49,8 @@ public sealed class ProxmoxBackupProvider(IHttpClientFactory httpFactory) : ICon
 
         new("Datastore nearly full", "disk_percent", Comparison.Above, 90, ClearThreshold: 85, ForMinutes: 30,
             Why: "A full datastore fails tonight's backup, quietly, at three in the morning."),
+
+        CapacityMetric.FullWithin("Datastore full within 30 days", "disk_percent"),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)

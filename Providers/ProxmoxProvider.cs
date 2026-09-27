@@ -31,7 +31,7 @@ public sealed class ProxmoxProvider(IHttpClientFactory httpFactory) : IConnectio
     [
         new("cpu_percent", "CPU", "%", 1),
         new("ram_percent", "Memory", "%", 1),
-        new("disk_percent", "Root filesystem", "%", 1),
+        new("disk_percent", "Root filesystem", "%", 1) { Capacity = CapacityLimit.Percent },
         new("uptime_days", "Uptime", " days", 1),
         new("vms_running", "VMs running"),
         new("containers_running", "Containers running"),

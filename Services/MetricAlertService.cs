@@ -17,6 +17,7 @@ public sealed class MetricAlertService(
     HealthMonitor monitor,
     AlertService alerts,
     AppSettingsStore appSettings,
+    CapacityForecasts forecasts,
     ILogger<MetricAlertService> log) : IHostedService
 {
     /// <summary>
@@ -154,8 +155,7 @@ public sealed class MetricAlertService(
                 var key = Key(rule.Id, connection.Id);
                 watched.Add(key);
 
-                var state = monitor.State(connection.Id);
-                if (state?.Metrics.TryGetValue(rule.Metric, out var value) != true)
+                if (!TryReading(connection.Id, rule.Metric, out var value))
                 {
                     // No reading, so no news: a firing breach stays firing, and will clear
                     // (and say so) when a reading says it has. A breach still inside its
@@ -177,6 +177,22 @@ public sealed class MetricAlertService(
             _breaches.TryRemove(key, out _);
 
         Updated?.Invoke();
+    }
+
+    /// <summary>
+    /// The number a rule compares. A measured metric comes from the monitor's last probe; a
+    /// forecast (<c>days_until_full:…</c>) from <see cref="CapacityForecasts"/>, which works
+    /// them out on its own timer. Either way a missing value means "no reading", so a volume
+    /// that has not got enough history for a forecast is treated like a probe that failed —
+    /// no news — rather than as a breach or a recovery.
+    /// </summary>
+    private bool TryReading(string connectionId, string metric, out double value)
+    {
+        if (CapacityMetric.TryParse(metric, out _))
+            return forecasts.TryGetValue(connectionId, metric, out value);
+
+        value = 0;
+        return monitor.State(connectionId)?.Metrics.TryGetValue(metric, out value) == true;
     }
 
     private async Task ApplyAsync(AlertRule rule, Connection connection, double value, DateTimeOffset now, CancellationToken ct)
@@ -226,7 +242,21 @@ public sealed class MetricAlertService(
         var reading = Units.Format(spec, value, system, spec.Decimals == 0 && Math.Abs(value) < 100 ? 1 : spec.Decimals);
         var limit = Units.Format(spec, level == AlertLevel.Down ? rule.Threshold : rule.ClearsAt, system);
 
-        var alert = level == AlertLevel.Down
+        // A forecast is said in words. "Days until full is 23.4 days" claims a precision two
+        // weeks of history does not have, and a recovery to "∞ days" is not a sentence.
+        var forecast = CapacityMetric.TryParse(rule.Metric, out var measured)
+            ? forecasts.Get(connection.Id, measured)
+            : null;
+
+        var alert = forecast is not null
+            ? level == AlertLevel.Down
+                ? new Alert(AlertLevel.Down,
+                    $"{connection.Name} · {registry.Metric(connection, measured).Label} {forecast.Describe()}",
+                    $"At the current rate. {forecast.Explain()} This rule warns under {limit}.")
+                : new Alert(AlertLevel.Up,
+                    $"{connection.Name} · {registry.Metric(connection, measured).Label} is no longer close to full",
+                    $"Now {forecast.Describe()}.")
+            : level == AlertLevel.Down
             ? new Alert(AlertLevel.Down,
                 $"{connection.Name} · {spec.Label} is {reading}",
                 $"{spec.Label} went {rule.ComparisonWord} {limit}" +

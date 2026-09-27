@@ -176,6 +176,17 @@ public IReadOnlyList<SuggestedRule> SuggestedRules =>
 ];
 ```
 
+- **Say what fills up.** A metric that climbs towards a limit — percent used, or free space
+  running down to zero — can say so with `Capacity`, and LabbyTwo then forecasts when it
+  runs out: the "Running out" card lists it ("full in about 7 weeks"), and alert rules can
+  watch `days_until_full:<metric>`. `CapacityMetric.FullWithin` is the matching suggested
+  rule. Leave it off anything without a real limit; a CPU has a trend but no "full".
+
+```csharp
+new("pool_percent", "Pool used", "%", 1) { Capacity = CapacityLimit.Percent },
+new("free_gb", "Free", " GB", 1) { Capacity = CapacityLimit.RunsOutAtZero },
+```
+
 - **Fall back to history for a live reading.** A card that only reads
   `HealthMonitor.State` is blank for a whole probe interval after a restart.
   `HistoryStore.LatestAsync` gives the last recorded value of every metric; every card

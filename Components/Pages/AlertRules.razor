@@ -8,6 +8,7 @@
 @inject MetricAlertService Evaluator
 @inject AlertService Alerts
 @inject AppSettingsStore AppSettings
+@inject CapacityForecasts Forecasts
 
 <PageTitle>Alert rules · LabbyTwo</PageTitle>
 
@@ -176,7 +177,7 @@ else
                                 @foreach (var breach in Readings(rule))
                                 {
                                     <div class="@(breach.Firing ? "text-danger" : "tile-meta")">
-                                        @Units.Format(SpecFor(rule, breach.ConnectionId), breach.LastValue, _units, 1)
+                                        @Reading(rule, breach)
                                         <span class="tile-meta">@NameOf(breach.ConnectionId)</span>
                                     </div>
                                 }
@@ -436,10 +437,27 @@ else
 
         foreach (var connection in connectionId is null ? _connections : _connections.Where(c => c.Id == connectionId))
         {
+            var keys = new List<string>();
             foreach (var metric in Registry.MetricsFor(connection))
+            {
                 declared.TryAdd(metric.Key, metric.Label);
+                keys.Add(metric.Key);
+            }
             foreach (var key in await History.MetricsAsync(connection.Id))
+            {
                 declared.TryAdd(key, MetricSpec.Fallback(key).Label);
+                keys.Add(key);
+            }
+
+            // Anything that fills towards a limit can also be watched by when it will get
+            // there — "warn me a month before the volume is full" — which is often the more
+            // useful rule, since 90% on a slow-filling volume is a year of notice and on a
+            // fast one is an evening.
+            foreach (var key in keys.Where(key => Registry.CapacityOf(connection, key) is not null))
+            {
+                var derived = Registry.Metric(connection, CapacityMetric.KeyFor(key));
+                declared.TryAdd(derived.Key, derived.Label);
+            }
         }
 
         _metricOptions = [.. declared.OrderBy(pair => pair.Key).Select(pair => new SelectOption(pair.Key, pair.Value))];
@@ -457,6 +475,17 @@ else
         var connection = _connections.FirstOrDefault(c => c.Id == (connectionId ?? rule.ConnectionId));
         return Registry.Metric(connection, rule.Metric);
     }
+
+    /// <summary>
+    /// A reading as the Now column shows it. A forecast is shown in words — "full in about
+    /// 6 weeks", "not filling" — since the number behind it is days to a precision it does
+    /// not have, and infinity for a volume that is not filling at all.
+    /// </summary>
+    private string Reading(AlertRule rule, MetricAlertService.Breach breach) =>
+        CapacityMetric.TryParse(rule.Metric, out var measured)
+        && Forecasts.Get(breach.ConnectionId, measured) is { } forecast
+            ? forecast.Describe()
+            : Units.Format(SpecFor(rule, breach.ConnectionId), breach.LastValue, _units, 1);
 
     private string NameOf(string? connectionId) =>
         _connections.FirstOrDefault(c => c.Id == connectionId)?.Name ?? "";

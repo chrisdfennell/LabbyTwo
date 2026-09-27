@@ -125,6 +125,12 @@ public sealed class Registry(
     /// </summary>
     public MetricSpec Metric(Connection? connection, string key)
     {
+        // A forecast is labelled after the metric it forecasts — "Fullest volume: days until
+        // full" — so the alert rules page and the notification read naturally for a plugin's
+        // metric as well as a built-in one.
+        if (CapacityMetric.TryParse(key, out var measured))
+            return CapacityMetric.SpecFor(Metric(connection, measured));
+
         if (connection is not null && Provider(connection.Provider) is { } provider)
         {
             var declared = provider.MetricsFor(connection)
@@ -134,6 +140,16 @@ public sealed class Registry(
         }
         return MetricSpec.Fallback(key);
     }
+
+    /// <summary>
+    /// Whether a metric fills towards a limit, and which. The provider's own declaration
+    /// wins; failing that, a well-known name that is a capacity everywhere — disk_percent
+    /// means "disk used" whoever reports it — counts even from a provider that declared the
+    /// metric without saying so, which is every plugin written before this existed.
+    /// </summary>
+    public CapacityLimit? CapacityOf(Connection? connection, string key) =>
+        Metric(connection, key).Capacity
+        ?? (MetricSpec.WellKnown.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase))?.Capacity);
 
     /// <summary>
     /// Everything a connection is expected to report, for the metric dropdown in the
