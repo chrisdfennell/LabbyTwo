@@ -422,6 +422,29 @@ public sealed class StorageTests : IDisposable
         Assert.Equal(0, widgets.Sum(w => w.Width) % 12);
     }
 
+    // ---------- Recorded metric names ----------
+
+    [Fact]
+    public async Task MetricsListsEachRecordedNameOnceInOrderForThatConnectionOnly()
+    {
+        var nas = new Connection { Provider = "http", Name = "NAS" };
+        var other = new Connection { Provider = "http", Name = "Other" };
+        await Get<ConfigStore>().SaveConnectionAsync(nas);
+        await Get<ConfigStore>().SaveConnectionAsync(other);
+        var history = Get<HistoryStore>();
+
+        // Repeats, out of order, and another connection's names alongside: the list is
+        // walked through the index one name at a time, so each of those is a way to get
+        // a duplicate, a gap or a stranger's metric back.
+        await history.RecordAsync(nas.Id, new Dictionary<string, double> { ["temp_c"] = 40, ["disk_percent"] = 70 }, default);
+        await history.RecordAsync(nas.Id, new Dictionary<string, double> { ["temp_c"] = 41, ["fan_rpm_min"] = 900 }, default);
+        await history.RecordAsync(other.Id, new Dictionary<string, double> { ["latency_ms"] = 3, ["zz_last"] = 1 }, default);
+
+        Assert.Equal(["disk_percent", "fan_rpm_min", "temp_c"], await history.MetricsAsync(nas.Id));
+        Assert.Equal(["latency_ms", "zz_last"], await history.MetricsAsync(other.Id));
+        Assert.Empty(await history.MetricsAsync("no-such-connection"));
+    }
+
     // ---------- Latest readings ----------
 
     [Fact]
