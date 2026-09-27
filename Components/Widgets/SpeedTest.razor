@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject LatestReadings Latest
 @using System.Globalization
 
 @* The four numbers a speed test produces, together. They are all ordinary metrics, so a
@@ -152,7 +153,11 @@ else
 
     private double? _trackerAgeHours;
 
-    protected override void OnInitialized() => Health.Updated += OnUpdated;
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        Latest.Changed += OnReadingsLoaded;
+    }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
 
@@ -165,8 +170,10 @@ else
 
         // History rather than only the live state: a test runs hours apart, so the last
         // probe in memory is empty for most of the life of the process and the card would
-        // be blank after every restart.
-        var latest = await History.LatestAsync(Context.Connection.Id, TimeSpan.FromDays(30));
+        // be blank after every restart. From memory rather than the database, so the
+        // numbers never wait on SQLite; thirty days is filtered there just as the query
+        // would, since only the newest value of each metric is kept.
+        var latest = Latest.Get(Context.Connection.Id, TimeSpan.FromDays(30));
 
         _down = Value(latest, "download_mbps");
         _up = Value(latest, "upload_mbps");
@@ -238,5 +245,15 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == Context.Connection?.Id)
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }

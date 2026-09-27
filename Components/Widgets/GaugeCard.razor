@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject LatestReadings Latest
 @inject Registry Registry
 
 @* A proportion, drawn as one. Everything numeric here is a figure or a line, and neither
@@ -71,15 +71,15 @@ else
         return value >= critical ? "is-critical" : value >= threshold ? "is-warm" : "is-fine";
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
-        await LoadAsync();
+        Latest.Changed += OnReadingsLoaded;
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load();
 
-    private async Task LoadAsync()
+    private void Load()
     {
         if (Context.Connection is not { } connection)
             return;
@@ -90,15 +90,29 @@ else
             return;
         }
 
-        var stored = await History.LatestAsync(connection.Id, TimeSpan.FromHours(6));
-        _value = stored.TryGetValue(Metric, out var recorded) ? recorded : null;
+        // From memory rather than the database, so drawing the card never waits on SQLite.
+        // Straight after a restart this can be empty; the card says "No reading yet" and
+        // redraws when the background load lands.
+        _value = Latest.Get(connection.Id, TimeSpan.FromHours(6)).TryGetValue(Metric, out var recorded)
+            ? recorded
+            : null;
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load();
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == Context.Connection?.Id)
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }

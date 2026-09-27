@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject LatestReadings Latest
 @using System.Globalization
 
 @if (Context.Connection is null)
@@ -92,15 +92,20 @@ else
     /// <summary>Degrees to a compass point — 22.5° per sector, rounded to the nearest.</summary>
     private string Cardinal => Sixteenths[(int)Math.Round(((Direction % 360) + 360) % 360 / 22.5) % 16];
 
-    protected override void OnInitialized() => Health.Updated += OnUpdated;
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        Latest.Changed += OnReadingsLoaded;
+    }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load();
 
     /// <summary>
     /// The live probe first, then the last recorded readings. Without the fallback the
-    /// card would sit blank for a whole probe interval after every restart.
+    /// card would sit blank for a whole probe interval after every restart. The recorded
+    /// readings come from memory, so drawing the card never waits on the database.
     /// </summary>
-    private async Task LoadAsync()
+    private void Load()
     {
         if (Context.Connection is null)
         {
@@ -115,14 +120,24 @@ else
             return;
         }
 
-        _metrics = await History.LatestAsync(Context.Connection.Id, TimeSpan.FromHours(6));
+        _metrics = Latest.Get(Context.Connection.Id, TimeSpan.FromHours(6));
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load();
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == Context.Connection?.Id)
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }

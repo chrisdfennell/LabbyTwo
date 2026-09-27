@@ -113,6 +113,7 @@ builder.Services.AddSingleton<AppSettingsStore>();
 builder.Services.AddSingleton<AlertRuleStore>();
 builder.Services.AddSingleton<ConfigStore>();
 builder.Services.AddSingleton<HistoryStore>();
+builder.Services.AddSingleton<LatestReadings>();
 builder.Services.AddSingleton<NotesStore>();
 builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<Markdown>();
@@ -213,6 +214,10 @@ app.UseAntiforgery();
 // Create the schema before the first request rather than on it, so a cold start doesn't
 // race the probe loop for the file.
 await app.Services.GetRequiredService<Db>().EnsureSchemaAsync();
+
+// Built now rather than by the first card that asks, so it is already listening when the
+// monitor's first sweep lands and that sweep's readings are in memory for the first page.
+app.Services.GetRequiredService<LatestReadings>();
 
 // Liveness probe for Docker and monitoring; always anonymous.
 app.MapGet("/healthz", () => Results.Text("ok")).AllowAnonymous();

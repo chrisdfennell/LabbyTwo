@@ -1,7 +1,7 @@
 @implements IDisposable
 @inject ConfigStore Config
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject LatestReadings Latest
 @inject Registry Registry
 
 @* One number across several connections. Every other card binds to exactly one thing, so
@@ -45,6 +45,7 @@ else
     private int _count;
     private List<Part> _parts = [];
     private MetricSpec _spec = MetricSpec.Fallback("value");
+    private IReadOnlySet<string> _ids = new HashSet<string>();
 
     private string Provider => Context.Widget.Settings.Get("provider").Trim();
     private string Metric => Context.Widget.Settings.Get("metric", "latency_ms").Trim();
@@ -73,6 +74,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
+        Latest.Changed += OnReadingsLoaded;
         await LoadAsync();
     }
 
@@ -96,17 +98,19 @@ else
                 ? live
                 : null;
 
-            if (value is null)
-            {
-                var stored = await History.LatestAsync(connection.Id, TimeSpan.FromHours(6));
-                if (stored.TryGetValue(Metric, out var recorded))
-                    value = recorded;
-            }
+            //
+            // From memory, never the database: this runs once per connection while the page
+            // is drawn, and awaiting SQLite here is what once left the whole dashboard unable
+            // to open. A connection whose readings are not loaded yet is simply not counted
+            // until its load lands and OnReadingsLoaded redraws the card.
+            if (value is null && Latest.Get(connection.Id, TimeSpan.FromHours(6)).TryGetValue(Metric, out var recorded))
+                value = recorded;
 
             if (value is { } number)
                 parts.Add(new Part(connection.Name, number));
         }
 
+        _ids = connections.Select(c => c.Id).ToHashSet();
         _parts = [.. parts.OrderByDescending(part => part.Value)];
         _count = parts.Count;
         _spec = connections.Count > 0 ? Registry.Metric(connections[0], Metric) : MetricSpec.Fallback(Metric);
@@ -127,5 +131,16 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    // Raised off the render thread; OnUpdated marshals back with InvokeAsync.
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (_ids.Contains(connectionId))
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }
