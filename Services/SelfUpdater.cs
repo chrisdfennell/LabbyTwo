@@ -27,7 +27,8 @@ public sealed class SelfUpdater(ConfigStore config, IHttpClientFactory httpFacto
     /// <param name="Container">This container's name, as Docker knows it.</param>
     /// <param name="Image">The image reference it was started from.</param>
     /// <param name="Digest">The repo digest actually running, or null for a local build.</param>
-    public sealed record Self(string Container, ImageRef Image, string? Digest);
+    /// <param name="Dns">The DNS servers this container was given with "dns:", if any.</param>
+    public sealed record Self(string Container, ImageRef Image, string? Digest, string[]? Dns = null);
 
     /// <param name="Ready">Whether the button should be offered at all.</param>
     /// <param name="Behind">True only when a newer digest is definitely published.</param>
@@ -206,6 +207,15 @@ public sealed class SelfUpdater(ConfigStore config, IHttpClientFactory httpFacto
         if (name.Length == 0 || image.Length == 0)
             return null;
 
+        string[]? dns = null;
+        if (container.RootElement.TryGetProperty("HostConfig", out var hostConfig) &&
+            hostConfig.TryGetProperty("Dns", out var servers) && servers.ValueKind == JsonValueKind.Array)
+        {
+            dns = servers.EnumerateArray().Select(s => s.GetString()).OfType<string>().ToArray();
+            if (dns.Length == 0)
+                dns = null;
+        }
+
         // RepoDigests is empty for an image built locally, which is exactly the signal
         // that there is nothing published to compare against.
         string? digest = null;
@@ -223,7 +233,7 @@ public sealed class SelfUpdater(ConfigStore config, IHttpClientFactory httpFacto
         {
         }
 
-        return new Self(name, ImageRef.Parse(image), digest);
+        return new Self(name, ImageRef.Parse(image), digest, dns);
     }
 
     private async Task<string?> PublishedDigestAsync(ImageRef image, CancellationToken ct)
@@ -265,6 +275,11 @@ public sealed class SelfUpdater(ConfigStore config, IHttpClientFactory httpFacto
             {
                 Binds = new[] { $"{endpoint}:/var/run/docker.sock" },
                 AutoRemove = true,
+                // Watchtower asks the registry for the new digest from inside its own
+                // container. On a host whose containers get no working resolver by default,
+                // "dns:" in LabbyTwo's compose file is what made LabbyTwo work — and a
+                // helper started without it fails on the very lookup it exists to make.
+                Dns = self.Dns,
             },
         });
 
