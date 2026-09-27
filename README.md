@@ -765,9 +765,25 @@ There is very little, on purpose. Everything specific to *your* lab lives in the
 | Login password | `LABBY_AUTH_PASSWORD` | empty — **login disabled** |
 | Probe interval, seconds | `LABBY_PROBE_SECONDS` | `30` |
 | Failures before "down" | `LABBY_FAILURES_BEFORE_DOWN` | `2` |
-| History retention, days | `LABBY_RETENTION_DAYS` | `30` |
+| Full-resolution history, days | `LABBY_RETENTION_DAYS` | `7` |
+| Hourly summary history, days | `LABBY_HOURLY_RETENTION_DAYS` | `365` |
 | Plugin folder | `Labby__PluginPath` | `data/plugins` |
 | Timezone | `TZ` | UTC |
+
+**How history is kept.** Every probe records one reading per metric — every 30 seconds by
+default, which on a busy lab is millions of rows a week. Readings are kept as they are for
+`LABBY_RETENTION_DAYS`; after that, a background job folds each hour into one summary row
+(minimum, maximum, average and how many readings) and removes the raw rows, a few at a time
+so nothing else waits on it. The summaries are kept for `LABBY_HOURLY_RETENTION_DAYS`. A
+chart within the raw window draws every reading; a longer one draws one point per hour all
+the way across, so a 30-day chart is 720 points, and the peak and low figures on the weather
+cards use each hour's real extremes rather than its average.
+
+`LABBY_RETENTION_DAYS` means what it always did — how long individual readings are kept —
+only its default dropped from 30 to 7. If you set it yourself, you keep that many days of
+raw readings and gain the summaries behind them. It is never less than one day, and the
+summary retention is never shorter than it. Uptime is worked out from up/down transitions,
+which are kept separately and are not affected by either setting.
 
 Login is off until you set a password. That's fine on a trusted LAN and not fine anywhere
 else — LabbyTwo can hold credentials for your NAS, so don't port-forward it. Put it behind

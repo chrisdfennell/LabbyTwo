@@ -32,8 +32,14 @@ services:
       # Consecutive failures before a service is called down. Raise it for something that
       # blips — a NAS admin UI goes unresponsive under load without actually being down.
       Labby__FailuresBeforeDown: ${LABBY_FAILURES_BEFORE_DOWN:-2}
-      # Days of metric history to keep.
-      Labby__RetentionDays: ${LABBY_RETENTION_DAYS:-30}
+      # Days of full-resolution metric history — every reading — to keep. Older readings
+      # are folded into hourly summaries (min, max, average) and the raw rows removed,
+      # which is what keeps the database small. Setting it higher keeps more raw readings;
+      # it does not shorten how far back the charts go.
+      Labby__RetentionDays: ${LABBY_RETENTION_DAYS:-7}
+      # Days of hourly summaries to keep, for charts that look back further than that.
+      # Never shorter than LABBY_RETENTION_DAYS; 0 keeps nothing beyond the raw readings.
+      Labby__HourlyRetentionDays: ${LABBY_HOURLY_RETENTION_DAYS:-365}
     # Containers do not inherit the host's /etc/hosts, NetBIOS or mDNS, so a name your NAS
     # resolves for itself often cannot be resolved in here — and the lookup hangs rather
     # than failing, which presents as a timeout. Either use IP addresses in your

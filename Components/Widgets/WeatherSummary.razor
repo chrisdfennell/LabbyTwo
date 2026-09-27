@@ -87,8 +87,8 @@ else
         {
             var spec = Registry.Metric(Context.Connection, "temp_outdoor_c");
             cells.Add(new Cell($"High / low ({Hours}h)",
-                $"{Units.Format(spec, temperatures.Max(s => s.Value), _units, 1)} / " +
-                $"{Units.Format(spec, temperatures.Min(s => s.Value), _units, 1)}"));
+                $"{Units.Format(spec, temperatures.Max(s => s.Max), _units, 1)} / " +
+                $"{Units.Format(spec, temperatures.Min(s => s.Min), _units, 1)}"));
         }
 
         await AddPeak(cells, "gust_mph", "Peak gust", window);
@@ -110,7 +110,7 @@ else
         if (samples.Count == 0)
             return;
         var spec = Registry.Metric(Context.Connection, metric);
-        cells.Add(new Cell(label, Units.Format(spec, samples.Max(s => s.Value), _units, decimals)));
+        cells.Add(new Cell(label, Units.Format(spec, samples.Max(s => s.Max), _units, decimals)));
     }
 
     private void AddLatest(List<Cell> cells, string metric, string label)

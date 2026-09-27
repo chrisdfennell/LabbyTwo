@@ -112,8 +112,8 @@ else
             return;
         }
 
-        _low = samples.Min(s => s.Value);
-        _high = samples.Max(s => s.Value);
+        _low = samples.Min(s => s.Min);
+        _high = samples.Max(s => s.Max);
         _current ??= samples[^1].Value;
 
         // Compared against the oldest reading still inside the last hour, so the arrow
