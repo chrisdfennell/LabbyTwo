@@ -13,8 +13,16 @@ using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// A dashboard is left open for days, mostly in a background tab or on a screen that
+// sleeps, and the defaults are tuned for a form someone is filling in. Browsers slow a
+// hidden tab's timers to about once a minute, so the client's 15-second keep-alive can
+// arrive late: the server waits two minutes before calling it gone instead of thirty
+// seconds. And a laptop lid closed over lunch should resume the same session rather than
+// reload, so a dropped circuit is kept for half an hour instead of three minutes.
 builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
+    .AddInteractiveServerComponents(circuit =>
+        circuit.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(30))
+    .AddHubOptions(hub => hub.ClientTimeoutInterval = TimeSpan.FromMinutes(2));
 
 builder.Services.Configure<LabbyOptions>(builder.Configuration.GetSection(LabbyOptions.SectionName));
 var options = builder.Configuration.GetSection(LabbyOptions.SectionName).Get<LabbyOptions>() ?? new LabbyOptions();
