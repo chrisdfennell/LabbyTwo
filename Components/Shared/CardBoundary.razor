@@ -1,0 +1,58 @@
+@inherits ErrorBoundary
+@using Microsoft.Extensions.Logging
+@inject ILogger<CardBoundary> Log
+
+@* One card's worth of blast radius. Without a boundary, an exception anywhere in a widget
+   — a provider handing back a shape nobody expected, a null a plugin did not check —
+   ends the whole circuit, and a wall dashboard goes blank until somebody reloads it. With
+   one, the card that broke says so and the other eleven carry on.
+
+   Quiet on purpose: a failed card is a fact about one card, not an alarm about the lab. *@
+
+@if (CurrentException is null)
+{
+    @ChildContent
+}
+else if (ErrorContent is not null)
+{
+    @ErrorContent(CurrentException)
+}
+else
+{
+    <div class="card-failed" role="status">
+        <span class="card-failed-mark" aria-hidden="true"></span>
+        <span>@(Name is { Length: > 0 } ? $"{Name} failed to load." : "This card failed to load.")</span>
+        <button type="button" class="card-failed-retry" @onclick="Recover">Try again</button>
+    </div>
+}
+
+@code {
+    /// <summary>What failed, for the message and the log — a widget's title or type.</summary>
+    [Parameter] public string? Name { get; set; }
+
+    /// <summary>
+    /// A fingerprint of whatever the card was drawn from. When it changes the card is
+    /// tried again, so fixing a widget's settings in the editor fixes the card without a
+    /// reload. It is a fingerprint rather than a retry on every parameter change because
+    /// the parents re-render on every sweep, and a card that throws on every attempt would
+    /// otherwise throw — and log — every thirty seconds forever.
+    /// </summary>
+    [Parameter] public string? Version { get; set; }
+
+    private string? _version;
+
+    protected override void OnParametersSet()
+    {
+        if (CurrentException is not null && _version != Version)
+            Recover();
+        _version = Version;
+    }
+
+    protected override Task OnErrorAsync(Exception exception)
+    {
+        // Logged here rather than left to the framework's boundary logger so the entry says
+        // which card it was. A warning, not an error: the page survived it.
+        Log.LogWarning(exception, "{Card} failed and was replaced with a notice", Name ?? "A card");
+        return Task.CompletedTask;
+    }
+}

@@ -39,7 +39,9 @@
             <span class="tile-meta">@warnings.Name</span>
         </div>
         <div class="widget-body">
-            <DynamicComponent Type="typeof(WeatherAlertsCard)" Parameters="_warningParameters" />
+            <CardBoundary Name="Warnings" Version="@_version">
+                <DynamicComponent Type="typeof(WeatherAlertsCard)" Parameters="_warningParameters" />
+            </CardBoundary>
         </div>
     </div>
 }
@@ -68,12 +70,16 @@
             <span class="tile-meta">@forecast.Name</span>
         </div>
         <div class="widget-body">
-            <DynamicComponent Type="typeof(ForecastCard)" Parameters="_forecastParameters" />
+            <CardBoundary Name="The forecast" Version="@_version">
+                <DynamicComponent Type="typeof(ForecastCard)" Parameters="_forecastParameters" />
+            </CardBoundary>
 
             @if (HourlyHours > 0)
             {
                 <hr class="my-3" />
-                <DynamicComponent Type="typeof(HourlyForecast)" Parameters="_hourlyParameters" />
+                <CardBoundary Name="The hourly forecast" Version="@_version">
+                    <DynamicComponent Type="typeof(HourlyForecast)" Parameters="_hourlyParameters" />
+                </CardBoundary>
             }
         </div>
     </div>
@@ -87,17 +93,23 @@
             <span class="tile-meta">@air.Name</span>
         </div>
         <div class="widget-body">
-            <DynamicComponent Type="typeof(AirQualityCard)" Parameters="_airParameters" />
+            <CardBoundary Name="Air quality" Version="@_version">
+                <DynamicComponent Type="typeof(AirQualityCard)" Parameters="_airParameters" />
+            </CardBoundary>
         </div>
     </div>
 }
 
-@if (ShowRadar)
+@* Guarded on the parameters as well as the setting: a card handed no Context has nothing
+   to draw from, and dereferencing it used to end the circuit. *@
+@if (ShowRadar && _radarParameters.Count > 0)
 {
     <div class="widget mb-3">
         <div class="widget-head"><h2 class="widget-title">Radar</h2></div>
         <div class="widget-body">
-            <DynamicComponent Type="typeof(RadarCard)" Parameters="_radarParameters" />
+            <CardBoundary Name="The radar" Version="@_version">
+                <DynamicComponent Type="typeof(RadarCard)" Parameters="_radarParameters" />
+            </CardBoundary>
         </div>
     </div>
 }
@@ -117,7 +129,9 @@ else
 {
     <div class="widget mb-4">
         <div class="widget-body">
-            <WeatherSummary Context="_context" HoursOverride="_hours" />
+            <CardBoundary Name="The summary" Version="@_version">
+                <WeatherSummary Context="_context" HoursOverride="_hours" />
+            </CardBoundary>
         </div>
     </div>
 
@@ -140,7 +154,9 @@ else
                 <div class="widget h-100">
                     <div class="widget-head"><h2 class="widget-title">@chart.Title</h2></div>
                     <div class="widget-body">
-                        <MetricChart Context="ChartContext(chart)" HoursOverride="_hours" Height="170" />
+                        <CardBoundary Name="@chart.Title" Version="@_version">
+                            <MetricChart Context="ChartContext(chart)" HoursOverride="_hours" Height="170" />
+                        </CardBoundary>
                     </div>
                 </div>
             </div>
@@ -149,7 +165,9 @@ else
 
     <div class="widget mt-3">
         <div class="widget-body">
-            <ReadingsTable Context="_context" HoursOverride="_hours" MetricsOverride="@TableMetrics" />
+            <CardBoundary Name="The readings table" Version="@_version">
+                <ReadingsTable Context="_context" HoursOverride="_hours" MetricsOverride="@TableMetrics" />
+            </CardBoundary>
         </div>
     </div>
 
@@ -159,7 +177,9 @@ else
         <div class="widget mt-3">
             <div class="widget-head"><h2 class="widget-title">Forecast vs reality</h2></div>
             <div class="widget-body">
-                <DynamicComponent Type="typeof(ForecastAccuracy)" Parameters="_accuracyParameters" />
+                <CardBoundary Name="Forecast vs reality" Version="@_version">
+                    <DynamicComponent Type="typeof(ForecastAccuracy)" Parameters="_accuracyParameters" />
+                </CardBoundary>
             </div>
         </div>
     }
@@ -183,6 +203,10 @@ else
     private IReadOnlyDictionary<string, double> _readings = new Dictionary<string, double>();
     private Units.Preferences _units = Units.Preferences.Default;
     private int _hours = 24;
+
+    // What the panels' boundaries compare to decide whether a failed panel deserves another
+    // go. Every panel here is configured from the tab, so the tab's settings are the lot.
+    private string _version = "";
 
     private static readonly (string Label, int Hours)[] Ranges = [("24h", 24), ("48h", 48), ("7d", 168)];
 
@@ -294,6 +318,7 @@ else
 
     private async Task LoadAsync()
     {
+        _version = Tab.Settings.ToJson();
         var connections = await Config.ConnectionsAsync();
         var chosen = Tab.Settings.Get("connection");
 
@@ -340,6 +365,30 @@ else
         if (_air is { } air)
             _airParameters = Bind(new Widget { TabId = Tab.Id, Type = "air-quality" }, air);
 
+        // Built before the station check below, because the radar needs no station — it
+        // reads the tab's own coordinates, or the dashboard's home. Built after it, a page
+        // with no station handed the radar card an empty parameter set, and the card fell
+        // over reading a Context it was never given.
+        _radarParameters = new Dictionary<string, object>
+        {
+            ["Context"] = new WidgetContext(
+                new Widget
+                {
+                    Id = $"{Tab.Id}-radar",
+                    TabId = Tab.Id,
+                    Type = "radar",
+                    Settings = new SettingsBag
+                    {
+                        ["source"] = Tab.Settings.Get("radar_source", "rainviewer"),
+                        ["latitude"] = Tab.Settings.Get("latitude"),
+                        ["longitude"] = Tab.Settings.Get("longitude"),
+                        ["zoom"] = Tab.Settings.Get("radar_zoom", "7"),
+                        ["height"] = "380",
+                    },
+                },
+                null),
+        };
+
         // Only the station's own half of the page needs a station. The rest — warnings,
         // forecast, air, radar — stands on its own, which is what this page used to refuse
         // to do at all.
@@ -371,26 +420,6 @@ else
                 },
             },
             _station);
-
-        _radarParameters = new Dictionary<string, object>
-        {
-            ["Context"] = new WidgetContext(
-                new Widget
-                {
-                    Id = $"{Tab.Id}-radar",
-                    TabId = Tab.Id,
-                    Type = "radar",
-                    Settings = new SettingsBag
-                    {
-                        ["source"] = Tab.Settings.Get("radar_source", "rainviewer"),
-                        ["latitude"] = Tab.Settings.Get("latitude"),
-                        ["longitude"] = Tab.Settings.Get("longitude"),
-                        ["zoom"] = Tab.Settings.Get("radar_zoom", "7"),
-                        ["height"] = "380",
-                    },
-                },
-                null),
-        };
     }
 
     private void OnUpdated() => _ = InvokeAsync(async () =>

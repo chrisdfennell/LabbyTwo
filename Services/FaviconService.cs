@@ -18,6 +18,19 @@ public sealed partial class FaviconService(IHttpClientFactory httpFactory, ILogg
     {
         public bool Found => Bytes.Length > 0;
         public static readonly Icon None = new([], "");
+
+        /// <summary>
+        /// What a bookmark shows when its site has no icon: a small link glyph, served as
+        /// an ordinary image. A 404 would leave a broken-image frame in a fixed-size box —
+        /// browsers do not reliably swap in the alt text at that size — and answering with a
+        /// picture rather than an error needs no script on the page to cover for it.
+        /// Mid-grey so it reads on the light theme and the dark one alike, since an
+        /// &lt;img&gt; cannot see the page's colour tokens.
+        /// </summary>
+        public static readonly Icon Placeholder = new(
+            System.Text.Encoding.UTF8.GetBytes(
+                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#8a97a8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>"""),
+            "image/svg+xml");
     }
 
     private readonly ConcurrentDictionary<string, (Icon Icon, DateTimeOffset At)> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -42,6 +55,14 @@ public sealed partial class FaviconService(IHttpClientFactory httpFactory, ILogg
             return cached.Icon;
 
         var icon = await FetchAsync(origin, ct);
+
+        // A page closed mid-fetch cancels the request, and every step below swallows the
+        // cancellation as "that candidate did not work". Cached, that would be an hour of
+        // no icon for a site that has one, because somebody navigated away at the wrong
+        // moment. Only the caller's own cancellation counts here — the six-second timeout
+        // is a real answer about the site, and is cached like one.
+        ct.ThrowIfCancellationRequested();
+
         _cache[origin] = (icon, DateTimeOffset.UtcNow);
         return icon;
     }
@@ -77,6 +98,10 @@ public sealed partial class FaviconService(IHttpClientFactory httpFactory, ILogg
                     return icon;
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             // A missing icon is cosmetic. Log at debug so an unreachable LAN host does not
@@ -108,10 +133,9 @@ public sealed partial class FaviconService(IHttpClientFactory httpFactory, ILogg
                 var read = await reader.ReadBlockAsync(buffer, ct);
                 var html = new string(buffer, 0, read);
 
-                foreach (Match match in IconLink().Matches(html))
+                foreach (var href in IconHrefs(html))
                 {
-                    var href = match.Groups["href"].Value;
-                    if (href.Length > 0 && Uri.TryCreate(new Uri(origin), href, out var resolved))
+                    if (Uri.TryCreate(new Uri(origin), href, out var resolved))
                         candidates.Add(resolved.ToString());
                 }
             }
@@ -159,10 +183,60 @@ public sealed partial class FaviconService(IHttpClientFactory httpFactory, ILogg
         }
     }
 
-    // <link rel="… icon …" href="…"> in either attribute order. A parser would be more
-    // correct; this reads a <head> that a browser would also forgive.
+    /// <summary>
+    /// The hrefs of a page's icon links, in document order. A rel is a list of
+    /// space-separated tokens, so it is split and each token compared whole: the old
+    /// pattern looked for the word "icon" anywhere in it, which "fluid-icon" (GitHub's
+    /// 512px Fluid.app tile) and "mask-icon" (a single-colour Safari pin, usually black on
+    /// nothing) both satisfy. And href is only an attribute when it stands alone — the old
+    /// pattern would read one out of the end of data-base-href.
+    /// </summary>
+    public static IReadOnlyList<string> IconHrefs(string html)
+    {
+        var hrefs = new List<string>();
+
+        foreach (Match tag in LinkTag().Matches(html))
+        {
+            string? rel = null, href = null;
+            foreach (Match attribute in Attribute().Matches(tag.Groups["attrs"].Value))
+            {
+                var name = attribute.Groups["name"].Value;
+                var value = attribute.Groups["value"].Value;
+                if (name.Equals("rel", StringComparison.OrdinalIgnoreCase))
+                    rel ??= value;
+                else if (name.Equals("href", StringComparison.OrdinalIgnoreCase))
+                    href ??= value;
+            }
+
+            if (rel is null || string.IsNullOrWhiteSpace(href))
+                continue;
+
+            var tokens = rel.Split((char[])[' ', '\t', '\n', '\r', '\f'], StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Any(token => IconRels.Contains(token)))
+                hrefs.Add(System.Net.WebUtility.HtmlDecode(href.Trim()));
+        }
+
+        return hrefs;
+    }
+
+    // "shortcut icon" is two tokens, and "icon" is the one that matters. The Apple ones are
+    // real, full-colour icons, just big — which object-fit shrinks without complaint.
+    private static readonly HashSet<string> IconRels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "icon",
+        "apple-touch-icon",
+        "apple-touch-icon-precomposed",
+    };
+
+    // A <link> tag's attribute text. A parser would be more correct; this reads a <head>
+    // that a browser would also forgive.
+    [GeneratedRegex("""<link\b(?<attrs>[^>]*)>""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex LinkTag();
+
+    // One attribute, quoted either way or not at all. Anchored on the whitespace before the
+    // name so "href" cannot be found inside a longer name such as data-base-href.
     [GeneratedRegex(
-        """<link\b(?=[^>]*\brel\s*=\s*["'][^"']*\bicon\b)[^>]*\bhref\s*=\s*["'](?<href>[^"']+)["']""",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex IconLink();
+        """(?<=\s|^)(?<name>[^\s=/>"']+)\s*=\s*(?:"(?<value>[^"]*)"|'(?<value>[^']*)'|(?<value>[^\s"'>]+))""",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex Attribute();
 }

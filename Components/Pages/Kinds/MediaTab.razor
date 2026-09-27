@@ -282,13 +282,23 @@ else
         foreach (var (key, value) in settings)
             bag[key] = value;
 
-        builder.OpenComponent<DynamicComponent>(0);
-        builder.AddComponentParameter(1, nameof(DynamicComponent.Type), widget.Component);
-        builder.AddComponentParameter(2, nameof(DynamicComponent.Parameters),
-            new Dictionary<string, object>
-            {
-                ["Context"] = new WidgetContext(new Widget { Type = type, Settings = bag }, null),
-            });
+        // Each panel inside its own boundary, the same as a card on a grid tab: one
+        // service answering in a shape its widget did not expect should cost that panel,
+        // not the rest of the page.
+        builder.OpenComponent<CardBoundary>(0);
+        builder.AddComponentParameter(1, nameof(CardBoundary.Name), widget.DisplayName);
+        builder.AddComponentParameter(2, nameof(CardBoundary.Version), $"{type}|{bag.ToJson()}");
+        builder.AddComponentParameter(3, nameof(CardBoundary.ChildContent), (RenderFragment)(inner =>
+        {
+            inner.OpenComponent<DynamicComponent>(0);
+            inner.AddComponentParameter(1, nameof(DynamicComponent.Type), widget.Component);
+            inner.AddComponentParameter(2, nameof(DynamicComponent.Parameters),
+                new Dictionary<string, object>
+                {
+                    ["Context"] = new WidgetContext(new Widget { Type = type, Settings = bag }, null),
+                });
+            inner.CloseComponent();
+        }));
         builder.CloseComponent();
     };
 

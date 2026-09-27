@@ -56,8 +56,12 @@ else
             @* Dragging is done in widget-drag.js, not here — see DropAsync. The only thing
                the markup owes it is an id to report back and the class that says this card
                is draggable at all. *@
+            @* Keyed on the card itself, not on the component inside it. The key only means
+               anything among siblings, and the component was alone in its body — so a
+               reorder or a delete re-matched cards by position, and every card after the
+               change was torn down and mounted again, refetching everything it shows. *@
             <div class="widget w-@Math.Clamp(widget.Width, 1, 12) @(_editing ? "is-draggable" : "")"
-                 data-widget-id="@widget.Id">
+                 data-widget-id="@widget.Id" @key="widget.Id">
                 @if (widget.Title is { Length: > 0 } || _editing)
                 {
                     <div class="widget-head">
@@ -102,9 +106,12 @@ else
                     }
                     else
                     {
-                        <DynamicComponent Type="type.Component"
-                                          Parameters="@(new Dictionary<string, object> { ["Context"] = new WidgetContext(widget, connection) })"
-                                          @key="widget.Id" />
+                        @* One widget throwing costs one card, not the page. See CardBoundary
+                           for why it retries on a changed fingerprint rather than every render. *@
+                        <CardBoundary Name="@Describe(widget)" Version="@Fingerprint(widget, connection)">
+                            <DynamicComponent Type="type.Component"
+                                              Parameters="@(new Dictionary<string, object> { ["Context"] = new WidgetContext(widget, connection) })" />
+                        </CardBoundary>
                     }
                 </div>
 
@@ -293,6 +300,13 @@ else
     private string Describe(Widget widget) => widget.Title is { Length: > 0 }
         ? widget.Title
         : Registry.WidgetType(widget.Type)?.DisplayName ?? widget.Type;
+
+    /// <summary>
+    /// Everything a card is drawn from, so a failed card gets another go once any of it
+    /// changes — an edit to its settings, or its connection being pointed somewhere else.
+    /// </summary>
+    private static string Fingerprint(Widget widget, Connection? connection) =>
+        $"{widget.Type}|{widget.Settings.ToJson()}|{connection?.Id}|{connection?.Settings.ToJson()}";
 
     private async Task DeleteConfirmedAsync()
     {

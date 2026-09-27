@@ -247,9 +247,10 @@ window.labbyDrag = {
         // The server takes "put this one immediately before that one", so the answer is
         // whatever ends up after the held card — or null, meaning the end.
         const before = d.order[d.at + 1] ?? null;
-        // A dropped drag on a circuit that has since gone away is not worth an unhandled
-        // rejection in the console; the layout on screen is already right either way.
-        this._ref?.invokeMethodAsync('DropAsync', d.id, before).catch(() => { });
+        // A drop the server did not take — the circuit has gone, or the save threw — puts
+        // the cards back where they were. Leaving the preview's order in place would show
+        // a layout that was never saved, and the next reload would quietly undo it.
+        this._ref?.invokeMethodAsync('DropAsync', d.id, before).catch(() => this.clear());
         // The inline order values stay until the component has re-rendered in the new
         // order; clearing them here would flash the old layout for a frame or two.
     },

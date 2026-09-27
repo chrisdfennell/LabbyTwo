@@ -163,7 +163,11 @@
     }
 
     document.addEventListener('pointermove', move, { passive: true });
-    document.addEventListener('pointerleave', hide, { passive: true });
+    // The pointer leaving the window. pointerleave does not bubble, so one listened for on
+    // the document never fired; a pointerout whose destination is nothing is the same
+    // moment, and does bubble.
+    document.addEventListener('pointerout', event => { if (!event.relatedTarget) hide(); }, { passive: true });
+    window.addEventListener('blur', hide);
 
     // A chart can be replaced under a stationary pointer when its card refreshes, and a
     // tooltip left describing a chart that no longer exists is worse than none.

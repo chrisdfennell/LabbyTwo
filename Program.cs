@@ -205,9 +205,11 @@ app.MapGet("/healthz", () => Results.Text("ok")).AllowAnonymous();
 // phone, and cached so a dashboard of thirty links is not thirty requests per refresh.
 var favicon = app.MapGet("/api/favicon", async (FaviconService icons, string url, CancellationToken ct) =>
 {
+    // A site with no icon still gets a picture rather than a 404: the bookmark's <img> has a
+    // fixed size, and a 404 in it is a broken-image frame, not the alt text.
     var icon = await icons.GetAsync(url, ct);
     if (!icon.Found)
-        return Results.NotFound();
+        icon = FaviconService.Icon.Placeholder;
     return Results.File(icon.Bytes, icon.ContentType);
 });
 
