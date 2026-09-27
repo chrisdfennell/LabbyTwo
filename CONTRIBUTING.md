@@ -88,6 +88,15 @@ The existing code is the spec, but in short:
 CI builds the app, runs the tests, and builds the Docker image for amd64 and arm64. A
 good share of home labs run on a Raspberry Pi, so an arm64 break is a real break.
 
+It also starts the app with every example plugin loaded and a dashboard filled in, and
+fails if it does not answer, draw its cards and keep probing — v1.6.2 passed every test
+and then never started for anyone with the status page plugin. To run the same check
+before you push, after a Release build of the app and the plugins:
+
+```bash
+bash scripts/smoke-boot.sh
+```
+
 ## Reporting a bug
 
 Include what you were connecting to and what LabbyTwo said. The exact text of a failed
