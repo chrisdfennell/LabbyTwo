@@ -9,8 +9,17 @@ namespace LabbyTwo.Storage;
 /// memory (a home lab has tens of rows, not thousands) and <see cref="Changed"/> fires on
 /// every write so the nav and any open page re-render without a restart.
 /// </summary>
-public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Registry registry, ILogger<ConfigStore> log)
+public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServiceProvider services, ILogger<ConfigStore> log)
 {
+    // The registry is looked up on first use rather than taken in the constructor, because
+    // the registry is built from every provider and a provider may need this store: the
+    // status page plugin's does, for its buttons. Taken eagerly, that is a cycle, and one
+    // the container cannot see — providers are registered through factories — so instead
+    // of refusing to start it deadlocked, silently, after "Scanning plugins". Only the
+    // secret-field lookups below need the registry, and nothing reaches them during
+    // startup, by which point every provider exists.
+    private Registry Registry => field ??= services.GetRequiredService<Registry>();
+
     private readonly IDataProtector _protector = protection.CreateProtector("LabbyTwo.ConnectionSecrets");
     private readonly SemaphoreSlim _lock = new(1, 1);
 
@@ -467,7 +476,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
 
     private SettingsBag Encrypt(string providerType, SettingsBag settings)
     {
-        var provider = registry.Provider(providerType);
+        var provider = Registry.Provider(providerType);
         if (provider is null)
             return settings;
         var result = settings.Clone();
@@ -481,7 +490,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
 
     private SettingsBag Decrypt(string providerType, SettingsBag settings)
     {
-        var provider = registry.Provider(providerType);
+        var provider = Registry.Provider(providerType);
         if (provider is null)
             return settings;
 
