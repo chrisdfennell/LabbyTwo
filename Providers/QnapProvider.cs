@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using LabbyTwo.Core;
 
@@ -115,10 +116,17 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
         /// Anything QTS is not calling fine. Matched on the good words rather than the bad
         /// ones: a firmware that invents a new failure word should read as a failure, and a
         /// firmware that invents a new healthy word costs one spurious warning.
+        ///
+        /// Case is ignored because it carries no information. QTS has said "Good", "GOOD"
+        /// and "OK" of the same healthy drive depending on the release, and a list that had
+        /// to spell out every capitalisation missed "OK" entirely — which turned every drive
+        /// red and set off the SMART alert on a NAS with nothing wrong with it.
         /// </summary>
-        public bool IsFailing => Health is { Length: > 0 } word
-            && word is not ("Good" or "Normal" or "GOOD" or "NORMAL" or "--" or "Ready");
+        public bool IsFailing => Health is { Length: > 0 } word && !HealthyWords.Contains(word.Trim());
     }
+
+    private static readonly HashSet<string> HealthyWords =
+        new(["Good", "Normal", "OK", "Ready", "--"], StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<MetricSpec> Metrics =>
     [
@@ -273,35 +281,44 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
             Num(doc, "cpu_tempc"),
             Num(doc, "sys_tempc"))
         {
-            Fans = Fans(doc),
+            Fans = ReadFans(doc),
             Serial = Str(doc, "serial_number") ?? Str(doc, "serialNumber"),
         };
     }
 
     /// <summary>
     /// Fans out of the same sysinfo document, so watching them costs no extra round trip.
-    /// Found by element name rather than by a fixed list, because the count and the naming
-    /// both depend on the chassis — a two-bay has one <c>sysfan1</c>, a rackmount has five
-    /// and a CPU fan besides.
+    /// Found by element name rather than by a fixed list, because the count depends on the
+    /// chassis — a two-bay has one <c>sysfan1</c>, a rackmount has five and a CPU fan
+    /// besides. Public so the parsing can be tested without a NAS.
     /// </summary>
-    private static IReadOnlyList<FanInfo> Fans(XContainer doc)
+    public static IReadOnlyList<FanInfo> ReadFans(XContainer doc)
     {
         var fans = new List<FanInfo>();
         foreach (var element in doc.Descendants())
         {
             var name = element.Name.LocalName;
-            if (!name.Contains("fan", StringComparison.OrdinalIgnoreCase) || element.HasElements)
+
+            // Only a name that is a fan and its number. "Anything containing fan" also took
+            // in sysfan_count, sysfan1_stat and sysfan_mode, which are numbers too — so a
+            // count of two read as a fan turning at 2 rpm, and "a fan has stopped" fired.
+            if (element.HasElements || !FanName.IsMatch(name))
                 continue;
 
-            // "Fan status" and similar carry words rather than a speed; a fan reporting no
-            // number is a fan we know nothing about, which is not the same as a stopped one.
-            if (Number(element.Value) is not { } rpm)
+            // A fan reporting no number is a fan we know nothing about, which is not the
+            // same as a stopped one. Nor is a negative number: QTS fills every slot the
+            // chassis could have with -1 whether or not a fan is fitted there, and the
+            // slowest fan in the box cannot be one that does not exist.
+            if (Number(element.Value) is not { } rpm || rpm < 0)
                 continue;
 
             fans.Add(new FanInfo(name, rpm));
         }
         return fans;
     }
+
+    private static readonly Regex FanName =
+        new(@"^(sys|cpu)?fan\d+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public async Task<IReadOnlyList<VolumeInfo>> VolumesAsync(Connection connection, CancellationToken ct)
     {
@@ -328,10 +345,22 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
     public async Task<IReadOnlyList<DiskInfo>> DisksAsync(Connection connection, CancellationToken ct)
     {
         var doc = await GetXmlAsync(connection, sid => $"cgi-bin/disk/qsmart.cgi?func=all_hd_data&sid={sid}", ct);
+        return ReadDisks(doc);
+    }
 
+    /// <summary>The parsing half of <see cref="DisksAsync"/>, public so it can be tested without a NAS.</summary>
+    public static IReadOnlyList<DiskInfo> ReadDisks(XContainer doc)
+    {
         var disks = new List<DiskInfo>();
         foreach (var entry in doc.Descendants("entry"))
         {
+            // An empty bay still gets an entry, with no model and whatever health word that
+            // firmware uses for "nothing here". It is not a drive, so it is neither failing
+            // nor a row on the card: a four-bay holding two drives has two disks.
+            var model = Str(entry, "Model");
+            if (model is null or "--")
+                continue;
+
             // Temperature arrives as <Temperature><oC>38</oC><oF>100</oF></Temperature> on
             // most firmware and as a plain decorated number on some, so try both.
             var temperature = Num(entry, "oC") ?? Num(entry, "Temperature");
@@ -339,7 +368,7 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
             var slot = Str(entry, "HDNo") ?? Str(entry, "hd_no") ?? $"Disk {disks.Count + 1}";
             disks.Add(new DiskInfo(
                 slot.Trim(),
-                Str(entry, "Model")?.Trim(),
+                model,
                 Str(entry, "Health")?.Trim(),
                 temperature,
                 (long)(Num(entry, "Capacity_bytes") ?? Num(entry, "capacity") ?? 0)));
@@ -357,12 +386,24 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
     public async Task<string?> AvailableFirmwareAsync(Connection connection, string? installed, CancellationToken ct)
     {
         var doc = await GetXmlAsync(connection, sid => $"cgi-bin/sys/sysRequest.cgi?subfunc=firm_update&sid={sid}", ct);
+        return ReadAvailableFirmware(doc, installed);
+    }
 
+    /// <summary>The parsing half of <see cref="AvailableFirmwareAsync"/>, public so it can be tested without a NAS.</summary>
+    public static string? ReadAvailableFirmware(XContainer doc, string? installed)
+    {
         // newVersion and availVersion mean what they say. A bare <version> does not: several
         // QTS versions answer this endpoint with the firmware already installed, so it is
         // only usable as an offer when there is something to compare it against.
         var stated = Str(doc, "newVersion") ?? Str(doc, "availVersion");
         if ((stated ?? Str(doc, "version")) is not { } offered)
+            return null;
+
+        // "Nothing waiting" does not arrive as an empty element. QTS says "none", and other
+        // releases 0, "--" or "N/A"; taken at face value that was an update called "none",
+        // and the notice stayed up for the six hours until the next check. A version starts
+        // with a number and a dot, so anything else is no offer at all.
+        if (!VersionLike.IsMatch(offered))
             return null;
 
         var current = installed?.Trim() ?? "";
@@ -376,11 +417,15 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
             return null;
 
         // A build number, when there is one, so "5.1.0" against an installed "5.1.0" on an
-        // older build still reads as the update it is.
-        return (Str(doc, "newBuild") ?? Str(doc, "build")) is { Length: > 0 } build
+        // older build still reads as the update it is. Only the new build, though: a bare
+        // <build> is the one already installed, and quoting it as the offer's is how a
+        // notice came to name the very build it was supposed to replace.
+        return Str(doc, "newBuild") is { } build && build.Any(char.IsDigit)
             ? $"{offered} build {build}"
             : offered;
     }
+
+    private static readonly Regex VersionLike = new(@"^\d+\.\d+", RegexOptions.CultureInvariant);
 
     // ---------- Controls ----------
 
