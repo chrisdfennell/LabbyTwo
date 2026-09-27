@@ -470,6 +470,25 @@ public class ProbeErrorTests
         Assert.Contains("resolve", ProbeError.Describe(dns, "http://sonarr.lan"), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("api.github.com", true)]
+    [InlineData("https://api.open-meteo.com/v1/forecast", true)]
+    [InlineData("http://sonarr.lan", false)]
+    [InlineData("http://nas", false)]
+    [InlineData("http://printer.local", false)]
+    public void APublicNameThatWillNotResolveBlamesTheContainersDnsNotTheAddress(string target, bool isPublic)
+    {
+        // Pinning GitHub's address is not advice anyone can take. A public name failing
+        // means the container has no resolver at all, and that is what the message must say.
+        var dns = new HttpRequestException("boom",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostNotFound));
+
+        var message = ProbeError.Describe(dns, target);
+
+        Assert.Equal(isPublic, message.Contains("dns:"));
+        Assert.Equal(!isPublic, message.Contains("Use an IP address"));
+    }
+
     [Fact]
     public void ATlsFailureMentionsTheHttpVersusHttpsMixUp()
     {

@@ -44,6 +44,10 @@ public static class ProbeError
             {
                 SocketError.ConnectionRefused =>
                     $"Connection refused{where}. Something is at that address but nothing is listening on that port.",
+                SocketError.HostNotFound or SocketError.NoData when IsPublicName(target) =>
+                    $"Could not resolve the host{where}. That is a public name, so this is not a LAN name the " +
+                    "container cannot see: it has no working DNS at all. Give it a DNS server with \"dns:\" in " +
+                    "docker-compose.yml — your router's address, or 1.1.1.1.",
                 SocketError.HostNotFound or SocketError.NoData =>
                     $"Could not resolve the host{where}. Use an IP address if this container cannot see your DNS.",
                 SocketError.NetworkUnreachable or SocketError.HostUnreachable =>
@@ -166,6 +170,22 @@ public static class ProbeError
         var host = Uri.TryCreate(target, UriKind.Absolute, out var uri) ? uri.Host : target.Trim();
         host = host.Trim('[', ']');
         return host.Length > 0 && !System.Net.IPAddress.TryParse(host, out _) ? host : null;
+    }
+
+    /// <summary>
+    /// True for a name that only public DNS could answer — api.github.com rather than
+    /// "nas" or "nas.lan". "Use an IP address" is sound advice for a LAN name the container
+    /// cannot see, and useless for GitHub, whose address is not the user's to pin: when one
+    /// of these fails, the container has no working resolver at all.
+    /// </summary>
+    private static bool IsPublicName(string? target)
+    {
+        var host = HostOf(target);
+        if (host is null || !host.Contains('.'))
+            return false;
+
+        var suffix = host[(host.LastIndexOf('.') + 1)..].ToLowerInvariant();
+        return suffix is not ("local" or "lan" or "home" or "internal" or "localdomain" or "arpa" or "intranet" or "corp");
     }
 
     /// <summary>
