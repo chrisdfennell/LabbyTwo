@@ -11,7 +11,7 @@ namespace LabbyTwo.Services;
 /// and stores whatever comes back, which is what lets a new integration light up tiles,
 /// charts and uptime with no changes here.
 /// </summary>
-public sealed class HealthMonitor(
+public sealed partial class HealthMonitor(
     ConfigStore config,
     Registry registry,
     HistoryStore history,
@@ -87,6 +87,7 @@ public sealed class HealthMonitor(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        NoteStarted();
         try
         {
             // Bounded, because nothing is watched until it returns. Restoring is a
@@ -94,6 +95,7 @@ public sealed class HealthMonitor(
             // courtesy must never be the reason monitoring does not start. It reads the
             // whole samples table once, which on a big database is not instant.
             await RestoreAsync(stoppingToken).WaitAsync(RestoreDeadline, stoppingToken);
+            NoteRestored(RestoreOutcome.Completed, null);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -101,11 +103,13 @@ public sealed class HealthMonitor(
         }
         catch (TimeoutException)
         {
+            NoteRestored(RestoreOutcome.TimedOut, null);
             log.LogWarning("Restoring the last known status took longer than {Seconds}s; monitoring starts without it",
                 RestoreDeadline.TotalSeconds);
         }
         catch (Exception ex)
         {
+            NoteRestored(RestoreOutcome.Failed, ex.GetBaseException().Message);
             // Starting from nothing is the old behaviour, not a reason not to start.
             log.LogWarning(ex, "Could not restore the last known status of anything");
         }
@@ -120,7 +124,7 @@ public sealed class HealthMonitor(
         {
             try
             {
-                await SweepAsync(stoppingToken);
+                await TimedSweepAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -219,10 +223,11 @@ public sealed class HealthMonitor(
         // until it has passed, which leaves their last real reading in place rather than
         // replacing it with a cached one dressed up as a new measurement.
         var due = connections.Where(IsDue).ToList();
+        NoteSweepSize(due.Count);
 
         // Probes are independent and mostly waiting on the network; running them together
         // keeps a sweep as slow as the slowest host rather than the sum of all of them.
-        await Task.WhenAll(due.Select(connection => ProbeAndRecordAsync(connection, ct)));
+        await Task.WhenAll(due.Select(connection => TrackedProbeAsync(connection, ct)));
 
         Updated?.Invoke();
 

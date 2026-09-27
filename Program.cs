@@ -157,6 +157,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricAlertService
 builder.Services.AddSingleton<BackgroundJobRunner>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<BackgroundJobRunner>());
 
+// LabbyTwo's own health: what the monitor and the jobs have been doing, for the health
+// page and /api/health/details. Reads what the services above already keep in memory.
+builder.Services.AddSingleton<SystemHealth>();
+builder.Services.AddSingleton<DnsCheck>();
+
 // Login is opt-in: setting a password turns it on, otherwise LabbyTwo stays open on a
 // trusted LAN, which is how most home labs actually run.
 var authEnabled = options.Auth.Enabled;
@@ -274,8 +279,22 @@ var backup = app.MapGet("/api/backup", async (Db db, CancellationToken ct) =>
         fileDownloadName: $"labbytwo-{DateTimeOffset.Now:yyyy-MM-dd}.db");
 });
 
+// The health page as JSON, for a script or another monitor to read. Separate from
+// /healthz on purpose: that one is Docker's liveness check and must stay a cheap,
+// anonymous "ok", while this one names plugins, paths and connections. Nothing here
+// touches the network — the DNS check stays behind the button on the page.
+var healthJson = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)
+{
+    // "TimedOut" rather than 3: this is read by people and shell scripts, not a client library.
+    Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+    WriteIndented = true,
+};
+var healthDetails = app.MapGet("/api/health/details", async (SystemHealth health, CancellationToken ct) =>
+    Results.Json(await health.ReportAsync(ct), healthJson));
+
 if (authEnabled)
 {
+    healthDetails.RequireAuthorization();
     export.RequireAuthorization();
     backup.RequireAuthorization();
     shareTab.RequireAuthorization();

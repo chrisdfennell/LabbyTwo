@@ -1,0 +1,584 @@
+@page "/settings/health"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject SystemHealth Health
+@inject HealthMonitor Monitor
+@inject DnsCheck DnsChecker
+@inject ConfigStore Config
+
+<PageTitle>LabbyTwo health · LabbyTwo</PageTitle>
+
+@* The page that would have saved an afternoon of SSH: whether the monitor is actually
+   sweeping, whether jobs and plugins are well, whether the container can resolve names.
+   Everything shown on load comes from memory or two index seeks; anything slower, and
+   anything that touches the network, waits for a button. *@
+
+<div class="page-head">
+    <div>
+        <h1>🩺 LabbyTwo health</h1>
+        <p class="subtitle">
+            Whether LabbyTwo itself is working — not the things it watches.
+            <a href="settings">Back to Settings</a> · <a href="api/health/details" target="_blank">as JSON</a>
+        </p>
+    </div>
+</div>
+
+@{
+    var findings = Findings();
+    var worst = findings.Count == 0 ? SystemHealth.Level.Ok : findings.Max(f => f.Level);
+    var m = _live.Monitor;
+    var now = _live.At;
+}
+
+<div class="widget health-summary health-@worst.ToString().ToLowerInvariant() mb-3">
+    <div class="widget-body">
+        <div class="d-flex align-items-center gap-2">
+            <span class="status-dot @DotFor(worst)"></span>
+            <strong>
+                @(worst switch
+                {
+                    SystemHealth.Level.Ok => "Everything's running",
+                    SystemHealth.Level.Warn => "Running, with something worth a look",
+                    _ => "Something is wrong",
+                })
+            </strong>
+        </div>
+        @if (findings.Count > 0)
+        {
+            <ul class="mb-0 mt-2 ps-3">
+                @foreach (var finding in findings.OrderByDescending(f => f.Level))
+                {
+                    <li class="@TextFor(finding.Level)"><span class="tile-meta">@finding.Area:</span> @finding.Text</li>
+                }
+            </ul>
+        }
+        else
+        {
+            <div class="tile-meta mt-1">
+                The monitor is sweeping on time, background jobs are passing and every plugin loaded.
+                @if (_dns is null)
+                {
+                    <text>DNS has not been checked — use <em>Check now</em> under Network.</text>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Monitor</h2></div>
+            <div class="widget-body">
+                <dl class="row mb-0 small">
+                    <dt class="col-6 tile-meta">Sweep every</dt>
+                    <dd class="col-6">@SystemHealth.Seconds(m.SweepPeriod)</dd>
+
+                    <dt class="col-6 tile-meta">Right now</dt>
+                    <dd class="col-6">
+                        @if (m.StartedAt is null)
+                        {
+                            <span class="text-danger">not started</span>
+                        }
+                        else if (m.RunningFor(now) is { } running)
+                        {
+                            <span class="@(m.IsSweepStuck(now) ? "text-danger" : null)">
+                                sweeping for @Duration(running)
+                            </span>
+                        }
+                        else if (m.Restore == RestoreOutcome.Running)
+                        {
+                            <span>restoring last known status (@Duration(m.RestoreDuration ?? TimeSpan.Zero))</span>
+                        }
+                        else
+                        {
+                            <span>idle</span>
+                        }
+                    </dd>
+
+                    <dt class="col-6 tile-meta">Last sweep</dt>
+                    <dd class="col-6">
+                        @if (m.LastSweepFinished is { } finished)
+                        {
+                            @($"{Ago.Since(finished, now)} · took {Duration(m.LastSweepDuration ?? TimeSpan.Zero)} · probed {m.LastSweepProbed}")
+                            <div class="tile-meta">started @m.LastSweepStarted?.ToString("HH:mm:ss"), finished @finished.ToString("HH:mm:ss")</div>
+                        }
+                        else
+                        {
+                            <span class="text-warning">none yet</span>
+                        }
+                    </dd>
+
+                    <dt class="col-6 tile-meta">Sweeps since start</dt>
+                    <dd class="col-6">@m.SweepsCompleted</dd>
+
+                    <dt class="col-6 tile-meta">Restore at startup</dt>
+                    <dd class="col-6">
+                        <span class="@(m.Restore is RestoreOutcome.TimedOut or RestoreOutcome.Failed ? "text-warning" : null)">
+                            @RestoreText(m)
+                        </span>
+                    </dd>
+
+                    @if (m.StartedAt is { } started)
+                    {
+                        <dt class="col-6 tile-meta">Monitor started</dt>
+                        <dd class="col-6">@started.ToString("yyyy-MM-dd HH:mm:ss")</dd>
+                    }
+                </dl>
+
+                @if (m.InFlight.Count > 0)
+                {
+                    <div class="tile-meta mt-3 mb-1">Waiting on (@m.InFlight.Count)</div>
+                    <ul class="small mb-0 ps-3">
+                        @foreach (var probe in m.InFlight.Take(10))
+                        {
+                            <li>@Name(probe.ConnectionId) <span class="tile-meta">— @Duration(now - probe.Since)</span></li>
+                        }
+                    </ul>
+                }
+
+                @if (m.Slowest.Count > 0)
+                {
+                    <div class="tile-meta mt-3 mb-1">Slowest last probes</div>
+                    <table class="table table-sm small mb-0">
+                        <tbody>
+                            @foreach (var probe in m.Slowest)
+                            {
+                                <tr>
+                                    <td class="text-truncate" style="max-width: 14rem">@Name(probe.ConnectionId)</td>
+                                    <td class="text-end @(probe.Duration > TimeSpan.FromSeconds(10) ? "text-warning" : null)">@Duration(probe.Duration)</td>
+                                    <td class="text-end tile-meta">@Ago.Since(probe.At, now)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Process</h2></div>
+            <div class="widget-body">
+                @{ var p = _live.Process; }
+                <dl class="row mb-0 small">
+                    <dt class="col-6 tile-meta">Version</dt>
+                    <dd class="col-6 font-monospace">@(p.Version == "dev" ? "not stamped" : p.Version)</dd>
+                    <dt class="col-6 tile-meta">Up for</dt>
+                    <dd class="col-6">@Span(p.Uptime) <span class="tile-meta">since @p.StartedAt.ToString("yyyy-MM-dd HH:mm")</span></dd>
+                    <dt class="col-6 tile-meta">Memory</dt>
+                    <dd class="col-6">@Bytes(p.WorkingSetBytes) in use · @Bytes(p.ManagedBytes) managed</dd>
+                    <dt class="col-6 tile-meta">Threads</dt>
+                    <dd class="col-6">@p.ThreadCount · pool @p.ThreadPoolThreads on @p.ProcessorCount CPU(s)</dd>
+                    <dt class="col-6 tile-meta" title="Work waiting for a thread-pool thread. Should sit near zero; a number that keeps growing means threads are blocked.">
+                        Thread-pool queue
+                    </dt>
+                    <dd class="col-6 @(p.ThreadPoolPending >= 100 ? "text-warning" : null)">@p.ThreadPoolPending waiting</dd>
+                    <dt class="col-6 tile-meta">Runtime</dt>
+                    <dd class="col-6">@p.Runtime</dd>
+                    <dt class="col-6 tile-meta">System</dt>
+                    <dd class="col-6">@p.Os@(p.InContainer ? " · in a container" : "")</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Network</h2></div>
+            <div class="widget-body">
+                <p class="tile-meta">
+                    Resolves @DnsCheck.PublicProbe and every host name your connections use. Only when you
+                    press the button — it asks your DNS server about GitHub, and nothing leaves this machine
+                    until you do.
+                </p>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@_checkingDns" @onclick="CheckDnsAsync">
+                    @(_checkingDns ? "Checking…" : "Check now")
+                </button>
+
+                @if (_dnsError is { Length: > 0 } dnsError)
+                {
+                    <div class="alert alert-warning py-2 mt-2 mb-0">@dnsError</div>
+                }
+                @if (_dns is not null)
+                {
+                    <table class="table table-sm small mt-2 mb-0">
+                        <tbody>
+                            @foreach (var lookup in _dns)
+                            {
+                                <tr>
+                                    <td><span class="status-dot @(lookup.Resolved ? "status-up" : "status-down")"></span></td>
+                                    <td>
+                                        <span class="font-monospace">@lookup.Host</span>
+                                        <span class="tile-meta">@(lookup.IsPublic ? "public" : "LAN") · @string.Join(", ", lookup.UsedBy.Take(3))@(lookup.UsedBy.Count > 3 ? ", …" : "")</span>
+                                        @if (lookup.Resolved)
+                                        {
+                                            <div class="tile-meta">@string.Join(", ", lookup.Addresses.Take(3))@(lookup.Addresses.Count > 3 ? $" and {lookup.Addresses.Count - 3} more" : "")</div>
+                                        }
+                                        else
+                                        {
+                                            <div class="text-danger">@lookup.Error</div>
+                                        }
+                                    </td>
+                                    <td class="text-end tile-meta">@Duration(lookup.Took)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="tile-meta mt-1">Checked @Ago.Since(_dnsAt, now).</div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Database</h2></div>
+            <div class="widget-body">
+                @if (_db is null)
+                {
+                    <p class="tile-meta mb-0">Reading…</p>
+                }
+                else
+                {
+                    <dl class="row mb-2 small">
+                        <dt class="col-6 tile-meta">File</dt>
+                        <dd class="col-6 font-monospace text-break">@_db.Path</dd>
+                        <dt class="col-6 tile-meta">Size</dt>
+                        <dd class="col-6">@Bytes(_db.TotalBytes) <span class="tile-meta">(@Bytes(_db.FileBytes) file, @Bytes(_db.WalBytes) write-ahead log)</span></dd>
+                        <dt class="col-6 tile-meta">Samples</dt>
+                        <dd class="col-6">
+                            @if (_count is { } count)
+                            {
+                                @($"{count.Rows:N0} rows")
+                                <span class="tile-meta">— counting took @Duration(count.Took)</span>
+                            }
+                            else if (_db.SamplesEstimate is { } estimate)
+                            {
+                                @($"about {estimate:N0} rows")
+                            }
+                            else
+                            {
+                                <span class="text-warning">@(_db.Error ?? "unknown")</span>
+                            }
+                        </dd>
+                        @if (_timing is { } timing)
+                        {
+                            <dt class="col-6 tile-meta">Latest readings</dt>
+                            <dd class="col-6">
+                                @if (timing.Error is { } timingError)
+                                {
+                                    <span class="text-danger">@timingError</span>
+                                }
+                                else
+                                {
+                                    <span class="@(timing.Slowest > TimeSpan.FromSeconds(1) ? "text-warning" : null)">
+                                        @Duration(timing.Total) for @timing.Connections connection(s)
+                                    </span>
+                                    @if (timing.SlowestConnectionId is { } slowId)
+                                    {
+                                        <div class="tile-meta">slowest: @Name(slowId), @Duration(timing.Slowest)</div>
+                                    }
+                                }
+                            </dd>
+                        }
+                    </dl>
+                }
+                <div class="d-flex gap-2 flex-wrap">
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@_counting" @onclick="CountAsync">
+                        @(_counting ? "Counting…" : "Count samples exactly")
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@_timingQuery" @onclick="TimeQueryAsync">
+                        @(_timingQuery ? "Timing…" : "Time the dashboard query")
+                    </button>
+                </div>
+                <div class="form-text">
+                    Counting reads the whole table. The timing runs the query every live card makes while a
+                    dashboard draws, once per connection — anything over a second there is felt on every page load.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Background jobs</h2></div>
+            <div class="widget-body">
+                @if (_live.Jobs.Count == 0)
+                {
+                    <p class="tile-meta mb-0">No background jobs are registered.</p>
+                }
+                else
+                {
+                    <table class="table table-sm small mb-0">
+                        <thead>
+                            <tr class="tile-meta"><th></th><th>Job</th><th>Last run</th><th>Took</th><th>Next</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var job in _live.Jobs.OrderBy(j => j.Name))
+                            {
+                                <tr>
+                                    <td><span class="status-dot @(job.RunningSince is not null ? "status-flapping" : job.Ok ? (job.At is null ? "status-unknown" : "status-up") : "status-down")"></span></td>
+                                    <td>
+                                        @job.Name
+                                        @if (!job.Ok)
+                                        {
+                                            <div class="text-danger">@job.Message</div>
+                                        }
+                                        else if (job.LastError is { } lastError && job.LastErrorAt is { } errorAt)
+                                        {
+                                            <div class="tile-meta">failed @Ago.Since(errorAt, now): @lastError</div>
+                                        }
+                                    </td>
+                                    <td>@(job.RunningSince is { } since ? $"running for {Duration(now - since)}" : job.At is { } at ? Ago.Since(at, now) : "not yet")</td>
+                                    <td>@(job.At is null ? "—" : Duration(job.Duration))</td>
+                                    <td>@(job.NextDue is { } due ? (due <= now ? "due now" : $"in {Span(due - now)}") : "—")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Plugins</h2></div>
+            <div class="widget-body">
+                @{ var plugins = _live.Plugins; }
+                <dl class="row mb-2 small">
+                    <dt class="col-6 tile-meta">Host version</dt>
+                    <dd class="col-6 font-monospace">@(plugins.HostVersion.Length > 0 ? plugins.HostVersion : "not stamped")</dd>
+                    <dt class="col-6 tile-meta">Folder</dt>
+                    <dd class="col-6 font-monospace text-break">
+                        @plugins.Directory
+                        @if (!plugins.DirectoryExists)
+                        {
+                            <span class="tile-meta"> (does not exist)</span>
+                        }
+                    </dd>
+                    <dt class="col-6 tile-meta">DLLs found</dt>
+                    <dd class="col-6">@plugins.DllsFound</dd>
+                    <dt class="col-6 tile-meta">Loaded</dt>
+                    <dd class="col-6">@(plugins.Loaded.Count == 0 ? "none" : string.Join(", ", plugins.Loaded))</dd>
+                </dl>
+                @foreach (var mismatch in plugins.BuiltForAnother)
+                {
+                    <div class="small text-warning">⚠ @mismatch</div>
+                }
+                @foreach (var failure in plugins.Failures)
+                {
+                    <div class="small text-danger mt-1">
+                        <span class="font-monospace">@Path.GetFileName(failure.Path)</span>: @failure.Reason
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private SystemHealth.LiveStatus _live = null!;
+    private SystemHealth.DatabaseStatus? _db;
+    private IReadOnlyDictionary<string, string> _names = new Dictionary<string, string>();
+
+    private IReadOnlyList<DnsCheck.Lookup>? _dns;
+    private DateTimeOffset _dnsAt;
+    private string? _dnsError;
+    private bool _checkingDns;
+
+    private (long Rows, TimeSpan Took)? _count;
+    private bool _counting;
+    private SystemHealth.QueryTiming? _timing;
+    private bool _timingQuery;
+
+    private Timer? _clock;
+    private readonly CancellationTokenSource _gone = new();
+
+    protected override void OnInitialized()
+    {
+        // Memory only, so the first paint is immediate; the database facts follow.
+        _live = Health.Live();
+        Monitor.Updated += OnMonitorUpdated;
+        Config.Changed += OnConfigChanged;
+
+        // One tick a second, for the "sweeping for 47 s" clock — the number that shows a
+        // stuck sweep. Live() reads memory only, so this costs a render and nothing else.
+        _clock = new Timer(_ => _ = InvokeAsync(Refresh), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // Both run on the thread pool inside the service, so a slow disk delays this
+            // panel, not the circuit.
+            _names = await Health.NamesAsync(_gone.Token);
+            _db = await Health.DatabaseAsync(_gone.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void Refresh()
+    {
+        if (_gone.IsCancellationRequested)
+            return;
+        _live = Health.Live();
+        StateHasChanged();
+    }
+
+    private void OnMonitorUpdated() => _ = InvokeAsync(Refresh);
+
+    private void OnConfigChanged() => _ = InvokeAsync(async () =>
+    {
+        if (_gone.IsCancellationRequested)
+            return;
+        try
+        {
+            _names = await Health.NamesAsync(_gone.Token);
+            StateHasChanged();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    });
+
+    private IReadOnlyList<SystemHealth.Finding> Findings()
+    {
+        var findings = SystemHealth.Assess(_live, _dns, Monitor.RestoreDeadline).ToList();
+        if (_db?.Error is { } dbError)
+            findings.Add(new(SystemHealth.Level.Bad, "Database", $"Could not read the database: {dbError}"));
+        if (_timing is { Error: { } timingError })
+            findings.Add(new(SystemHealth.Level.Bad, "Database", $"The dashboard query failed: {timingError}"));
+        else if (_timing is { } timing && timing.Slowest > TimeSpan.FromSeconds(1))
+            findings.Add(new(SystemHealth.Level.Warn, "Database",
+                $"Reading the latest values for {Name(timing.SlowestConnectionId ?? "")} took {Duration(timing.Slowest)}. " +
+                "Cards wait on that while a dashboard draws."));
+        return findings;
+    }
+
+    private async Task CheckDnsAsync()
+    {
+        _checkingDns = true;
+        _dnsError = null;
+        try
+        {
+            _dns = await DnsChecker.RunAsync(_gone.Token);
+            _dnsAt = DateTimeOffset.Now;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _dnsError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _checkingDns = false;
+        }
+    }
+
+    private async Task CountAsync()
+    {
+        _counting = true;
+        try
+        {
+            _count = await Health.CountSamplesAsync(_gone.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _db = _db is null ? null : _db with { Error = ex.GetBaseException().Message };
+        }
+        finally
+        {
+            _counting = false;
+        }
+    }
+
+    private async Task TimeQueryAsync()
+    {
+        _timingQuery = true;
+        try
+        {
+            _timing = await Health.TimeLatestReadingsAsync(_gone.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            _timingQuery = false;
+        }
+    }
+
+    private string Name(string connectionId) => _names.TryGetValue(connectionId, out var name) ? name : connectionId;
+
+    private static string RestoreText(MonitorStatus m)
+    {
+        var took = m.RestoreDuration is { } d ? $" in {Duration(d)}" : "";
+        return m.Restore switch
+        {
+            RestoreOutcome.Pending => "not started",
+            RestoreOutcome.Running => $"running{took}",
+            RestoreOutcome.Completed => $"done{took}",
+            RestoreOutcome.TimedOut => $"gave up{took}",
+            _ => $"failed{took}: {m.RestoreError}",
+        };
+    }
+
+    private static string DotFor(SystemHealth.Level level) => level switch
+    {
+        SystemHealth.Level.Ok => "status-up",
+        SystemHealth.Level.Warn => "status-flapping",
+        _ => "status-down",
+    };
+
+    private static string? TextFor(SystemHealth.Level level) => level switch
+    {
+        SystemHealth.Level.Bad => "text-danger",
+        SystemHealth.Level.Warn => "text-warning",
+        _ => null,
+    };
+
+    /// <summary>Milliseconds under a second, seconds under two minutes, then the coarser form.</summary>
+    private static string Duration(TimeSpan span) =>
+        span < TimeSpan.FromSeconds(1) ? $"{span.TotalMilliseconds:0} ms"
+        : span < TimeSpan.FromSeconds(10) ? $"{span.TotalSeconds:0.0} s"
+        : SystemHealth.Seconds(span);
+
+    private static string Span(TimeSpan span) =>
+        span.TotalDays >= 1 ? $"{(int)span.TotalDays}d {span.Hours}h"
+        : span.TotalHours >= 1 ? $"{span.Hours}h {span.Minutes}m"
+        : span.TotalMinutes >= 1 ? $"{span.Minutes}m"
+        : $"{span.Seconds}s";
+
+    private static string Bytes(long value)
+    {
+        double bytes = value;
+        string[] units = ["B", "KB", "MB", "GB"];
+        var unit = 0;
+        while (bytes >= 1024 && unit < units.Length - 1)
+        {
+            bytes /= 1024;
+            unit++;
+        }
+        return $"{bytes:0.#} {units[unit]}";
+    }
+
+    public void Dispose()
+    {
+        _gone.Cancel();
+        Monitor.Updated -= OnMonitorUpdated;
+        Config.Changed -= OnConfigChanged;
+        _clock?.Dispose();
+        _gone.Dispose();
+    }
+}

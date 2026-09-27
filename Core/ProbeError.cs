@@ -163,7 +163,7 @@ public static class ProbeError
     }
 
     /// <summary>The host part of a URL, or the target itself if it is already a bare name.</summary>
-    private static string? HostOf(string? target)
+    public static string? HostOf(string? target)
     {
         if (string.IsNullOrWhiteSpace(target))
             return null;
@@ -178,7 +178,7 @@ public static class ProbeError
     /// cannot see, and useless for GitHub, whose address is not the user's to pin: when one
     /// of these fails, the container has no working resolver at all.
     /// </summary>
-    private static bool IsPublicName(string? target)
+    public static bool IsPublicName(string? target)
     {
         var host = HostOf(target);
         if (host is null || !host.Contains('.'))
