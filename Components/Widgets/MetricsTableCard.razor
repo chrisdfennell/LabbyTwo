@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject LatestReadings Latest
 @inject Registry Registry
 
 @* Every reading a connection produces, in a list. The metric tile answers "what is this
@@ -51,24 +51,25 @@ else
 
     private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 10), 1, 100);
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
-        await LoadAsync();
+        Latest.Changed += OnReadingsLoaded;
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load();
 
-    private async Task LoadAsync()
+    private void Load()
     {
         if (Context.Connection is not { } connection)
             return;
 
         // The live probe first, then history — the same order the metric tile uses, so a
-        // restart does not blank the card until the next sweep.
+        // restart does not blank the card until the next sweep. History comes from memory,
+        // so drawing the card never waits on the database.
         var values = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var (key, value) in await History.LatestAsync(connection.Id, TimeSpan.FromHours(6)))
+        foreach (var (key, value) in Latest.Get(connection.Id, TimeSpan.FromHours(6)))
             values[key] = value;
 
         if (Health.State(connection.Id)?.Metrics is { } live)
@@ -114,11 +115,21 @@ else
         return key.StartsWith(Filter, StringComparison.OrdinalIgnoreCase);
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load();
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == Context.Connection?.Id)
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }

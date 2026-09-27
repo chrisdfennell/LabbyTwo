@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject LatestReadings Latest
 @using System.Globalization
 
 @if (Context.Connection is null)
@@ -73,7 +74,11 @@ else
     private static string Position(double value, double low, double high) =>
         (Math.Clamp((value - low) / (high - low), 0, 1) * 100).ToString("0.#", CultureInfo.InvariantCulture);
 
-    protected override void OnInitialized() => Health.Updated += OnUpdated;
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        Latest.Changed += OnReadingsLoaded;
+    }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
 
@@ -92,7 +97,8 @@ else
 
         if (_current is null || _rain is null)
         {
-            var recorded = await History.LatestAsync(Context.Connection.Id, TimeSpan.FromHours(6));
+            // From memory rather than the database, so these never wait on SQLite.
+            var recorded = Latest.Get(Context.Connection.Id, TimeSpan.FromHours(6));
             _current ??= recorded.TryGetValue("temp_outdoor_c", out var lastTemp) ? lastTemp : null;
             _rain ??= recorded.TryGetValue("rain_in", out var lastRain) ? lastRain : null;
         }
@@ -127,5 +133,15 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == Context.Connection?.Id)
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }

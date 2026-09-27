@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject LatestReadings Latest
 
 @if (Context.Connection is null)
 {
@@ -38,15 +38,20 @@ else
 
     private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
 
-    protected override void OnInitialized() => Health.Updated += OnUpdated;
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        Latest.Changed += OnReadingsLoaded;
+    }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load();
 
     /// <summary>
     /// Live probe first, last recorded readings second — the same fallback the other
     /// weather cards use, so none of them sits blank for a probe interval after a restart.
+    /// The recorded readings come from memory, so drawing the card never waits on SQLite.
     /// </summary>
-    private async Task LoadAsync()
+    private void Load()
     {
         if (Context.Connection is null)
         {
@@ -57,7 +62,7 @@ else
         var live = Health.State(Context.Connection.Id)?.Metrics;
         _metrics = live is { Count: > 0 }
             ? live
-            : await History.LatestAsync(Context.Connection.Id, TimeSpan.FromHours(6));
+            : Latest.Get(Context.Connection.Id, TimeSpan.FromHours(6));
     }
 
     private string Temp(string key) => _metrics!.TryGetValue(key, out var c) ? FormatTemp(c) : "—";
@@ -93,11 +98,21 @@ else
             yield return ("UV index", $"{uv:0}");
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load();
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == Context.Connection?.Id)
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }

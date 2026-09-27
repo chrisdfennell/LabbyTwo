@@ -1,6 +1,6 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject LatestReadings Latest
 @inject AppSettingsStore AppSettings
 @inject Registry Registry
 
@@ -96,21 +96,23 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
+        Latest.Changed += OnReadingsLoaded;
         _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load();
 
-    private async Task LoadAsync()
+    private void Load()
     {
         if (Context.Connection is not { } connection)
             return;
 
         // Live probe first, falling back to the last recorded values — the same order every
-        // other card uses, so a restart does not blank this until the next sweep.
+        // other card uses, so a restart does not blank this until the next sweep. Recorded
+        // values come from memory, so drawing the card never waits on the database.
         var readings = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var (key, value) in await History.LatestAsync(connection.Id, TimeSpan.FromHours(12)))
+        foreach (var (key, value) in Latest.Get(connection.Id, TimeSpan.FromHours(12)))
             readings[key] = value;
 
         if (Health.State(connection.Id)?.Metrics is { } live)
@@ -152,11 +154,21 @@ else
                $"{day.RainChance:0}% chance, {rain:0.##}{unit} expected";
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load();
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == Context.Connection?.Id)
+            OnUpdated();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
+    }
 }

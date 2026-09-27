@@ -1,7 +1,7 @@
 @implements IDisposable
 @inject ConfigStore Config
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject LatestReadings Latest
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
 
@@ -312,6 +312,7 @@ else
     {
         Health.Updated += OnUpdated;
         Config.Changed += OnUpdated;
+        Latest.Changed += OnReadingsLoaded;
     }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
@@ -406,7 +407,9 @@ else
         _lastReport = state?.At;
         _readings = state?.Metrics is { Count: > 0 } live
             ? live
-            : await History.LatestAsync(_station.Id, TimeSpan.FromHours(6));
+            // From memory, so the page never waits on the database to draw; straight after
+            // a restart this can be empty until the load lands and OnReadingsLoaded redraws.
+            : Latest.Get(_station.Id, TimeSpan.FromHours(6));
 
         _context = new WidgetContext(
             new Widget
@@ -428,9 +431,16 @@ else
         StateHasChanged();
     });
 
+    private void OnReadingsLoaded(string connectionId)
+    {
+        if (connectionId == _station?.Id)
+            OnUpdated();
+    }
+
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
         Config.Changed -= OnUpdated;
+        Latest.Changed -= OnReadingsLoaded;
     }
 }

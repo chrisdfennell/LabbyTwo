@@ -22,6 +22,18 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         public bool IsPartial => Since is not null;
     }
 
+    /// <summary>One metric's newest value and when it was recorded.</summary>
+    public readonly record struct Reading(double Value, DateTimeOffset At);
+
+    /// <summary>
+    /// Raised after a batch of samples is committed, with the time they were stamped.
+    /// <see cref="LabbyTwo.Services.LatestReadings"/> listens, so the newest value of every
+    /// metric is in memory the moment it is written: cards read that, never the database,
+    /// while a page is being drawn. Raised here rather than by the monitor so that anything
+    /// that records samples keeps the cache current without having to know it exists.
+    /// </summary>
+    public event Action<string, IReadOnlyDictionary<string, double>, DateTimeOffset>? Recorded;
+
     public async Task RecordAsync(string connectionId, IReadOnlyDictionary<string, double> metrics, CancellationToken ct)
     {
         if (metrics.Count == 0)
@@ -32,8 +44,9 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         cmd.CommandText = "INSERT INTO samples (connection_id, metric, ts, value) VALUES ($c, $m, $t, $v)";
         var metric = cmd.Parameters.Add("$m", SqliteType.Text);
         var value = cmd.Parameters.Add("$v", SqliteType.Real);
+        var stamp = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         cmd.Parameters.AddWithValue("$c", connectionId);
-        cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$t", stamp.ToUnixTimeSeconds());
         foreach (var (key, number) in metrics)
         {
             metric.Value = key;
@@ -41,6 +54,9 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
             await cmd.ExecuteNonQueryAsync(ct);
         }
         await tx.CommitAsync(ct);
+
+        // After the commit, so nothing in memory claims a value the database rolled back.
+        Recorded?.Invoke(connectionId, metrics, stamp);
     }
 
     /// <summary>
@@ -150,6 +166,19 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     public async Task<IReadOnlyDictionary<string, double>> LatestAsync(
         string connectionId, TimeSpan window, CancellationToken ct = default)
     {
+        var latest = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (metric, reading) in await LatestReadingsAsync(connectionId, window, ct))
+            latest[metric] = reading.Value;
+        return latest;
+    }
+
+    /// <summary>
+    /// <see cref="LatestAsync"/> with the time each value was recorded, which is what the
+    /// in-memory cache needs to answer a narrower window later without asking again.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, Reading>> LatestReadingsAsync(
+        string connectionId, TimeSpan window, CancellationToken ct = default)
+    {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
         // Timestamps are whole seconds, so two probes in the same second tie — and with
@@ -162,28 +191,34 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         // cards do this while the page is being drawn. The recursive part hops from one
         // metric name to the next through the index, and each metric's newest value is
         // then a single seek from the end of its range: a handful of lookups, however
-        // big the table has grown.
+        // big the table has grown. The seek finds the row's rowid, and the join fetches
+        // value and timestamp from that one row, so the two can never come from different
+        // samples. Cards no longer run this while drawing — they read LatestReadings,
+        // which runs it in the background — but it is still what warms that cache.
         cmd.CommandText = """
             WITH RECURSIVE metrics(metric) AS (
                 SELECT MIN(metric) FROM samples WHERE connection_id = $id
                 UNION ALL
                 SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $id AND metric > metrics.metric)
                 FROM metrics WHERE metrics.metric IS NOT NULL)
-            SELECT metric, value FROM (
-                SELECT metric,
-                       (SELECT value FROM samples
-                        WHERE connection_id = $id AND metric = metrics.metric AND ts >= $since
-                        ORDER BY ts DESC, rowid DESC LIMIT 1) AS value
-                FROM metrics WHERE metric IS NOT NULL)
-            WHERE value IS NOT NULL
+            SELECT samples.metric, samples.value, samples.ts
+            FROM metrics
+            JOIN samples ON samples.rowid =
+                (SELECT rowid FROM samples
+                 WHERE connection_id = $id AND metric = metrics.metric AND ts >= $since
+                 ORDER BY ts DESC, rowid DESC LIMIT 1)
+            WHERE metrics.metric IS NOT NULL
             """;
         cmd.Parameters.AddWithValue("$id", connectionId);
         cmd.Parameters.AddWithValue("$since", DateTimeOffset.UtcNow.Subtract(window).ToUnixTimeSeconds());
 
-        var latest = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var latest = new Dictionary<string, Reading>(StringComparer.OrdinalIgnoreCase);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-            latest[reader.GetString(0)] = reader.GetDouble(1);
+        {
+            latest[reader.GetString(0)] = new Reading(
+                reader.GetDouble(1), DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(2)));
+        }
         return latest;
     }
 
