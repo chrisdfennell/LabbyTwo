@@ -614,6 +614,12 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
    dot over the words "connection refused" reads as a bug rather than as caution. */
 .status-flapping { background: var(--warn); box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 60%, transparent); }
 
+/* The verdict at the top of the health page. A coloured edge rather than a filled panel,
+   so a red one is noticed without the whole page shouting. */
+.health-summary { border-left: 4px solid var(--up); }
+.health-summary.health-warn { border-left-color: var(--warn); }
+.health-summary.health-bad { border-left-color: var(--down); }
+
 .tile-link { color: var(--text); display: block; }
 .tile-link:hover { text-decoration: none; }
 .tile-name { font-weight: 600; font-size: 1rem; }
