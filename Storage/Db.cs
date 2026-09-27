@@ -268,8 +268,12 @@ public sealed class Db
     public async Task BackupToAsync(string destinationPath, CancellationToken ct = default)
     {
         await using var source = await OpenAsync(ct);
+        // Unpooled, unlike every other connection here. A pooled connection keeps its file
+        // handle after Dispose, and the copy is handed straight to somebody else: /api/backup
+        // opens it to stream and delete, and the nightly job may delete an old one. On
+        // Windows both failed with a sharing violation against a handle nobody was using.
         await using var destination = new SqliteConnection(
-            new SqliteConnectionStringBuilder { DataSource = destinationPath }.ToString());
+            new SqliteConnectionStringBuilder { DataSource = destinationPath, Pooling = false }.ToString());
         await destination.OpenAsync(ct);
         source.BackupDatabase(destination);
     }

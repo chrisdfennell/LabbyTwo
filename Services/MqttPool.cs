@@ -44,6 +44,15 @@ public sealed class MqttPool(ILogger<MqttPool> log) : IDisposable, IAsyncDisposa
     /// </summary>
     private const int MaxTopics = 2000;
 
+    /// <summary>
+    /// How long a dropped session waits before a probe tries it again. A broker that
+    /// restarts is back in seconds and should be picked up without anybody touching the
+    /// connection; a broker that is off for the night should not be dialled by every probe,
+    /// each attempt holding that probe for a connect timeout. Settable so a test can
+    /// reconnect without sitting through it.
+    /// </summary>
+    public TimeSpan ReconnectBackoff { get; init; } = TimeSpan.FromSeconds(30);
+
     private sealed class Session : IAsyncDisposable
     {
         public required string Fingerprint { get; init; }
@@ -52,6 +61,9 @@ public sealed class MqttPool(ILogger<MqttPool> log) : IDisposable, IAsyncDisposa
         public long Messages;
         public DateTimeOffset? Since;
         public string? Error;
+
+        /// <summary>When this session's connection was last attempted, whether or not it worked.</summary>
+        public DateTimeOffset Attempted { get; set; } = DateTimeOffset.Now;
 
         public async ValueTask DisposeAsync()
         {
@@ -71,6 +83,9 @@ public sealed class MqttPool(ILogger<MqttPool> log) : IDisposable, IAsyncDisposa
     private readonly ConcurrentDictionary<string, Session> _sessions = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
 
+    /// <summary>The connection ids that currently hold a session.</summary>
+    public IReadOnlyCollection<string> Held => [.. _sessions.Keys];
+
     /// <summary>
     /// What has arrived on this connection, connecting first if nothing is connected yet.
     ///
@@ -78,19 +93,53 @@ public sealed class MqttPool(ILogger<MqttPool> log) : IDisposable, IAsyncDisposa
     /// dictionary read. A connection whose settings have changed is torn down and rebuilt,
     /// because the alternative is an edited broker address that quietly keeps reporting from
     /// the old one.
+    ///
+    /// A session that has lost its broker is rebuilt too, at most once per
+    /// <see cref="ReconnectBackoff"/>. It used to be kept for as long as its settings
+    /// matched, so a broker restart or a blip on the network left the connection saying
+    /// "not connected" until LabbyTwo itself was restarted.
     /// </summary>
     public async Task<Snapshot> SnapshotAsync(Connection connection, CancellationToken ct)
     {
         var fingerprint = Fingerprint(connection);
 
-        if (_sessions.TryGetValue(connection.Id, out var existing) && existing.Fingerprint == fingerprint)
+        if (_sessions.TryGetValue(connection.Id, out var existing)
+            && existing.Fingerprint == fingerprint
+            && !DueForReconnect(existing))
+        {
             return Read(existing);
+        }
 
         await _lock.WaitAsync(ct);
         try
         {
             if (_sessions.TryGetValue(connection.Id, out existing) && existing.Fingerprint == fingerprint)
-                return Read(existing);
+            {
+                if (!DueForReconnect(existing))
+                    return Read(existing);
+
+                // Same settings, dead socket. Stamped before trying rather than after, so a
+                // broker that is still down costs one attempt per backoff rather than one per
+                // probe. The old session stays in place until a new one exists, so a failed
+                // attempt still has something to report — including why it failed.
+                existing.Attempted = DateTimeOffset.Now;
+                Session fresh;
+                try
+                {
+                    fresh = await OpenAsync(connection, fingerprint, ct);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    existing.Error = ex.GetBaseException().Message;
+                    log.LogInformation("MQTT {Connection} could not reconnect: {Reason}", connection.Name, existing.Error);
+                    return Read(existing);
+                }
+
+                _sessions[connection.Id] = fresh;
+                await existing.DisposeAsync();
+                log.LogInformation("MQTT {Connection} reconnected", connection.Name);
+                return Read(fresh);
+            }
 
             if (existing is not null)
             {
@@ -108,11 +157,38 @@ public sealed class MqttPool(ILogger<MqttPool> log) : IDisposable, IAsyncDisposa
         }
     }
 
-    /// <summary>Drops a connection's session, so deleting or disabling one closes its socket.</summary>
-    public async Task ForgetAsync(string connectionId)
+    private bool DueForReconnect(Session session) =>
+        !session.Client.IsConnected && DateTimeOffset.Now - session.Attempted >= ReconnectBackoff;
+
+    /// <summary>
+    /// Closes every session whose connection is not in <paramref name="keep"/>.
+    ///
+    /// A session is opened by the first probe, and nothing ever closed one, so a connection
+    /// that was deleted or switched off — or one only ever tried from the editor and never
+    /// saved — held its socket and subscription for the life of the process. Under the same
+    /// lock as <see cref="SnapshotAsync"/>, so a sweep cannot dispose a session halfway
+    /// through it being rebuilt.
+    /// </summary>
+    public async Task<int> PruneAsync(IReadOnlySet<string> keep, CancellationToken ct = default)
     {
-        if (_sessions.TryRemove(connectionId, out var session))
-            await session.DisposeAsync();
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var closed = 0;
+            foreach (var id in _sessions.Keys.Where(id => !keep.Contains(id)).ToList())
+            {
+                if (_sessions.TryRemove(id, out var session))
+                {
+                    await session.DisposeAsync();
+                    closed++;
+                }
+            }
+            return closed;
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     private static Snapshot Read(Session session) => new(
@@ -180,22 +256,34 @@ public sealed class MqttPool(ILogger<MqttPool> log) : IDisposable, IAsyncDisposa
             return Task.CompletedTask;
         };
 
-        await client.ConnectAsync(builder.Build(), ct);
+        // Until the return, nothing but this method holds the client. A connect that worked
+        // followed by a subscribe the broker refused — or a probe cancelled during the pause
+        // — used to leave a live socket nobody had a reference to, receiving until the
+        // broker's keep-alive gave up on it, while the next probe opened another beside it.
+        try
+        {
+            await client.ConnectAsync(builder.Build(), ct);
 
-        await client.SubscribeAsync(
-            new MqttClientSubscribeOptionsBuilder()
-                .WithTopicFilter(f => f.WithTopic(filter))
-                .Build(),
-            ct);
+            await client.SubscribeAsync(
+                new MqttClientSubscribeOptionsBuilder()
+                    .WithTopicFilter(f => f.WithTopic(filter))
+                    .Build(),
+                ct);
 
-        session.Since = DateTimeOffset.Now;
+            session.Since = DateTimeOffset.Now;
 
-        // Retained messages arrive immediately after subscribing, but "immediately" is a
-        // round trip. Without this pause the very first probe reports zero topics on a broker
-        // that is about to hand over two hundred, which reads as a broken connection.
-        await Task.Delay(TimeSpan.FromMilliseconds(750), ct);
+            // Retained messages arrive immediately after subscribing, but "immediately" is a
+            // round trip. Without this pause the very first probe reports zero topics on a
+            // broker that is about to hand over two hundred, which reads as a broken connection.
+            await Task.Delay(TimeSpan.FromMilliseconds(750), ct);
 
-        return session;
+            return session;
+        }
+        catch
+        {
+            await session.DisposeAsync();
+            throw;
+        }
     }
 
     /// <summary>

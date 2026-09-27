@@ -11,7 +11,9 @@ namespace LabbyTwo.Storage;
 /// </summary>
 public sealed class AppSettingsStore(Db db)
 {
-    private SettingsBag? _cache;
+    // Versioned so a load cannot store settings from before a save that had already
+    // invalidated them — see VersionedCache.
+    private readonly VersionedCache<SettingsBag> _cache = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     /// <summary>Raised after a save so the layout can restyle without a reload.</summary>
@@ -19,15 +21,16 @@ public sealed class AppSettingsStore(Db db)
 
     public async Task<SettingsBag> AllAsync(CancellationToken ct = default)
     {
-        if (_cache is not null)
-            return _cache;
+        if (_cache.Value is { } cached)
+            return cached;
 
         await _lock.WaitAsync(ct);
         try
         {
-            if (_cache is not null)
-                return _cache;
+            if (_cache.Value is { } loaded)
+                return loaded;
 
+            var version = _cache.Version;
             await using var connection = await db.OpenAsync(ct);
             var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT key, value FROM app_settings";
@@ -35,7 +38,7 @@ public sealed class AppSettingsStore(Db db)
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
                 bag[reader.GetString(0)] = reader.GetString(1);
-            return _cache = bag;
+            return _cache.Store(bag, version);
         }
         finally
         {
@@ -62,7 +65,7 @@ public sealed class AppSettingsStore(Db db)
             await cmd.ExecuteNonQueryAsync(ct);
         }
         await transaction.CommitAsync(ct);
-        _cache = null;
+        _cache.Invalidate();
         Changed?.Invoke();
     }
 

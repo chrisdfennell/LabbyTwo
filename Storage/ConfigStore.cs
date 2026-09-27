@@ -14,9 +14,11 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
     private readonly IDataProtector _protector = protection.CreateProtector("LabbyTwo.ConnectionSecrets");
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    private List<Connection>? _connections;
-    private List<Tab>? _tabs;
-    private List<Widget>? _widgets;
+    // Versioned rather than plain fields: see VersionedCache for the load that used to
+    // store rows from before a write that had already invalidated them.
+    private readonly VersionedCache<List<Connection>> _connections = new();
+    private readonly VersionedCache<List<Tab>> _tabs = new();
+    private readonly VersionedCache<List<Widget>> _widgets = new();
 
     /// <summary>Raised after any mutation. Components subscribe to refresh themselves.</summary>
     public event Action? Changed;
@@ -32,11 +34,11 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
     private void Invalidate(bool connections = true, bool tabs = true, bool widgets = true)
     {
         if (connections)
-            _connections = null;
+            _connections.Invalidate();
         if (tabs)
-            _tabs = null;
+            _tabs.Invalidate();
         if (widgets)
-            _widgets = null;
+            _widgets.Invalidate();
 
         Changed?.Invoke();
     }
@@ -45,11 +47,15 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
 
     public async Task<IReadOnlyList<Connection>> ConnectionsAsync(CancellationToken ct = default)
     {
-        if (_connections is not null)
-            return _connections;
+        if (_connections.Value is { } cached)
+            return cached;
         await _lock.WaitAsync(ct);
         try
         {
+            if (_connections.Value is { } loaded)
+                return loaded;
+
+            var version = _connections.Version;
             await using var connection = await db.OpenAsync(ct);
             var cmd = connection.CreateCommand();
             cmd.CommandText =
@@ -79,7 +85,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
                             : silenced,
                 });
             }
-            return _connections = list;
+            return _connections.Store(list, version);
         }
         finally
         {
@@ -153,28 +159,44 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
 
     public async Task<IReadOnlyList<Tab>> TabsAsync(CancellationToken ct = default)
     {
-        if (_tabs is not null)
-            return _tabs;
-        await using var connection = await db.OpenAsync(ct);
-        var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT id, slug, name, icon, kind, sort, enabled, settings FROM tabs ORDER BY sort, name";
-        var list = new List<Tab>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        if (_tabs.Value is { } cached)
+            return cached;
+
+        // Under the same lock as the connections, which it did not used to take: a page
+        // render and the monitor asking at the same moment each ran the query and raced to
+        // store what they had read.
+        await _lock.WaitAsync(ct);
+        try
         {
-            list.Add(new Tab
+            if (_tabs.Value is { } loaded)
+                return loaded;
+
+            var version = _tabs.Version;
+            await using var connection = await db.OpenAsync(ct);
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT id, slug, name, icon, kind, sort, enabled, settings FROM tabs ORDER BY sort, name";
+            var list = new List<Tab>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
             {
-                Id = reader.GetString(0),
-                Slug = reader.GetString(1),
-                Name = reader.GetString(2),
-                Icon = reader.GetString(3),
-                Kind = reader.GetString(4),
-                Sort = reader.GetInt32(5),
-                Enabled = reader.GetInt64(6) != 0,
-                Settings = SettingsBag.FromJson(reader.GetString(7)),
-            });
+                list.Add(new Tab
+                {
+                    Id = reader.GetString(0),
+                    Slug = reader.GetString(1),
+                    Name = reader.GetString(2),
+                    Icon = reader.GetString(3),
+                    Kind = reader.GetString(4),
+                    Sort = reader.GetInt32(5),
+                    Enabled = reader.GetInt64(6) != 0,
+                    Settings = SettingsBag.FromJson(reader.GetString(7)),
+                });
+            }
+            return _tabs.Store(list, version);
         }
-        return _tabs = list;
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     public async Task<Tab?> TabBySlugAsync(string slug, CancellationToken ct = default)
@@ -298,28 +320,41 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, Regis
 
     public async Task<IReadOnlyList<Widget>> WidgetsAsync(CancellationToken ct = default)
     {
-        if (_widgets is not null)
-            return _widgets;
-        await using var connection = await db.OpenAsync(ct);
-        var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT id, tab_id, type, title, connection_id, sort, width, settings FROM widgets ORDER BY sort";
-        var list = new List<Widget>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        if (_widgets.Value is { } cached)
+            return cached;
+
+        await _lock.WaitAsync(ct);
+        try
         {
-            list.Add(new Widget
+            if (_widgets.Value is { } loaded)
+                return loaded;
+
+            var version = _widgets.Version;
+            await using var connection = await db.OpenAsync(ct);
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT id, tab_id, type, title, connection_id, sort, width, settings FROM widgets ORDER BY sort";
+            var list = new List<Widget>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
             {
-                Id = reader.GetString(0),
-                TabId = reader.GetString(1),
-                Type = reader.GetString(2),
-                Title = reader.GetString(3),
-                ConnectionId = reader.IsDBNull(4) ? null : reader.GetString(4),
-                Sort = reader.GetInt32(5),
-                Width = reader.GetInt32(6),
-                Settings = SettingsBag.FromJson(reader.GetString(7)),
-            });
+                list.Add(new Widget
+                {
+                    Id = reader.GetString(0),
+                    TabId = reader.GetString(1),
+                    Type = reader.GetString(2),
+                    Title = reader.GetString(3),
+                    ConnectionId = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    Sort = reader.GetInt32(5),
+                    Width = reader.GetInt32(6),
+                    Settings = SettingsBag.FromJson(reader.GetString(7)),
+                });
+            }
+            return _widgets.Store(list, version);
         }
-        return _widgets = list;
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     public async Task<IReadOnlyList<Widget>> WidgetsForTabAsync(string tabId, CancellationToken ct = default)

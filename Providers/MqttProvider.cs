@@ -36,6 +36,13 @@ public sealed class MqttProvider(ILogger<MqttPool> log) : IConnectionProvider, I
 
     public ValueTask DisposeAsync() => _pool.DisposeAsync();
 
+    /// <summary>
+    /// Closes the broker session of every connection not in <paramref name="keep"/> — see
+    /// <see cref="MqttSessionSweep"/>, which is what knows which connections still exist.
+    /// </summary>
+    public Task<int> CloseSessionsExceptAsync(IReadOnlySet<string> keep, CancellationToken ct = default) =>
+        _pool.PruneAsync(keep, ct);
+
     public string Type => "mqtt";
     public string DisplayName => "MQTT broker";
     public string Icon => "📨";
