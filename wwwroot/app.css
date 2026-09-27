@@ -998,3 +998,59 @@ h1[tabindex]:focus { outline: none; }
     min-width: 0;
 }
 .git-activity-row > div:first-child { min-width: 0; }
+
+/* ---------- reconnect notice ----------
+   Replaces Blazor's full-screen dialog. Most drops heal within a second or two, so the
+   notice only fades in if the connection is still gone after three seconds, and it sits
+   at the top out of the way instead of covering the dashboard. */
+
+#components-reconnect-modal {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1090;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: .85rem;
+    box-shadow: 0 4px 16px var(--shadow);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .3s, visibility 0s .3s;
+}
+
+#components-reconnect-modal.components-reconnect-show,
+#components-reconnect-modal.components-reconnect-retrying,
+#components-reconnect-modal.components-reconnect-failed {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity .3s 3s, visibility 0s 3s;
+}
+
+#components-reconnect-modal .reconnect-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+    animation: reconnect-pulse 1.2s ease-in-out infinite;
+}
+
+#components-reconnect-modal .reconnect-lost { display: none; }
+#components-reconnect-modal.components-reconnect-failed .reconnect-trying { display: none; }
+#components-reconnect-modal.components-reconnect-failed .reconnect-lost { display: inline; }
+#components-reconnect-modal.components-reconnect-failed .reconnect-dot { background: var(--down); }
+
+@keyframes reconnect-pulse {
+    50% { opacity: .3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #components-reconnect-modal .reconnect-dot { animation: none; }
+}

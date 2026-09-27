@@ -35,7 +35,16 @@
 
 <body>
     <Routes />
+    @* Blazor finds this by id and swaps its classes as the connection drops and returns.
+       app.css keeps it hidden through a short blip; reconnect.js keeps retrying after
+       Blazor gives up. *@
+    <div id="components-reconnect-modal" role="status" aria-live="polite">
+        <span class="reconnect-dot"></span>
+        <span class="reconnect-trying">Reconnecting…</span>
+        <span class="reconnect-lost">Server unreachable, still trying</span>
+    </div>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
+    <script src="@Assets["reconnect.js"]"></script>
     <script src="@Assets["palette.js"]"></script>
 </body>
 
