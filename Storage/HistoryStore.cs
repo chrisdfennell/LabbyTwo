@@ -226,7 +226,19 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT metric FROM samples WHERE connection_id = $c ORDER BY metric";
+        // Hopped through the index one name at a time rather than DISTINCT, which on this
+        // index still reads every sample the connection has kept — a month of them, to
+        // find a dozen names. The alert rules page asks this for every connection before
+        // it can draw, and on a busy install that was long enough that the page never
+        // opened. This is a lookup per metric, however big the table grows.
+        cmd.CommandText = """
+            WITH RECURSIVE metrics(metric) AS (
+                SELECT MIN(metric) FROM samples WHERE connection_id = $c
+                UNION ALL
+                SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $c AND metric > metrics.metric)
+                FROM metrics WHERE metrics.metric IS NOT NULL)
+            SELECT metric FROM metrics WHERE metric IS NOT NULL ORDER BY metric
+            """;
         cmd.Parameters.AddWithValue("$c", connectionId);
         var list = new List<string>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
