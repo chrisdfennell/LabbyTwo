@@ -27,6 +27,22 @@ public sealed class MetricAlertService(
 
     private readonly ConcurrentDictionary<string, Breach> _breaches = new();
 
+    /// <summary>
+    /// One evaluation at a time. A pass reads a breach, awaits the send, and then writes
+    /// it; two passes interleaved both read "not firing" and both send. Sweeps finishing
+    /// close together are ordinary — "Test all" is a burst of them — so this is not a
+    /// theoretical race.
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// Set when a sweep finishes, cleared by the pass that picks it up. A sweep that lands
+    /// while a pass is running is not dropped: the running pass goes round once more, so
+    /// the newest readings are always evaluated without a queue of passes that would all
+    /// see the same thing.
+    /// </summary>
+    private int _pending;
+
     private static string Key(string ruleId, string connectionId) => $"{ruleId}|{connectionId}";
 
     /// <summary>Every rule/connection pair being tracked, with its last reading.</summary>
@@ -56,27 +72,72 @@ public sealed class MetricAlertService(
 
     private async Task EvaluateSafelyAsync()
     {
-        try
+        Interlocked.Exchange(ref _pending, 1);
+
+        // WaitAsync(0) rather than waiting: if a pass is already running it will see the
+        // flag and go round again, so there is nothing for this caller to queue behind.
+        // The outer loop covers the moment between that pass's last look at the flag and
+        // its releasing the gate, when a sweep could otherwise set the flag and find the
+        // gate still held, and be forgotten.
+        while (Volatile.Read(ref _pending) == 1 && await _gate.WaitAsync(0))
         {
-            await EvaluateAsync(DateTimeOffset.Now, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // The sweep already completed and recorded history; a rule bug must not
-            // surface as an unobserved task exception.
-            log.LogError(ex, "Evaluating alert rules failed");
+            try
+            {
+                while (Interlocked.Exchange(ref _pending, 0) == 1)
+                {
+                    try
+                    {
+                        await EvaluatePassAsync(DateTimeOffset.Now, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        // The sweep already completed and recorded history; a rule bug must
+                        // not surface as an unobserved task exception.
+                        log.LogError(ex, "Evaluating alert rules failed");
+                    }
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
     }
 
     /// <summary>
     /// One evaluation pass. <paramref name="now"/> is a parameter so the sustain window
-    /// can be tested without waiting minutes for it.
+    /// can be tested without waiting minutes for it. Waits its turn behind any pass
+    /// already running, for the same reason the sweep-driven ones do.
     /// </summary>
     public async Task EvaluateAsync(DateTimeOffset now, CancellationToken ct)
     {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await EvaluatePassAsync(now, ct);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        // A sweep that finished while this held the gate found it busy and left the flag
+        // for whoever held it — which was this, and this does not look at the flag.
+        if (Volatile.Read(ref _pending) == 1)
+            _ = EvaluateSafelyAsync();
+    }
+
+    private async Task EvaluatePassAsync(DateTimeOffset now, CancellationToken ct)
+    {
         var active = await rules.AllAsync(ct);
         var connections = await config.ConnectionsAsync(ct);
-        var live = new HashSet<string>();
+
+        // Every rule/connection pair that is still meant to be watched, whether or not it
+        // had a reading this time. Kept separate from "had a reading" on purpose: a probe
+        // that failed carries no metrics, and treating that as "this pair no longer exists"
+        // threw away a firing breach on one dropped packet — so the next good reading
+        // fired it again as if new, and a recovery during the gap was never announced.
+        var watched = new HashSet<string>();
 
         foreach (var rule in active.Where(r => r.Enabled && r.Metric.Length > 0))
         {
@@ -90,18 +151,29 @@ public sealed class MetricAlertService(
                 if (!connection.AlertsEnabled)
                     continue;
 
+                var key = Key(rule.Id, connection.Id);
+                watched.Add(key);
+
                 var state = monitor.State(connection.Id);
                 if (state?.Metrics.TryGetValue(rule.Metric, out var value) != true)
+                {
+                    // No reading, so no news: a firing breach stays firing, and will clear
+                    // (and say so) when a reading says it has. A breach still inside its
+                    // sustain window starts the window again, though — minutes in which
+                    // nobody could see the value are not minutes it was seen to hold.
+                    if (_breaches.TryGetValue(key, out var waiting) && waiting is { Firing: false, Since: not null })
+                        _breaches[key] = waiting with { Since = null };
                     continue;
+                }
 
-                live.Add(Key(rule.Id, connection.Id));
                 await ApplyAsync(rule, connection, value, now, ct);
             }
         }
 
-        // Forget rules and connections that went away, so a deleted rule does not keep
-        // showing as firing and a recreated one starts its sustain window fresh.
-        foreach (var key in _breaches.Keys.Where(k => !live.Contains(k)))
+        // Forget rules and connections that went away — deleted, disabled, muted, or no
+        // longer a target — so a deleted rule does not keep showing as firing and a
+        // recreated one starts its sustain window fresh.
+        foreach (var key in _breaches.Keys.Where(k => !watched.Contains(k)))
             _breaches.TryRemove(key, out _);
 
         Updated?.Invoke();
@@ -119,22 +191,22 @@ public sealed class MetricAlertService(
             var sustained = now - since >= TimeSpan.FromMinutes(Math.Max(0, rule.ForMinutes));
             var firing = previous?.Firing ?? false;
 
-            if (!firing && sustained)
-            {
-                firing = true;
-                await SendAsync(rule, connection, spec, value, AlertLevel.Down, ct);
-            }
+            // The new state is written before the send is awaited, not after. The send is
+            // the slow part — a webhook, an SMTP server — and anything that reads this
+            // breach in the meantime has to see that the alert is already on its way.
+            _breaches[key] = new Breach(rule.Id, connection.Id, since, firing || sustained, value);
 
-            _breaches[key] = new Breach(rule.Id, connection.Id, since, firing, value);
+            if (!firing && sustained)
+                await SendAsync(rule, connection, spec, value, AlertLevel.Down, ct);
             return;
         }
 
         if (rule.IsCleared(value))
         {
+            _breaches[key] = new Breach(rule.Id, connection.Id, null, false, value);
+
             if (previous?.Firing == true)
                 await SendAsync(rule, connection, spec, value, AlertLevel.Up, ct);
-
-            _breaches[key] = new Breach(rule.Id, connection.Id, null, false, value);
             return;
         }
 
