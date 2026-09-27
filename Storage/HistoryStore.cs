@@ -265,6 +265,29 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     public sealed record Day(DateOnly Date, double? Percent);
 
     /// <summary>
+    /// Local midnight on <paramref name="date"/>, with the offset that day actually had.
+    ///
+    /// The strip used to stamp every day with today's offset, so in a window that crossed a
+    /// clock change every day on the far side of it started an hour early or late — an
+    /// outage just after midnight landed on the wrong bar. A midnight the clocks skip (a few
+    /// zones change at midnight rather than at two) takes the offset from before the jump,
+    /// which is where the day's first real moment is.
+    /// </summary>
+    public static DateTimeOffset StartOfDay(DateOnly date, TimeZoneInfo zone)
+    {
+        var midnight = date.ToDateTime(TimeOnly.MinValue);
+        if (zone.IsInvalidTime(midnight))
+            return new DateTimeOffset(midnight, zone.GetUtcOffset(midnight.AddHours(-1)));
+
+        // Ambiguous only if the clocks fall back across midnight; the earlier of the two
+        // readings is the start of the day.
+        var offset = zone.IsAmbiguousTime(midnight)
+            ? zone.GetAmbiguousTimeOffsets(midnight).Max()
+            : zone.GetUtcOffset(midnight);
+        return new DateTimeOffset(midnight, offset);
+    }
+
+    /// <summary>
     /// Per-day uptime for a bar strip. Reads the whole window once and walks it in memory —
     /// a query per day would be 30 round trips per service on every render.
     /// </summary>
@@ -272,7 +295,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     {
         var now = DateTimeOffset.Now;
         var firstDay = DateOnly.FromDateTime(now.LocalDateTime.Date.AddDays(-(days - 1)));
-        var windowStart = new DateTimeOffset(firstDay.ToDateTime(TimeOnly.MinValue), now.Offset);
+        var windowStart = StartOfDay(firstDay, TimeZoneInfo.Local);
 
         await using var connection = await db.OpenAsync(ct);
 
@@ -317,8 +340,10 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         for (var i = 0; i < days; i++)
         {
             var date = firstDay.AddDays(i);
-            var dayStart = new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), now.Offset);
-            var dayEnd = dayStart.AddDays(1);
+            var dayStart = StartOfDay(date, TimeZoneInfo.Local);
+            // The next midnight, not 24 hours on: the days either side of a clock change
+            // are 23 and 25 hours long.
+            var dayEnd = StartOfDay(date.AddDays(1), TimeZoneInfo.Local);
             // Today is only partly elapsed; measuring it against a full 24h would show
             // every healthy service dropping through the day.
             var end = dayEnd > now ? now : dayEnd;

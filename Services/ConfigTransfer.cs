@@ -30,14 +30,29 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
         /// <summary>False when secrets were stripped, which is the default for anything shared.</summary>
         public bool IncludesSecrets { get; init; }
 
+        /// <summary>
+        /// True when every connection states what it depends on and every rule states its
+        /// channel, "nothing" included. Files written before those were exported lack this,
+        /// and for them an absent value means "not in the file" rather than "none", so the
+        /// import keeps whatever the install already had.
+        ///
+        /// A flag rather than a version bump because the file is otherwise the same shape: a
+        /// version bump would make every older LabbyTwo refuse a file it can read perfectly
+        /// well, where an unknown property is simply ignored.
+        /// </summary>
+        public bool IncludesLinks { get; init; }
+
         public List<ConnectionDto> Connections { get; init; } = [];
         public List<TabDto> Tabs { get; init; } = [];
         public List<WidgetDto> Widgets { get; init; } = [];
         public List<RuleDto> Rules { get; init; } = [];
     }
 
+    // DependsOn and ChannelId come last and default to null, so a file written before they
+    // were exported still deserialises.
     public sealed record ConnectionDto(string Id, string Provider, string Name, string Icon,
-        bool Enabled, bool Alerts, int Sort, Dictionary<string, string> Settings);
+        bool Enabled, bool Alerts, int Sort, Dictionary<string, string> Settings,
+        string? DependsOn = null);
 
     public sealed record TabDto(string Id, string Slug, string Name, string Icon, string Kind,
         int Sort, bool Enabled, Dictionary<string, string> Settings);
@@ -46,7 +61,8 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
         string? ConnectionId, int Sort, int Width, Dictionary<string, string> Settings);
 
     public sealed record RuleDto(string Id, string Name, string? ConnectionId, string Metric,
-        string Comparison, double Threshold, double? ClearThreshold, int ForMinutes, bool Enabled);
+        string Comparison, double Threshold, double? ClearThreshold, int ForMinutes, bool Enabled,
+        string? ChannelId = null);
 
     public sealed record ImportResult(int Connections, int Tabs, int Widgets, int Rules, List<string> Warnings);
 
@@ -61,10 +77,11 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
         {
             ExportedAt = DateTimeOffset.Now.ToString("O"),
             IncludesSecrets = includeSecrets,
+            IncludesLinks = true,
             Connections =
             [
                 .. connections.Select(c => new ConnectionDto(c.Id, c.Provider, c.Name, c.Icon,
-                    c.Enabled, c.AlertsEnabled, c.Sort, Strip(c, includeSecrets)))
+                    c.Enabled, c.AlertsEnabled, c.Sort, Strip(c, includeSecrets), c.DependsOn))
             ],
             Tabs =
             [
@@ -79,7 +96,8 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
             Rules =
             [
                 .. alertRules.Select(r => new RuleDto(r.Id, r.Name, r.ConnectionId, r.Metric,
-                    r.Comparison.ToString(), r.Threshold, r.ClearThreshold, r.ForMinutes, r.Enabled))
+                    r.Comparison.ToString(), r.Threshold, r.ClearThreshold, r.ForMinutes, r.Enabled,
+                    r.ChannelId))
             ],
         };
 
@@ -106,6 +124,12 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
     /// Upserts everything in the bundle by id. Existing rows with the same id are
     /// overwritten; anything not mentioned is left alone, so importing a dashboard adds to
     /// an install rather than wiping it.
+    ///
+    /// "Overwritten" stops short of what the file does not carry. A default export has its
+    /// secrets stripped, and importing one over the install it came from used to blank every
+    /// password and API key on it — restoring a backup broke every connection it restored.
+    /// A silence in progress is state rather than configuration and is never exported, so
+    /// an import leaves that alone too.
     /// </summary>
     public async Task<ImportResult> ImportAsync(string json, CancellationToken ct = default)
     {
@@ -126,13 +150,35 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
 
         var warnings = new List<string>();
 
+        var existingConnections = (await config.ConnectionsAsync(ct)).ToDictionary(c => c.Id);
         foreach (var dto in bundle.Connections)
         {
-            if (registry.Provider(dto.Provider) is null)
+            if (registry.Provider(dto.Provider) is not { } provider)
             {
                 warnings.Add($"Skipped “{dto.Name}” — no provider named “{dto.Provider}” is installed.");
                 continue;
             }
+
+            existingConnections.TryGetValue(dto.Id, out var existing);
+            var secretFields = provider.Fields.Where(f => f.IsSecret).ToList();
+
+            var settings = new SettingsBag(dto.Settings);
+            if (!bundle.IncludesSecrets && existing is not null)
+            {
+                // Only what the file could not have carried, and only from the same kind of
+                // connection: an id reused for a different provider has no business inheriting
+                // the old one's credentials.
+                foreach (var field in secretFields)
+                {
+                    if (string.Equals(existing.Provider, dto.Provider, StringComparison.OrdinalIgnoreCase)
+                        && settings.Get(field.Key).Length == 0
+                        && existing.Settings.Get(field.Key) is { Length: > 0 } kept)
+                    {
+                        settings[field.Key] = kept;
+                    }
+                }
+            }
+
             await config.SaveConnectionAsync(new Connection
             {
                 Id = dto.Id,
@@ -142,10 +188,12 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
                 Enabled = dto.Enabled,
                 AlertsEnabled = dto.Alerts,
                 Sort = dto.Sort,
-                Settings = new SettingsBag(dto.Settings),
+                Settings = settings,
+                DependsOn = bundle.IncludesLinks ? dto.DependsOn : dto.DependsOn ?? existing?.DependsOn,
+                SilencedUntil = existing?.SilencedUntil,
             }, ct);
 
-            if (!bundle.IncludesSecrets && registry.Provider(dto.Provider)!.Fields.Any(f => f.IsSecret))
+            if (!bundle.IncludesSecrets && secretFields.Any(f => settings.Get(f.Key).Length == 0))
                 warnings.Add($"“{dto.Name}” needs its credentials entered — the export did not carry them.");
         }
 
@@ -206,6 +254,7 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
         // Rules last: one pinned to a connection needs that connection to exist, and a
         // rule for something that was not in the bundle is reported rather than orphaned.
         var connectionIds = (await config.ConnectionsAsync(ct)).Select(c => c.Id).ToHashSet();
+        var existingRules = (await rules.AllAsync(ct)).ToDictionary(r => r.Id);
         var importedRules = 0;
         foreach (var dto in bundle.Rules)
         {
@@ -228,6 +277,9 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
                 ClearThreshold = dto.ClearThreshold,
                 ForMinutes = dto.ForMinutes,
                 Enabled = dto.Enabled,
+                ChannelId = bundle.IncludesLinks
+                    ? dto.ChannelId
+                    : dto.ChannelId ?? existingRules.GetValueOrDefault(dto.Id)?.ChannelId,
             }, ct);
             importedRules++;
         }

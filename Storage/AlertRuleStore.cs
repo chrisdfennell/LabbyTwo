@@ -9,22 +9,25 @@ namespace LabbyTwo.Storage;
 /// </summary>
 public sealed class AlertRuleStore(Db db)
 {
-    private List<AlertRule>? _cache;
+    // Versioned so a load cannot store rules from before a save that had already
+    // invalidated them — see VersionedCache.
+    private readonly VersionedCache<List<AlertRule>> _cache = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     public event Action? Changed;
 
     public async Task<IReadOnlyList<AlertRule>> AllAsync(CancellationToken ct = default)
     {
-        if (_cache is not null)
-            return _cache;
+        if (_cache.Value is { } cached)
+            return cached;
 
         await _lock.WaitAsync(ct);
         try
         {
-            if (_cache is not null)
-                return _cache;
+            if (_cache.Value is { } loaded)
+                return loaded;
 
+            var version = _cache.Version;
             await using var connection = await db.OpenAsync(ct);
             var cmd = connection.CreateCommand();
             cmd.CommandText = """
@@ -52,7 +55,7 @@ public sealed class AlertRuleStore(Db db)
                     ChannelId = reader.IsDBNull(9) ? null : reader.GetString(9),
                 });
             }
-            return _cache = list;
+            return _cache.Store(list, version);
         }
         finally
         {
@@ -105,7 +108,7 @@ public sealed class AlertRuleStore(Db db)
 
     private void Invalidate()
     {
-        _cache = null;
+        _cache.Invalidate();
         Changed?.Invoke();
     }
 }

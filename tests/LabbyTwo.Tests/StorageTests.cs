@@ -251,7 +251,11 @@ public sealed class StorageTests : IDisposable
         Assert.Single(await config.TabsAsync());
         var widget = Assert.Single(await config.WidgetsAsync());
         Assert.Equal(connection.Id, widget.ConnectionId);
-        Assert.Contains(result.Warnings, w => w.Contains("credentials"));
+
+        // The file had no key to give, so the one already on this install is kept rather
+        // than blanked — and there is nothing to re-enter, so nothing is asked for.
+        Assert.Equal("hunter2", (await config.ConnectionAsync(connection.Id))!.Settings.Get("api_key"));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("credentials"));
     }
 
     [Fact]

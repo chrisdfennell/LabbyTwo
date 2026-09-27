@@ -37,16 +37,27 @@ builder.Services.AddDataProtection()
 
 // One HTTP client for every provider. Home lab services routinely use self-signed
 // certificates, and a certificate complaint must not be reported as "the service is down".
+//
+// The factory's own request logging is swapped for one that leaves the path and query out
+// of the log. For IFTTT, webhooks and anything taking a key as a URL parameter, those are
+// where the credential is — see ProviderHttpLogger for why this and not a quieter level.
 builder.Services.AddHttpClient(ProviderHttp.ClientName)
     .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromSeconds(30))
-    .ConfigurePrimaryHttpMessageHandler(ProviderHandler);
+    .ConfigurePrimaryHttpMessageHandler(ProviderHandler)
+    .RemoveAllLoggers()
+    .AddLogger(ProviderLogger);
 
 // The same client with the clock taken off, for the few things that move files rather
 // than JSON. Thirty seconds is right for a probe and wrong for a four-gigabyte download:
 // the caller's CancellationToken — the browser hanging up — is the real bound there.
 builder.Services.AddHttpClient(ProviderHttp.TransferClientName)
     .ConfigureHttpClient(client => client.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(ProviderHandler);
+    .ConfigurePrimaryHttpMessageHandler(ProviderHandler)
+    .RemoveAllLoggers()
+    .AddLogger(ProviderLogger);
+
+static ProviderHttpLogger ProviderLogger(IServiceProvider services) =>
+    new(services.GetRequiredService<ILogger<ProviderHttpLogger>>());
 
 static SocketsHttpHandler ProviderHandler() => new()
 {
