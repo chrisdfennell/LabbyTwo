@@ -216,7 +216,7 @@ public sealed class MqttTests : IAsyncLifetime
         Assert.False(down.Connected);
         Assert.False(string.IsNullOrWhiteSpace(down.Error));
 
-        await _broker.StartAsync();
+        await _broker!.StartAsync();
         Assert.True((await UntilAsync(pool, connection, connected: true)).Connected);
 
         // Subscribed again, not merely connected: a message published now arrives.
@@ -246,7 +246,7 @@ public sealed class MqttTests : IAsyncLifetime
 
         await _broker!.StopAsync();
         Assert.False((await UntilAsync(pool, connection, connected: false)).Connected);
-        await _broker.StartAsync();
+        await _broker!.StartAsync();
 
         Assert.False((await pool.SnapshotAsync(connection, CancellationToken.None)).Connected);
     }
