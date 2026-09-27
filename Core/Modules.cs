@@ -242,8 +242,15 @@ public static class Modules
             }
         }
 
+        // A plugin's own libraries sit in the same folder — SSH.NET and BouncyCastle beside
+        // the terminal plugin — and declare nothing because they are not plugins. Reporting
+        // them as failures put a permanent warning on every install that ran that plugin.
+        // Only something built against LabbyTwo can have meant to be one.
+        var isLibrary = !assembly.GetReferencedAssemblies()
+            .Any(reference => reference.Name == typeof(Modules).Assembly.GetName().Name);
+
         if (providers.Count + widgets.Count + tabKinds.Count + importers.Count
-            + endpoints.Count + jobs.Count == 0 && isPlugin)
+            + endpoints.Count + jobs.Count == 0 && isPlugin && !isLibrary)
         {
             catalog.Failures.Add(new ModuleFailure(assembly.Location,
                 "Loaded, but declares no providers, widgets, tab kinds, importers, endpoints or jobs."));
