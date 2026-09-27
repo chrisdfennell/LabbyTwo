@@ -56,7 +56,7 @@
                     </dd>
                     <dt class="col-6 tile-meta">Probe interval</dt><dd class="col-6">@Options.Value.ProbeSeconds s</dd>
                     <dt class="col-6 tile-meta">Failures before down</dt><dd class="col-6">@Options.Value.FailuresBeforeDown</dd>
-                    <dt class="col-6 tile-meta">History retention</dt><dd class="col-6">@Options.Value.RetentionDays days</dd>
+                    <dt class="col-6 tile-meta">History retention</dt><dd class="col-6">@RetentionText</dd>
                     <dt class="col-6 tile-meta">Login</dt>
                     <dd class="col-6">@(Options.Value.Auth.Enabled ? $"on ({Options.Value.Auth.Username})" : "off — open on this network")</dd>
                     <dt class="col-6 tile-meta">Database</dt><dd class="col-6">@Size</dd>
@@ -1140,6 +1140,22 @@ docker compose restart labbytwo</code></pre>
         finally
         {
             _importing = false;
+        }
+    }
+
+    /// <summary>
+    /// Both halves, since "7 days" alone now reads as though a chart cannot go back
+    /// further than a week, when a year of hourly summaries sits behind it.
+    /// </summary>
+    private string RetentionText
+    {
+        get
+        {
+            var raw = (int)Options.Value.RawRetention.TotalDays;
+            var hourly = (int)Options.Value.HourlyRetention.TotalDays;
+            return hourly > raw
+                ? $"every reading for {raw} days, then hourly for {hourly} days"
+                : $"every reading for {raw} days";
         }
     }
 }

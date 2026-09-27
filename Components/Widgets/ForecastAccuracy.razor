@@ -119,7 +119,7 @@ else
 
         var observedHigh = observed
             .GroupBy(s => DateOnly.FromDateTime(s.At.LocalDateTime))
-            .ToDictionary(g => g.Key, g => g.Max(s => s.Value));
+            .ToDictionary(g => g.Key, g => g.Max(s => s.Max));
 
         return
         [

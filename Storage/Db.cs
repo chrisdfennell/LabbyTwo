@@ -19,7 +19,34 @@ public sealed class LabbyOptions
     public AuthSettings Auth { get; set; } = new();
     public int ProbeSeconds { get; set; } = 30;
     public int FailuresBeforeDown { get; set; } = 2;
-    public int RetentionDays { get; set; } = 30;
+
+    /// <summary>
+    /// Days of full-resolution samples — one row per metric per probe — to keep. Older
+    /// hours are folded into hourly summaries (see <see cref="HourlyRetentionDays"/>) and
+    /// the raw rows deleted. This is the setting that always existed, and it still governs
+    /// exactly what it did: how long every individual reading is kept. What changed is the
+    /// default, from 30 to 7, because at one row per metric every 30 seconds a month of raw
+    /// rows is tens of millions on a busy install, and past a week nobody reads a chart at
+    /// 30-second resolution anyway. Anybody who set it explicitly keeps that many days of
+    /// raw readings, and gains a year of summaries behind them. Never less than one day, so
+    /// a 24-hour chart is always drawn from real readings.
+    /// </summary>
+    public int RetentionDays { get; set; } = 7;
+
+    /// <summary>
+    /// Days of hourly summaries (min, max, average, count) to keep for charts that look
+    /// further back than <see cref="RetentionDays"/>. A year of them is about the size of
+    /// three days of raw samples. Never shorter than <see cref="RetentionDays"/>: a summary
+    /// that expired before the readings it summarises would be a hole in the middle of a
+    /// chart. Zero therefore means "no summaries beyond the raw window".
+    /// </summary>
+    public int HourlyRetentionDays { get; set; } = 365;
+
+    /// <summary><see cref="RetentionDays"/>, clamped to at least a day.</summary>
+    public TimeSpan RawRetention => TimeSpan.FromDays(Math.Max(1, RetentionDays));
+
+    /// <summary><see cref="HourlyRetentionDays"/>, never shorter than <see cref="RawRetention"/>.</summary>
+    public TimeSpan HourlyRetention => TimeSpan.FromDays(Math.Max(HourlyRetentionDays, Math.Max(1, RetentionDays)));
 
     public sealed class AuthSettings
     {
@@ -208,6 +235,34 @@ public sealed class Db
                 FROM status_events)
             WHERE previous IS NOT NULL AND previous = is_up)
         """,
+
+        // 9 — hourly summaries of samples older than the raw window, so the samples table
+        // holds a week rather than a month and a year of history costs less than that
+        // month did. One row per connection, metric and hour. The primary key is the only
+        // index reads need — every query asks for one series over a time range — and
+        // WITHOUT ROWID makes it the table itself, so a series' hours sit together on
+        // disk rather than behind a second lookup. last_ts and last_value are the newest
+        // raw reading in the hour, kept so "the latest value of this metric" stays exact
+        // for a metric that stopped reporting before the raw window: an average would be
+        // a number that was never read, with a timestamp that was never real.
+        """
+        CREATE TABLE IF NOT EXISTS samples_hourly (
+            connection_id TEXT    NOT NULL,
+            metric        TEXT    NOT NULL,
+            hour_ts       INTEGER NOT NULL,
+            min           REAL    NOT NULL,
+            max           REAL    NOT NULL,
+            avg           REAL    NOT NULL,
+            count         INTEGER NOT NULL,
+            last_ts       INTEGER NOT NULL,
+            last_value    REAL    NOT NULL,
+            PRIMARY KEY (connection_id, metric, hour_ts)) WITHOUT ROWID
+        """,
+
+        // 10 — for expiring summaries past their retention. The primary key leads with the
+        // connection, so "every hour before X" would otherwise read the whole table, and
+        // that delete runs from the monitor's sweep.
+        "CREATE INDEX IF NOT EXISTS ix_samples_hourly_age ON samples_hourly (hour_ts)",
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
