@@ -328,14 +328,36 @@ public sealed class HealthMonitor(
     /// One probe, right now — the Test button when adding a connection. Runs the exact
     /// code path the monitor runs, so a green test means monitoring will work too.
     /// </summary>
+    /// <summary>
+    /// Longest a single probe may take. Past the HTTP client's thirty seconds, so an
+    /// ordinary timeout still reports its own clearer message first.
+    /// </summary>
+    public TimeSpan ProbeDeadline { get; set; } = TimeSpan.FromSeconds(40);
+
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {
         var provider = registry.Provider(connection.Provider);
         if (provider is null)
             return ProbeResult.Down(TimeSpan.Zero, $"No provider named \"{connection.Provider}\" is installed.");
+        // A deadline of the monitor's own. The HTTP client gives up after thirty seconds,
+        // but not every probe is HTTP — MQTT, SSH, sockets, a plugin's own client — and the
+        // sweep waits for every probe before it records any of them. One that never
+        // answered used to hold every other connection's status where it was, for good.
+        // The token asks the provider to stop; WaitAsync stops waiting for one that does
+        // not listen.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(ProbeDeadline);
         try
         {
-            return await provider.ProbeAsync(connection, ct);
+            return await provider.ProbeAsync(connection, deadline.Token).WaitAsync(ProbeDeadline, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested &&
+                                   (ex is TimeoutException || deadline.IsCancellationRequested))
+        {
+            log.LogWarning("Probing {Connection} took longer than {Seconds}s and was abandoned",
+                connection.Name, ProbeDeadline.TotalSeconds);
+            return ProbeResult.Down(ProbeDeadline,
+                $"No answer within {ProbeDeadline.TotalSeconds:0} seconds, so this check was abandoned.");
         }
         catch (Exception ex)
         {
