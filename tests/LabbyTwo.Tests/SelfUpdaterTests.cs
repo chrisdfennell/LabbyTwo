@@ -249,7 +249,7 @@ public sealed class SelfUpdaterTests : IDisposable
 
         using var request = JsonDocument.Parse(_docker.CreateBody!);
         var dns = request.RootElement.GetProperty("HostConfig").GetProperty("Dns")
-            .EnumerateArray().Select(d => d.GetString()).ToArray();
+            .EnumerateArray().Select(d => d.GetString()!).ToArray();
         Assert.Equal(["192.168.1.1", "1.1.1.1"], dns);
     }
 
