@@ -198,7 +198,8 @@ public sealed class WeeklySummaryGatherer(
             var byId = monitored.ToDictionary(c => c.Id);
             return
             [
-                .. forecasts.All
+                // Without the duplicates, so a NAS's only volume is not reported twice.
+                .. CapacityForecasts.Representatives(forecasts.All)
                     .Where(e => byId.ContainsKey(e.ConnectionId))
                     .Select(e =>
                     {

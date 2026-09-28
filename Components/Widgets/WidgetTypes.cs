@@ -942,7 +942,7 @@ public sealed class RunningOutWidget : IWidgetType
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("metric", "Only this metric", FieldKind.Text, "disk_percent",
-            Help: "Optional. Blank lists everything that fills towards a limit."),
+            Help: "Optional. Blank lists everything that fills towards a limit. disk_percent includes each volume; disk_percent:vol2 is just that one."),
         new("within_days", "Only what fills within (days)", FieldKind.Number,
             Help: "Optional. Blank lists everything, however far off."),
         new("show_idle", "Also list what is not filling", FieldKind.Bool, Default: "true",

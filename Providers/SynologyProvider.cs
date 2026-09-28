@@ -34,7 +34,7 @@ public sealed class SynologyProvider(IHttpClientFactory httpFactory, ILogger<Syn
         new("cpu_percent", "CPU", "%", 1),
         new("ram_percent", "Memory", "%", 1),
         new("temp_c", "Temperature", "°C", 1),
-        new("disk_percent", "Fullest volume", "%", 1) { Capacity = CapacityLimit.Percent },
+        DiskPercent,
         new("uptime_days", "Uptime", " days", 1),
         new("latency_ms", "Response time", " ms"),
     ];
@@ -56,6 +56,56 @@ public sealed class SynologyProvider(IHttpClientFactory httpFactory, ILogger<Syn
     ];
 
     private readonly ConcurrentDictionary<string, string> _sessions = new();
+
+    private static readonly MetricSpec DiskPercent = new("disk_percent", "Fullest volume", "%", 1) { Capacity = CapacityLimit.Percent };
+
+    /// <summary>The per-volume series the last probe recorded, for their names.</summary>
+    private readonly ConcurrentDictionary<string, IReadOnlyList<VolumeMetric.Series>> _volumes = new();
+
+    /// <summary>
+    /// The fixed metrics plus one per volume, named as DSM names them, so a picker says
+    /// "Volume 2" under its real name rather than showing <c>disk_percent:volume_2</c>.
+    /// </summary>
+    public IReadOnlyList<MetricSpec> MetricsFor(Connection connection) =>
+        _volumes.TryGetValue(connection.Id, out var series) && series.Count > 0
+            ? [.. Metrics, .. VolumeMetric.SpecsFor(DiskPercent, series)]
+            : Metrics;
+
+    /// <summary>
+    /// Volumes out of <c>SYNO.Storage.CGI.Storage</c>'s <c>load_info</c>, the call this
+    /// provider already makes. Keyed by DSM's <c>id</c> (<c>volume_1</c>), which does not
+    /// change when a volume is given a description, and falling back to its mount path.
+    /// Only volumes with a size are returned; DSM reports a crashed or unmounted one
+    /// without. Public so the parsing can be tested without a NAS.
+    /// </summary>
+    public static IReadOnlyList<VolumeMetric.Reading> ReadVolumes(JsonElement storage)
+    {
+        var result = new List<VolumeMetric.Reading>();
+        if (storage.ValueKind != JsonValueKind.Object
+            || !storage.TryGetProperty("volumes", out var volumes) || volumes.ValueKind != JsonValueKind.Array)
+            return result;
+
+        foreach (var volume in volumes.EnumerateArray())
+        {
+            if (volume.ValueKind != JsonValueKind.Object || !volume.TryGetProperty("size", out var size)
+                || size.ValueKind != JsonValueKind.Object)
+                continue;
+
+            // DSM returns these as strings of bytes, which is why they are parsed rather
+            // than read as numbers.
+            var total = Bytes(size, "total");
+            var used = Bytes(size, "used");
+            if (total > 0)
+                result.Add(new VolumeMetric.Reading(Text(volume, "id") ?? Text(volume, "vol_path"), Text(volume, "display_name"), total, used));
+        }
+        return result;
+    }
+
+    private static string? Text(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+        && value.GetString() is { } text && !string.IsNullOrWhiteSpace(text)
+            ? text.Trim()
+            : null;
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
     {
@@ -110,25 +160,21 @@ public sealed class SynologyProvider(IHttpClientFactory httpFactory, ILogger<Syn
                 var storage = await GetAsync(connection,
                     "entry.cgi?api=SYNO.Storage.CGI.Storage&version=1&method=load_info", ct);
 
-                if (storage.TryGetProperty("volumes", out var volumes) && volumes.ValueKind == JsonValueKind.Array)
-                {
-                    double worst = 0;
-                    foreach (var volume in volumes.EnumerateArray())
-                    {
-                        if (!volume.TryGetProperty("size", out var size))
-                            continue;
+                var volumes = ReadVolumes(storage);
 
-                        // DSM returns these as strings of bytes, which is why they are parsed
-                        // rather than read as numbers.
-                        var total = Bytes(size, "total");
-                        var used = Bytes(size, "used");
-                        if (total > 0)
-                            worst = Math.Max(worst, used / total * 100);
-                    }
+                // The fullest, exactly as it has always been recorded.
+                double worst = 0;
+                foreach (var volume in volumes)
+                    worst = Math.Max(worst, volume.Used / volume.Total * 100);
+                if (worst > 0)
+                    metrics["disk_percent"] = worst;
 
-                    if (worst > 0)
-                        metrics["disk_percent"] = worst;
-                }
+                // And each volume on its own, so each gets its own forecast. Remembered for
+                // the labels: the names are only known from a probe.
+                var series = VolumeMetric.Select(DiskPercent.Key, volumes);
+                foreach (var volume in series)
+                    metrics[volume.Key] = volume.Percent;
+                _volumes[connection.Id] = series;
             }
             catch (Exception ex)
             {

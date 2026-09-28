@@ -53,17 +53,114 @@ public sealed class CapacityForecasts(
         _entries.TryGetValue((connectionId, metric.ToLowerInvariant()), out var entry) ? entry.Forecast : null;
 
     /// <summary>
+    /// The forecast that answers "when does this run out" for a metric on a connection:
+    /// for an aggregate like <c>disk_percent</c>, whichever of its volumes runs out first
+    /// (see <see cref="Representatives"/>); for one volume, that volume. Null when there is
+    /// nothing forecast at all.
+    /// </summary>
+    public Entry? Soonest(string connectionId, string metric)
+    {
+        if (VolumeMetric.TryParse(metric, out _, out _))
+            return _entries.GetValueOrDefault((connectionId, metric.ToLowerInvariant()));
+
+        return Representatives(_entries.Values.Where(e => e.ConnectionId == connectionId && VolumeMetric.BelongsTo(e.Metric, metric)))
+            .OrderBy(e => e.Forecast.SortKey)
+            .FirstOrDefault();
+    }
+
+    /// <summary>A metric's forecasts on one connection: the aggregate and each of its volumes.</summary>
+    public IReadOnlyList<Entry> For(string connectionId, string metric) =>
+        [.. _entries.Values.Where(e => e.ConnectionId == connectionId && VolumeMetric.BelongsTo(e.Metric, metric))];
+
+    /// <summary>
+    /// What a card with room for a line or two should say: the forecasts that are heading
+    /// somewhere, soonest first, at most <paramref name="max"/> of them, and how many more
+    /// there were. "Not filling" is left out, because under every volume bar it is noise;
+    /// duplicates are left out as <see cref="Representatives"/> describes.
+    /// </summary>
+    public static (IReadOnlyList<Entry> Shown, int More) Filling(IEnumerable<Entry> entries, int max)
+    {
+        var filling = Representatives(entries)
+            .Where(e => e.Forecast.State is ForecastState.Filling or ForecastState.Full)
+            .OrderBy(e => e.Forecast.SortKey)
+            .ThenBy(e => e.Metric, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var shown = filling.Take(Math.Max(0, max)).ToList();
+        return (shown, filling.Count - shown.Count);
+    }
+
+    /// <summary>
     /// The value of a derived <c>days_until_full:</c> metric, for the alert rules. False when
     /// the key is not a forecast or there is nothing to say yet — which the rule engine
     /// treats as "no reading", exactly as it does a probe that failed.
+    ///
+    /// <c>days_until_full:disk_percent</c> is the soonest of every volume, not only the
+    /// fullest one. A rule names a single metric, so the alternative — one suggested rule
+    /// per volume — would mean a rule for volumes that exist today and silence for the one
+    /// added next month. Answering the aggregate this way makes the suggested "full within
+    /// 30 days" cover every volume, including on every NAS where somebody already added it.
+    /// A rule on one volume's forecast (<c>days_until_full:disk_percent:vol2</c>) still
+    /// watches just that volume.
     /// </summary>
     public bool TryGetValue(string connectionId, string key, out double value)
     {
         value = 0;
-        if (!CapacityMetric.TryParse(key, out var metric) || Get(connectionId, metric)?.AlertValue is not { } days)
+        if (!CapacityMetric.TryParse(key, out var metric) || Soonest(connectionId, metric)?.Forecast.AlertValue is not { } days)
             return false;
         value = days;
         return true;
+    }
+
+    /// <summary>
+    /// Forecasts with the duplicates taken out, for anything that lists them. A NAS records
+    /// its fullest volume as <c>disk_percent</c> and every volume as <c>disk_percent:…</c>,
+    /// so listing all of them says the same thing twice — on a NAS with one volume, exactly
+    /// twice. Per connection and measured metric:
+    /// <list type="bullet">
+    /// <item>Once any volume has a forecast of its own, the volumes are the answer and the
+    /// aggregate is dropped: it is only ever one of them, and the one most likely to be
+    /// sitting still.</item>
+    /// <item>Until then — the first two days after this started recording volumes, or a
+    /// provider that records none — the aggregate is the only forecast there is, and the
+    /// volumes, which could say only "not enough history yet", are dropped instead.</item>
+    /// </list>
+    /// Everything else passes through untouched.
+    /// </summary>
+    public static IReadOnlyList<Entry> Representatives(IEnumerable<Entry> entries)
+    {
+        var list = entries.ToList();
+
+        // Volumes grouped under the aggregate they belong to.
+        var volumes = list
+            .Select(e => VolumeMetric.TryParse(e.Metric, out var measured, out _) ? (Entry: e, Measured: measured) : default)
+            .Where(v => v.Entry is not null)
+            .GroupBy(v => (v.Entry.ConnectionId, Measured: v.Measured.ToLowerInvariant()))
+            .ToDictionary(g => g.Key, g => g.Select(v => v.Entry).ToList());
+
+        var aggregates = list
+            .Where(e => !VolumeMetric.TryParse(e.Metric, out _, out _))
+            .Select(e => (e.ConnectionId, Metric: e.Metric.ToLowerInvariant()))
+            .ToHashSet();
+
+        bool Informative(Entry e) => e.Forecast.State != ForecastState.NotEnoughHistory;
+
+        var result = new List<Entry>(list.Count);
+        foreach (var entry in list)
+        {
+            if (VolumeMetric.TryParse(entry.Metric, out var measured, out _))
+            {
+                var group = volumes[(entry.ConnectionId, measured.ToLowerInvariant())];
+                var hasAggregate = aggregates.Contains((entry.ConnectionId, measured.ToLowerInvariant()));
+                if (!hasAggregate || group.Any(Informative))
+                    result.Add(entry);
+            }
+            else if (!volumes.TryGetValue((entry.ConnectionId, entry.Metric.ToLowerInvariant()), out var group)
+                     || !group.Any(Informative))
+            {
+                result.Add(entry);
+            }
+        }
+        return result;
     }
 
     public async Task RunAsync(CancellationToken ct)

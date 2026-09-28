@@ -62,6 +62,11 @@ public sealed record MetricSpec(string Key, string Label, string Unit = "", int 
         if (WellKnownByKey.TryGetValue(key, out var known))
             return known;
 
+        // One volume of a metric (disk_percent:vol2) is that metric under the volume's
+        // name, so it keeps the unit and capacity rather than reading as "Disk percent:vol2".
+        if (VolumeMetric.TryParse(key, out var measured, out _))
+            return VolumeMetric.SpecFor(Fallback(measured), key, null);
+
         var words = key.Replace('_', ' ').Trim();
         var label = words.Length == 0 ? key : char.ToUpperInvariant(words[0]) + words[1..];
 

@@ -392,20 +392,25 @@ public sealed class MetricAlertServiceTests : IDisposable
     /// Writes a fortnight of hourly history ending now. Straight into the table because the
     /// app only ever records "now", and a forecast needs days of past to fit.
     /// </summary>
-    private async Task WriteHistoryAsync(Connection connection, Func<double, double> valueAtDay, double days = 14)
+    private async Task WriteHistoryAsync(
+        Connection connection, Func<double, double> valueAtDay, double days = 14, string metric = "disk_percent", bool keep = false)
     {
         await using var db = await Get<Db>().OpenAsync();
-        var clear = db.CreateCommand();
-        clear.CommandText = "DELETE FROM samples WHERE connection_id = $c";
-        clear.Parameters.AddWithValue("$c", connection.Id);
-        await clear.ExecuteNonQueryAsync();
+        if (!keep)
+        {
+            var clear = db.CreateCommand();
+            clear.CommandText = "DELETE FROM samples WHERE connection_id = $c";
+            clear.Parameters.AddWithValue("$c", connection.Id);
+            await clear.ExecuteNonQueryAsync();
+        }
 
         var start = DateTimeOffset.UtcNow.AddDays(-days);
         for (var hour = 0; hour <= days * 24; hour++)
         {
             var insert = db.CreateCommand();
-            insert.CommandText = "INSERT INTO samples (connection_id, metric, ts, value) VALUES ($c, 'disk_percent', $t, $v)";
+            insert.CommandText = "INSERT INTO samples (connection_id, metric, ts, value) VALUES ($c, $m, $t, $v)";
             insert.Parameters.AddWithValue("$c", connection.Id);
+            insert.Parameters.AddWithValue("$m", metric);
             insert.Parameters.AddWithValue("$t", start.AddHours(hour).ToUnixTimeSeconds());
             insert.Parameters.AddWithValue("$v", valueAtDay(hour / 24.0));
             await insert.ExecuteNonQueryAsync();
@@ -441,6 +446,42 @@ public sealed class MetricAlertServiceTests : IDisposable
         Assert.Equal(AlertLevel.Down, alert.Level);
         Assert.Equal("NAS · Disk used full in about 2 weeks", alert.Title);
         Assert.DoesNotContain("∞", alert.Body);
+    }
+
+    [Fact]
+    public async Task TheSuggestedForecastRuleWatchesEveryVolumeAndSaysWhichOne()
+    {
+        // The case that motivated per-volume history: Volume 1 is the fullest and has not
+        // moved in a fortnight, Volume 2 is half as full and climbing two points a day. The
+        // aggregate is Volume 1 and says "not filling"; the rule has to hear about Volume 2.
+        var connection = await SetUpAsync(FullWithin(30));
+        await WriteHistoryAsync(connection, _ => 90);
+        await WriteHistoryAsync(connection, _ => 90, metric: "disk_percent:vol1", keep: true);
+        await WriteHistoryAsync(connection, day => 40 + day * 2, metric: "disk_percent:vol2", keep: true);
+        await ForecastAndEvaluateAsync();
+
+        var forecasts = Get<CapacityForecasts>();
+        Assert.Equal(ForecastState.NotFilling, forecasts.Get(connection.Id, "disk_percent")!.State);
+        Assert.True(forecasts.TryGetValue(connection.Id, CapacityMetric.KeyFor("disk_percent"), out var days));
+        Assert.InRange(days, 14, 18);
+
+        var alert = Assert.Single(_channel.Sent);
+        Assert.Equal("NAS · Volume 2 full in about 2 weeks", alert.Title);
+    }
+
+    [Fact]
+    public async Task ARuleOnOneVolumeWatchesOnlyThatVolume()
+    {
+        var rule = FullWithin(30) with { Metric = CapacityMetric.KeyFor("disk_percent:vol1") };
+        var connection = await SetUpAsync(rule);
+        await WriteHistoryAsync(connection, _ => 90);
+        await WriteHistoryAsync(connection, _ => 90, metric: "disk_percent:vol1", keep: true);
+        await WriteHistoryAsync(connection, day => 40 + day * 2, metric: "disk_percent:vol2", keep: true);
+        await ForecastAndEvaluateAsync();
+
+        Assert.Empty(_channel.Sent);
+        Assert.True(Get<CapacityForecasts>().TryGetValue(connection.Id, rule.Metric, out var days));
+        Assert.True(double.IsPositiveInfinity(days));
     }
 
     [Fact]
