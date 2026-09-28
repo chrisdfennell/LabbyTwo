@@ -30,9 +30,9 @@ public class EndpointExtensionTests
         services.AddLogging();
         services.AddHttpClient();
 
-        // Scanning this test assembly rather than the app's: the host ships no endpoint
-        // extension of its own, and a test that asserted "none found" would pass just as
-        // happily if discovery were broken.
+        // Scanning this test assembly rather than the app's, so the test decides exactly
+        // which extension there is to find rather than depending on what the host happens
+        // to ship.
         var catalog = services.AddModules(
             typeof(EndpointExtensionTests).Assembly,
             Path.Combine(Path.GetTempPath(), "labbytwo-no-plugins-" + Guid.NewGuid().ToString("n")),

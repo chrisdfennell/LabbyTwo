@@ -127,6 +127,10 @@ builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<SelfUpdater>();
 builder.Services.AddSingleton<DashboardImportService>();
 
+// Copies the nightly backup off this machine. Not discovered: the backup job calls it.
+builder.Services.AddSingleton<LabbyTwo.Services.Offsite.OffsiteSettingsStore>();
+builder.Services.AddSingleton<LabbyTwo.Services.Offsite.OffsiteBackups>();
+
 // The only scoped pair in here, and deliberately. An undo offer is one person's last
 // action rather than a fact about the installation: as a singleton it would survive across
 // browser sessions and, with auth switched on, offer your deletion to somebody else.
