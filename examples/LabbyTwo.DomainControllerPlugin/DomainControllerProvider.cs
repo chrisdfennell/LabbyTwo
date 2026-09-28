@@ -265,10 +265,10 @@ public sealed class DomainControllerProvider : IConnectionProvider
 
         if (states.All(state => state == PortState.TimedOut))
             return $"Nothing came back from {host} on 389, 636, 88 or 445 within {timeoutMs / 1000.0:0.#}s, "
-                   + "not even a refusal, so something is dropping the connections. On a domain controller "
-                   + "that is usually its own Windows Firewall: when the DC does not recognise the network "
-                   + "as its domain network it applies the Public profile. Otherwise the machine is off, "
-                   + "or this is the wrong address.";
+                   + "not even a refusal, so something there is dropping the connections. First check this "
+                   + "is the domain controller's address: ipconfig on the DC lists it, and another device "
+                   + "on that address looks exactly like this. If it is, the DC's Windows Firewall is the "
+                   + "usual cause (Get-NetConnectionProfile on the DC should say DomainAuthenticated).";
 
         var refused = states.Count(state => state == PortState.Refused);
         var silent = states.Count(state => state == PortState.TimedOut);

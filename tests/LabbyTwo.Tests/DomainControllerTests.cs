@@ -185,7 +185,7 @@ public sealed class DomainControllerSilenceTests
         var message = Explain(TimedOut, TimedOut, TimedOut, TimedOut);
         Assert.Contains("within 2s", message);
         Assert.Contains("Windows Firewall", message);
-        Assert.Contains("Public profile", message);
+        Assert.Contains("ipconfig", message);
     }
 
     [Fact]
