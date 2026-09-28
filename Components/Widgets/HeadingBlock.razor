@@ -1,0 +1,36 @@
+@* A heading on a custom page. A real heading element, at the level chosen, so a screen
+   reader can walk the page by its headings the way it walks any other. *@
+<div class="page-heading-block">
+    @switch (_level)
+    {
+        case 3:
+            <h3>@_text</h3>
+            break;
+        case 4:
+            <h4>@_text</h4>
+            break;
+        default:
+            <h2>@_text</h2>
+            break;
+    }
+    @if (Context.Widget.Settings.Get("subtitle") is { Length: > 0 } subtitle)
+    {
+        <p class="subtitle">@subtitle</p>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private int _level = 2;
+    private string _text = "";
+
+    protected override void OnParametersSet()
+    {
+        var settings = Context.Widget.Settings;
+        _level = Math.Clamp(settings.GetInt("level", 2), 2, 4);
+        var icon = settings.Get("icon");
+        var text = settings.Get("text", "Heading");
+        _text = icon.Length > 0 ? $"{icon} {text}" : text;
+    }
+}

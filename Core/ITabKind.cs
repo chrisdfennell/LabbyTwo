@@ -29,4 +29,5 @@ public static class TabKinds
     public const string Embed = "embed";
     public const string Notes = "notes";
     public const string Status = "status";
+    public const string Custom = "custom";
 }

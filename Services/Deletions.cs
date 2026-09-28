@@ -16,18 +16,32 @@ public sealed class Deletions(ConfigStore config, NotesStore notes, UndoService 
 {
     public async Task WidgetAsync(Widget widget, CancellationToken ct = default)
     {
+        // A section on a custom page can hold notes of its own, kept under the block's id
+        // (see PageBlocks.SectionTab). They go with it, and come back with it.
+        var written = widget.Type == PageBlocks.Section ? await notes.ForTabAsync(widget.Id, ct) : [];
+
         await config.DeleteWidgetAsync(widget.Id, ct);
+        foreach (var note in written)
+            await notes.DeleteAsync(note.Id, ct);
 
         // A card is only its own row, so putting it back is the row going back. Sort comes
         // with it, which is what lands it in the slot it came out of rather than at the end.
-        undo.Add(Describe("card", widget.Title),
-            async token => await config.SaveWidgetAsync(widget, token));
+        undo.Add(Describe("card", widget.Title), async token =>
+        {
+            await config.SaveWidgetAsync(widget, token);
+            foreach (var note in written)
+                await notes.RestoreAsync(note, token);
+        });
     }
 
     public async Task TabAsync(Tab tab, CancellationToken ct = default)
     {
         var widgets = await config.WidgetsForTabAsync(tab.Id, ct);
-        var written = await notes.ForTabAsync(tab.Id, ct);
+        var written = (await notes.ForTabAsync(tab.Id, ct)).ToList();
+
+        // And the notes of any notes sections on it, which the store deletes with the tab.
+        foreach (var section in widgets.Where(widget => widget.Type == PageBlocks.Section))
+            written.AddRange(await notes.ForTabAsync(section.Id, ct));
 
         await config.DeleteTabAsync(tab.Id, ct);
 

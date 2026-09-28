@@ -1,0 +1,17 @@
+@* A rule across a custom page. With a label, the line breaks round it; without one it is
+   just the line, which is most of what anybody wants from a divider. *@
+<div class="page-divider-block @(_label.Length > 0 ? "has-label" : "")" role="separator"
+     aria-label="@(_label.Length > 0 ? _label : null)">
+    @if (_label.Length > 0)
+    {
+        <span>@_label</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private string _label = "";
+
+    protected override void OnParametersSet() => _label = Context.Widget.Settings.Get("label");
+}

@@ -1,12 +1,50 @@
 @inject Registry Registry
 @inject ConfigStore Config
 
-<Modal Title="Add a widget" Size="xl" OnClose="OnClose">
+<Modal Title="@(PageBlocks ? "Add a block" : "Add a widget")" Size="xl" OnClose="OnClose">
     @* A flat list of twenty-seven cards is a wall. Grouped, and with the ones you can
        actually use first, it is a menu — the connections picker has worked this way for
        ages and there was no reason this one did not. *@
     <input class="form-control mb-3" placeholder="Search widgets…" autofocus
            @bind="_search" @bind:event="oninput" />
+
+    @if (PageBlocks)
+    {
+        @* A custom page's own pieces first: they are what makes it a page rather than a
+           dashboard. Each page kind is its own button, so adding the weather as a section
+           is one click and not a section followed by a dropdown. *@
+        var layout = Registry.Widgets.Where(t => t.Type is Core.PageBlocks.Heading or Core.PageBlocks.Divider)
+            .Where(Matches).ToList();
+        var pages = Core.PageBlocks.Embeddable(Registry).Where(MatchesKind).ToList();
+
+        @if (layout.Count > 0)
+        {
+            <h6 class="text-uppercase tile-meta mt-3 mb-2">Layout</h6>
+            <div class="card-picker">
+                @foreach (var type in layout)
+                {
+                    <button type="button" @onclick="() => AddAsync(type)">
+                        <span class="picker-title">@type.Icon @type.DisplayName</span>
+                        <span class="picker-desc">@type.Description</span>
+                    </button>
+                }
+            </div>
+        }
+
+        @if (pages.Count > 0 && Registry.WidgetType(Core.PageBlocks.Section) is { } section)
+        {
+            <h6 class="text-uppercase tile-meta mt-3 mb-2">A whole page, as a section</h6>
+            <div class="card-picker">
+                @foreach (var kind in pages)
+                {
+                    <button type="button" @onclick="() => AddSectionAsync(section, kind)">
+                        <span class="picker-title">@kind.Icon @kind.DisplayName</span>
+                        <span class="picker-desc">@kind.Description</span>
+                    </button>
+                }
+            </div>
+        }
+    }
 
     @foreach (var group in Groups)
     {
@@ -29,7 +67,7 @@
         </div>
     }
 
-    @if (!Groups.Any())
+    @if (!Groups.Any() && !PageBlocks)
     {
         <p class="tile-meta">Nothing matches “@_search”.</p>
     }
@@ -39,6 +77,12 @@
     [Parameter, EditorRequired] public string TabId { get; set; } = "";
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback<Widget> OnPicked { get; set; }
+
+    /// <summary>
+    /// Offer a custom page's sections, headings and dividers too. Off on a dashboard, where
+    /// a section would be a page squeezed into a tile and a heading a card with nothing in it.
+    /// </summary>
+    [Parameter] public bool PageBlocks { get; set; }
 
     private IReadOnlyList<Connection> _connections = [];
     private string _search = "";
@@ -54,6 +98,7 @@
     /// </summary>
     private IEnumerable<IGrouping<string, IWidgetType>> Groups =>
         Registry.Widgets
+            .Where(type => !Core.PageBlocks.IsBlock(type.Type))
             .Where(Matches)
             .OrderBy(type => !type.NeedsConnection || CompatibleCount(type) > 0 ? 0 : 1)
             .ThenBy(type => type.DisplayName)
@@ -79,7 +124,16 @@
         string.Join(" or ", type.ProviderTypes
             .Select(key => Registry.Provider(key)?.DisplayName ?? key));
 
-    private async Task AddAsync(IWidgetType type)
+    private bool MatchesKind(ITabKind kind) =>
+        _search.Trim() is not { Length: > 0 } needle
+        || kind.DisplayName.Contains(needle, StringComparison.OrdinalIgnoreCase)
+        || kind.Description.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A section already pointed at the page chosen, so the editor opens on that page's settings.</summary>
+    private Task AddSectionAsync(IWidgetType section, ITabKind kind) =>
+        AddAsync(section, new SettingsBag { [Core.PageBlocks.KindKey] = kind.Kind });
+
+    private async Task AddAsync(IWidgetType type, SettingsBag? settings = null)
     {
         // Bind straight to the only candidate when there is exactly one — the editor still
         // opens, so the choice stays visible and changeable.
@@ -94,6 +148,7 @@
             Width = type.DefaultWidth,
             Sort = await Config.NextWidgetSortAsync(TabId),
             ConnectionId = type.NeedsConnection && candidates.Count == 1 ? candidates[0].Id : null,
+            Settings = settings ?? new SettingsBag(),
         };
         await Config.SaveWidgetAsync(widget);
         await OnPicked.InvokeAsync(widget);

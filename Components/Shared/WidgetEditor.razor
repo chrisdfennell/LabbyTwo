@@ -6,11 +6,33 @@
 
 <Modal Title="@($"Edit {_type?.DisplayName ?? "widget"}")" OnClose="OnClose">
     <ChildContent>
-    <div class="mb-3">
-        <label class="form-label" for="widget-title">Title</label>
-        <input id="widget-title" class="form-control" @bind="_title" @bind:event="oninput"
-               placeholder="Leave blank to hide the header" />
-    </div>
+    @if (Widget.Type == PageBlocks.Section)
+    {
+        @* Which page a section shows. Only the kinds a section may hold are offered, so the
+           guard in PageBlocks.CanEmbed is a backstop for imported files rather than
+           something a person can walk into from here. *@
+        <div class="mb-3">
+            <label class="form-label" for="section-kind">Page</label>
+            <select id="section-kind" class="form-select" value="@PageBlocks.SectionKind(_settings)"
+                    @onchange="e => ChooseKind(e.Value?.ToString())">
+                <option value="">— choose —</option>
+                @foreach (var kind in PageBlocks.Embeddable(Registry))
+                {
+                    <option value="@kind.Kind">@kind.Icon @kind.DisplayName</option>
+                }
+            </select>
+        </div>
+    }
+
+    @* A heading and a divider are their text; a title over them would be a second one. *@
+    @if (Widget.Type is not (PageBlocks.Heading or PageBlocks.Divider))
+    {
+        <div class="mb-3">
+            <label class="form-label" for="widget-title">@(Widget.Type == PageBlocks.Section ? "Heading" : "Title")</label>
+            <input id="widget-title" class="form-control" @bind="_title" @bind:event="oninput"
+                   placeholder="@(Widget.Type == PageBlocks.Section ? "Leave blank to use the page's own name" : "Leave blank to hide the header")" />
+        </div>
+    }
 
     @if (_type?.NeedsConnection == true)
     {
@@ -44,10 +66,26 @@
         </select>
     </div>
 
+    @if (PageLayout)
+    {
+        <div class="mb-3">
+            <label class="form-label" for="widget-height">Height</label>
+            <select id="widget-height" class="form-select" @bind="_height">
+                <option value="0">Fit the content</option>
+                @for (var rows = 1; rows <= PageBlocks.MaxRows; rows++)
+                {
+                    <option value="@rows">@rows row@(rows == 1 ? "" : "s")</option>
+                }
+            </select>
+            <div class="form-text">A fixed height scrolls whatever does not fit. Phones always fit the content.</div>
+        </div>
+    }
+
     @if (_type is not null)
     {
-        <SettingsForm Fields="_type.Fields" Values="_settings" DynamicOptions="Suggestions"
-                      EmptyMessage="This widget has nothing to configure." />
+        <SettingsForm Fields="_fields" Values="_settings"
+                      DynamicOptions="Suggestions"
+                      EmptyMessage="@(Widget.Type == PageBlocks.Section ? "That page has nothing to configure." : "This widget has nothing to configure.")" />
     }
     </ChildContent>
 
@@ -61,6 +99,9 @@
     [Parameter, EditorRequired] public Widget Widget { get; set; } = default!;
     [Parameter] public EventCallback OnClose { get; set; }
 
+    /// <summary>Offer a height as well as a width — on a custom page, the only place one means anything.</summary>
+    [Parameter] public bool PageLayout { get; set; }
+
     private IWidgetType? _type;
     private List<Connection> _candidates = [];
     private IReadOnlyList<SelectOption> _metricOptions = [];
@@ -68,6 +109,8 @@
     private string _title = "";
     private string _connectionId = "";
     private int _width = 4;
+    private int _height;
+    private IReadOnlyList<FieldSpec> _fields = [];
     private SettingsBag _settings = new();
     private BackgroundLoad _recorded = default!;
 
@@ -78,8 +121,10 @@
         _title = Widget.Title;
         _connectionId = Widget.ConnectionId ?? "";
         _width = Widget.Width;
+        _height = PageBlocks.ClampRows(Widget.Height);
         // Edit a copy so cancelling actually cancels.
         _settings = Widget.Settings.Clone();
+        _fields = PageBlocks.FieldsFor(Registry, Widget.Type, _settings);
 
         var connections = await Config.ConnectionsAsync();
         _candidates = _type is null ? [] : [.. connections.Where(c => Registry.Accepts(_type, c.Provider))];
@@ -130,6 +175,17 @@
 
     public void Dispose() => _recorded?.Dispose();
 
+    /// <summary>
+    /// A section pointed at another page takes that page's form. Settings already typed are
+    /// kept rather than cleared: two kinds sharing a key — both have a subtitle — carry it
+    /// over, and switching back finds what was there.
+    /// </summary>
+    private void ChooseKind(string? kind)
+    {
+        _settings[PageBlocks.KindKey] = kind ?? string.Empty;
+        _fields = PageBlocks.FieldsFor(Registry, Widget.Type, _settings);
+    }
+
     private IReadOnlyList<SelectOption> Suggestions(FieldSpec field) =>
         field.Kind == FieldKind.Metric ? _metricOptions : field.Options ?? [];
 
@@ -143,6 +199,7 @@
             Title = _title,
             ConnectionId = _connectionId.Length > 0 ? _connectionId : null,
             Width = _width,
+            Height = _height,
             Settings = _settings,
         });
         await OnClose.InvokeAsync();
