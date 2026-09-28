@@ -134,6 +134,16 @@ public sealed class SystemHealth(
     /// methods complete synchronously, so awaiting one from a component would still hold
     /// the circuit while SQLite worked.
     /// </summary>
+    /// <summary>
+    /// The rough sample count, as two separate lookups. SQLite only turns MIN or MAX into a
+    /// single seek to one end of the table when it is the whole query; "MAX(rowid) -
+    /// MIN(rowid)" in one SELECT reads every row instead. On a 555 MB database on NAS
+    /// disks that was long enough for Cloudflare to give up on the health page (524).
+    /// A test checks the plan, because on a fast disk the scan is quick enough to hide.
+    /// </summary>
+    public const string SampleEstimateSql =
+        "SELECT (SELECT MAX(rowid) FROM samples) - (SELECT MIN(rowid) FROM samples) + 1";
+
     public Task<DatabaseStatus> DatabaseAsync(CancellationToken ct = default) => Task.Run(async () =>
     {
         var path = db.FilePath;
@@ -143,8 +153,7 @@ public sealed class SystemHealth(
         {
             await using var connection = await db.OpenAsync(ct);
             var cmd = connection.CreateCommand();
-            // MIN and MAX of the rowid are each a single seek to one end of the table.
-            cmd.CommandText = "SELECT MAX(rowid) - MIN(rowid) + 1 FROM samples";
+            cmd.CommandText = SampleEstimateSql;
             var value = await cmd.ExecuteScalarAsync(ct);
             long? estimate = value is null or DBNull ? 0 : Convert.ToInt64(value);
             return new DatabaseStatus(path, file, wal, db.SizeBytes, estimate, null);
