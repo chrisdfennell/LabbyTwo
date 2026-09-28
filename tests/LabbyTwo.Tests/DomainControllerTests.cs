@@ -157,3 +157,49 @@ public sealed class DomainControllerTests
         Assert.False(answer.Ok);
     }
 }
+
+/// <summary>
+/// "Nothing answered" used to be one message for three problems. Each state points at a
+/// different fix, so each gets its own explanation.
+/// </summary>
+public sealed class DomainControllerSilenceTests
+{
+    private const DomainControllerProvider.PortState Refused = DomainControllerProvider.PortState.Refused;
+    private const DomainControllerProvider.PortState TimedOut = DomainControllerProvider.PortState.TimedOut;
+    private const DomainControllerProvider.PortState Unreachable = DomainControllerProvider.PortState.Unreachable;
+
+    private static string Explain(params DomainControllerProvider.PortState[] states) =>
+        DomainControllerProvider.ExplainSilence("192.168.86.53", states, 2000);
+
+    [Fact]
+    public void All_refused_means_the_machine_is_there_but_is_not_a_domain_controller()
+    {
+        var message = Explain(Refused, Refused, Refused, Refused);
+        Assert.Contains("is up but refused", message);
+        Assert.Contains("not running Active Directory", message);
+    }
+
+    [Fact]
+    public void All_timed_out_points_at_the_domain_controllers_firewall()
+    {
+        var message = Explain(TimedOut, TimedOut, TimedOut, TimedOut);
+        Assert.Contains("within 2s", message);
+        Assert.Contains("Windows Firewall", message);
+        Assert.Contains("Public profile", message);
+    }
+
+    [Fact]
+    public void No_route_points_at_the_containers_network_not_the_domain_controller()
+    {
+        var message = Explain(Unreachable, TimedOut, TimedOut, TimedOut);
+        Assert.Contains("No route to 192.168.86.53", message);
+        Assert.Contains("container", message);
+    }
+
+    [Fact]
+    public void A_mix_says_how_many_of_each()
+    {
+        var message = Explain(Refused, TimedOut, TimedOut, Refused);
+        Assert.Contains("2 refused and 2 timed out", message);
+    }
+}
