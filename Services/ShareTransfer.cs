@@ -28,6 +28,13 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
     public const string TabKind = "tab";
     public const string WidgetKind = "widget";
 
+    /// <summary>
+    /// A tab saved to start new tabs from. The same file as a shared tab, plus the name,
+    /// icon and description the template was given, so one travels exactly like the other
+    /// — and a template file handed to the tab import simply becomes a tab.
+    /// </summary>
+    public const string TemplateKind = "template";
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -50,7 +57,16 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
 
         public SharedTab? Tab { get; init; }
         public List<SharedWidget> Widgets { get; init; } = [];
+
+        /// <summary>Only on a <see cref="TemplateKind"/> file: what the template is called.</summary>
+        public TemplateInfo? Template { get; init; }
+
+        /// <summary>A tab file or a template file — both carry one tab and its cards.</summary>
+        [JsonIgnore]
+        public bool HoldsTab => Kind is TabKind or TemplateKind;
     }
+
+    public sealed record TemplateInfo(string Name, string Icon, string Description);
 
     public sealed record SharedTab(
         string Slug, string Name, string Icon, string Kind,
@@ -201,8 +217,11 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
         string? Slug,
         List<string> Notes)
     {
-        public bool IsTab => Share.Kind == TabKind;
+        public bool IsTab => Share.HoldsTab;
     }
+
+    /// <summary>The file as text, in the same shape <see cref="Read"/> takes back.</summary>
+    public static string Write(Share share) => JsonSerializer.Serialize(share, Json);
 
     public static Share Read(string json)
     {
@@ -222,8 +241,11 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
                 $"That file is version {share.Version} and this LabbyTwo understands up to {CurrentVersion}. " +
                 "Update LabbyTwo and try again.");
 
-        if (share.Kind == TabKind && share.Tab is null)
+        if (share.HoldsTab && share.Tab is null)
             throw new InvalidOperationException("That file says it holds a tab but does not contain one.");
+
+        if (!share.HoldsTab && share.Kind != WidgetKind)
+            throw new InvalidOperationException($"That file holds a “{share.Kind}”, which is not something LabbyTwo can import.");
 
         if (share.Kind == WidgetKind && share.Widgets.Count == 0)
             throw new InvalidOperationException("That file says it holds a card but does not contain one.");
@@ -241,7 +263,7 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
         var connections = await config.ConnectionsAsync(ct);
 
         string? slug = null;
-        if (share.Kind == TabKind && share.Tab is { } tab)
+        if (share.HoldsTab && share.Tab is { } tab)
         {
             slug = await config.UniqueSlugAsync(tab.Slug, null, ct);
             if (!string.Equals(slug, tab.Slug, StringComparison.OrdinalIgnoreCase))
@@ -268,7 +290,7 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
                 Note(notes, connections, reference, $"The “{Name(widget)}” card's “{key}” setting");
         }
 
-        var summary = share.Kind == TabKind
+        var summary = share.HoldsTab
             ? $"Adds the “{share.Tab!.Name}” tab and {Count(share.Widgets.Count, "card")}."
             : $"Adds the “{Name(share.Widgets[0])}” card.";
 
@@ -302,19 +324,107 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
     /// </summary>
     private static (Connection? Found, string Why) Match(IReadOnlyList<Connection> connections, ConnectionRef reference)
     {
+        var match = Resolve(connections, reference);
+        return match.How switch
+        {
+            MatchKind.Exact => (match.Found, ""),
+            MatchKind.OnlyOne => (match.Found, $", the only one you have — the file asked for “{reference.Name}”."),
+            MatchKind.Several => (null, $" There are {match.Candidates.Count} to choose from, so none was picked."),
+            _ => (null, ""),
+        };
+    }
+
+    /// <summary>How a reference found its local equivalent, if it did.</summary>
+    public enum MatchKind
+    {
+        /// <summary>Same provider, same name.</summary>
+        Exact,
+
+        /// <summary>A different name, but the only connection of that provider there is.</summary>
+        OnlyOne,
+
+        /// <summary>No name matched and several of that provider exist, so none was picked.</summary>
+        Several,
+
+        /// <summary>Nothing of that provider exists here.</summary>
+        None,
+    }
+
+    /// <param name="Found">What the rule picked, or null when it would not.</param>
+    /// <param name="How">Which part of the rule decided.</param>
+    /// <param name="Candidates">Every connection of the reference's provider, for somebody choosing by hand.</param>
+    public sealed record ConnectionMatch(Connection? Found, MatchKind How, IReadOnlyList<Connection> Candidates);
+
+    /// <summary>
+    /// <see cref="Match"/>'s rule with its working shown, for a screen that lets somebody
+    /// overrule it: the candidates are what a dropdown offers when the rule would not pick.
+    /// </summary>
+    public static ConnectionMatch Resolve(IReadOnlyList<Connection> connections, ConnectionRef reference)
+    {
         var sameProvider = connections
             .Where(c => string.Equals(c.Provider, reference.Provider, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (sameProvider.FirstOrDefault(c => string.Equals(c.Name, reference.Name, StringComparison.OrdinalIgnoreCase))
             is { } byName)
-            return (byName, "");
+            return new ConnectionMatch(byName, MatchKind.Exact, sameProvider);
 
-        if (sameProvider.Count == 1)
-            return (sameProvider[0], $", the only one you have — the file asked for “{reference.Name}”.");
-
-        return (null, sameProvider.Count == 0 ? "" : $" There are {sameProvider.Count} to choose from, so none was picked.");
+        return sameProvider.Count switch
+        {
+            1 => new ConnectionMatch(sameProvider[0], MatchKind.OnlyOne, sameProvider),
+            0 => new ConnectionMatch(null, MatchKind.None, sameProvider),
+            _ => new ConnectionMatch(null, MatchKind.Several, sameProvider),
+        };
     }
+
+    /// <summary>One connection a file needs, with everything in it that needs it.</summary>
+    /// <param name="Reference">The connection as the file names it.</param>
+    /// <param name="UsedBy">Phrases like "the “NAS” card", for saying what an answer affects.</param>
+    /// <param name="Match">What the matching rule makes of it here.</param>
+    public sealed record Binding(ConnectionRef Reference, List<string> UsedBy, ConnectionMatch Match);
+
+    /// <summary>
+    /// Every distinct connection the file asks for, matched against this install. Asked
+    /// once per connection rather than once per card: a page of six cards on one NAS is
+    /// one question, not six.
+    /// </summary>
+    public async Task<List<Binding>> BindingsAsync(Share share, CancellationToken ct = default)
+    {
+        var connections = await config.ConnectionsAsync(ct);
+        var found = new List<Binding>();
+
+        void Add(ConnectionRef reference, string what)
+        {
+            if (found.FirstOrDefault(b => Same(b.Reference, reference)) is { } existing)
+            {
+                if (!existing.UsedBy.Contains(what))
+                    existing.UsedBy.Add(what);
+                return;
+            }
+            found.Add(new Binding(reference, [what], Resolve(connections, reference)));
+        }
+
+        if (share.Tab is { } tab)
+        {
+            foreach (var (key, reference) in tab.Connections)
+                Add(reference, $"the page's “{key}” setting");
+        }
+
+        foreach (var widget in share.Widgets.OrderBy(w => w.Sort))
+        {
+            if (widget.BoundTo is { } bound)
+                Add(bound, $"the “{Name(widget)}” card");
+            foreach (var (key, reference) in widget.Connections)
+                Add(reference, $"the “{Name(widget)}” card's “{key}” setting");
+        }
+
+        return found;
+    }
+
+    /// <summary>The same connection by the matching rule's lights, which ignore case.</summary>
+    public static bool Same(ConnectionRef a, ConnectionRef b) =>
+        string.Equals(a.Provider, b.Provider, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
 
     // ---- writing it in ---------------------------------------------------------------
 
@@ -330,15 +440,31 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
     /// sensible guess for a card arriving from somebody else; a duplicate passes the tab
     /// its original is on, because next to it is the whole point.
     /// </param>
-    public async Task<Result> ApplyAsync(Plan plan, CancellationToken ct = default, string? ontoTab = null)
+    /// <param name="choices">
+    /// Answers somebody gave by hand, which win over the matching rule: a connection id, or
+    /// empty for "leave it unbound". A reference with no answer here is matched as usual.
+    /// </param>
+    public async Task<Result> ApplyAsync(
+        Plan plan, CancellationToken ct = default, string? ontoTab = null,
+        IReadOnlyDictionary<ConnectionRef, string>? choices = null)
     {
         var connections = await config.ConnectionsAsync(ct);
         var share = plan.Share;
 
+        Connection? Pick(ConnectionRef reference)
+        {
+            foreach (var (asked, answer) in choices ?? new Dictionary<ConnectionRef, string>())
+            {
+                if (Same(asked, reference))
+                    return connections.FirstOrDefault(c => c.Id == answer);
+            }
+            return Match(connections, reference).Found;
+        }
+
         string tabId;
         string? slug = null;
 
-        if (share.Kind == TabKind && share.Tab is { } shared)
+        if (share.HoldsTab && share.Tab is { } shared)
         {
             var tabs = await config.TabsAsync(ct);
             slug = await config.UniqueSlugAsync(shared.Slug, null, ct);
@@ -353,7 +479,7 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
                 Kind = shared.Kind,
                 Sort = tabs.Count == 0 ? 0 : tabs.Max(t => t.Sort) + 1,
                 Enabled = true,
-                Settings = Rebuild(shared.Settings, shared.Connections, connections),
+                Settings = Rebuild(shared.Settings, shared.Connections, Pick),
             }, ct);
         }
         else
@@ -388,10 +514,10 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
                 TabId = tabId,
                 Type = widget.Type,
                 Title = widget.Title,
-                ConnectionId = widget.BoundTo is { } bound ? Match(connections, bound).Found?.Id : null,
+                ConnectionId = widget.BoundTo is { } bound ? Pick(bound)?.Id : null,
                 Sort = sort++,
                 Width = widget.Width,
-                Settings = Rebuild(widget.Settings, widget.Connections, connections),
+                Settings = Rebuild(widget.Settings, widget.Connections, Pick),
             }, ct);
             written++;
         }
@@ -403,12 +529,12 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
     private static SettingsBag Rebuild(
         Dictionary<string, string> settings,
         Dictionary<string, ConnectionRef> refs,
-        IReadOnlyList<Connection> connections)
+        Func<ConnectionRef, Connection?> pick)
     {
         var bag = new SettingsBag(settings);
         foreach (var (key, reference) in refs)
         {
-            if (Match(connections, reference).Found is { } found)
+            if (pick(reference) is { } found)
                 bag[key] = found.Id;
         }
         return bag;
@@ -439,7 +565,7 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
     private static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? "" : "s")}";
 
     /// <summary>A filename somebody can find again, out of a name somebody typed.</summary>
-    private static string Slugify(string name)
+    public static string Slugify(string name)
     {
         var slug = new string([.. name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-')]);
         slug = string.Join('-', slug.Split('-', StringSplitOptions.RemoveEmptyEntries));
