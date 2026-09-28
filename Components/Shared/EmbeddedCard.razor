@@ -1,0 +1,209 @@
+@implements IDisposable
+@inject Registry Registry
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+
+@* A whole card inside Markdown: {{widget: CPU chart}} shows a card that already exists on
+   some tab, and {{card: gauge connection="NAS" metric="cpu_percent"}} draws one that
+   exists only here. Either way it is the card's own component, drawn exactly as a
+   dashboard would draw it, inside the same CardBoundary — a card that throws in a note
+   costs that card, not the note.
+
+   Read-only in the sense that matters: there is no edit bar, no drag handle, nothing that
+   writes the widget. Anything the card itself does (an action button) it does behind the
+   same login as the tab it came from. *@
+
+@if (_problem is not null)
+{
+    <div class="md-embed is-problem" role="note">
+        <span class="sc-problem" aria-hidden="true">?</span>
+        <span class="tile-meta">@_problem</span>
+    </div>
+}
+else if (_widget is null || _type is null)
+{
+    <div class="md-embed">
+        <div class="widget-skeleton" aria-hidden="true"><span></span><span></span></div>
+    </div>
+}
+else
+{
+    <div class="md-embed" data-embedded-widget="@_widget.Id">
+        @if (_title is { Length: > 0 })
+        {
+            <div class="widget-head">
+                <h3 class="widget-title text-truncate">@_title</h3>
+            </div>
+        }
+        @if (!RendererInfo.IsInteractive)
+        {
+            @* Prerendering waits for every component on the page; see GridTab for why a
+               card is only a placeholder until the circuit starts. *@
+            <div class="widget-skeleton" aria-hidden="true"><span></span><span></span></div>
+        }
+        else
+        {
+            <CardBoundary Name="@(_title is { Length: > 0 } ? _title : _type.DisplayName)" Version="@_fingerprint">
+                <DynamicComponent Type="_type.Component" Parameters="_parameters" />
+            </CardBoundary>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+    [CascadingParameter] public EmbedChain? Chain { get; set; }
+
+    private string? _problem;
+    private Widget? _widget;
+    private IWidgetType? _type;
+    private string? _title;
+    private string _fingerprint = "";
+    private Dictionary<string, object> _parameters = [];
+
+    // Kept so the parameters are only rebuilt when what they are drawn from changes.
+    // DynamicComponent hands whatever it is given straight to the card, and a fresh
+    // WidgetContext on every redraw of the note would restart every card's own loading.
+    private string? _built;
+
+    protected override void OnInitialized() => Latest.Changed += OnLatestChanged;
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        _widget = null;
+        _type = null;
+
+        if (Scope is null)
+            return;
+
+        var chain = Chain ?? EmbedChain.Empty;
+        if (chain.Depth >= EmbedChain.MaxDepth)
+        {
+            _problem = $"Cards nested more than {EmbedChain.MaxDepth} deep are not drawn. ({Code.Source})";
+            return;
+        }
+
+        Connection? connection;
+        Widget widget;
+        IWidgetType type;
+
+        if (Code.Kind == "widget")
+        {
+            var wanted = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("id");
+            if (wanted.Length == 0)
+            {
+                _problem = "Say which card: {{widget: its title}} or its id.";
+                return;
+            }
+            if (ShortcodeLookup.Widget(Scope, wanted) is not { } found)
+            {
+                _problem = $"No card called “{wanted}” on any tab. ({Code.Source})";
+                return;
+            }
+            if (Registry.WidgetType(found.Type) is not { } foundType)
+            {
+                _problem = $"“{wanted}” is a “{found.Type}” card, and nothing installed here can draw one.";
+                return;
+            }
+            widget = found;
+            type = foundType;
+            connection = Scope.Connections.FirstOrDefault(c => c.Id == found.ConnectionId);
+            if (type.NeedsConnection && connection is null)
+            {
+                _problem = $"The connection “{wanted}” used is gone.";
+                return;
+            }
+            _title = Code.Option("title", found.Title);
+        }
+        else
+        {
+            var typeName = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("type");
+            if (typeName.Length == 0 || ShortcodeLookup.WidgetType(Registry, typeName) is not { } adHoc)
+            {
+                _problem = typeName.Length == 0
+                    ? "Say which kind of card: {{card: gauge connection=\"NAS\"}}."
+                    : $"No kind of card called “{typeName}”. Try gauge, metric, uptime or chart. ({Code.Source})";
+                return;
+            }
+            type = adHoc;
+
+            connection = null;
+            if (Code.Option("connection") is { Length: > 0 } name)
+            {
+                connection = ShortcodeLookup.Connection(Scope.Connections, name);
+                if (connection is null)
+                {
+                    _problem = $"No connection called “{name}”. ({Code.Source})";
+                    return;
+                }
+            }
+            if (type.NeedsConnection && connection is null)
+            {
+                _problem = $"A {type.DisplayName} card needs a connection: connection=\"NAS\". ({Code.Source})";
+                return;
+            }
+            if (connection is not null && type.NeedsConnection && !Registry.Accepts(type, connection.Provider))
+            {
+                _problem = $"A {type.DisplayName} card cannot show {connection.Name}.";
+                return;
+            }
+
+            var settings = ShortcodeLookup.CardSettings(type, Code);
+
+            // A metric may be written by its label, as in {{metric: …}}; the card itself
+            // only understands keys.
+            if (connection is not null && Code.Option("metric") is { Length: > 0 } metric)
+            {
+                var reported = (Health.State(connection.Id)?.Metrics.Keys ?? [])
+                    .Concat(Latest.Get(connection.Id, TimeSpan.FromHours(6)).Keys);
+                settings["metric"] = ShortcodeLookup.MetricKey(Registry, connection, metric, reported) ?? metric;
+            }
+
+            widget = new Widget
+            {
+                Id = ShortcodeLookup.AdHocId(Code),
+                Type = type.Type,
+                Title = Code.Option("title"),
+                ConnectionId = connection?.Id,
+                Width = 12,
+                Settings = settings,
+            };
+            _title = widget.Title;
+        }
+
+        if (chain.Contains(widget.Id))
+        {
+            _problem = $"“{(_title is { Length: > 0 } ? _title : type.DisplayName)}” contains this note, so it is not drawn inside itself.";
+            return;
+        }
+
+        _widget = widget;
+        _type = type;
+        _fingerprint = $"{widget.Type}|{widget.Settings.ToJson()}|{connection?.Id}|{connection?.Settings.ToJson()}";
+
+        var built = $"{widget.Id}|{_fingerprint}|{widget.Title}";
+        if (built != _built)
+        {
+            _built = built;
+            _parameters = new Dictionary<string, object> { ["Context"] = new WidgetContext(widget, connection) };
+        }
+    }
+
+    /// <summary>
+    /// A metric written by label resolves once readings are known; until then it is tried
+    /// as a key. When the readings land, the card is worked out again.
+    /// </summary>
+    private void OnLatestChanged(string connectionId)
+    {
+        if (Code.Kind == "card" && _widget?.ConnectionId == connectionId)
+            _ = InvokeAsync(() =>
+            {
+                OnParametersSet();
+                StateHasChanged();
+            });
+    }
+
+    public void Dispose() => Latest.Changed -= OnLatestChanged;
+}

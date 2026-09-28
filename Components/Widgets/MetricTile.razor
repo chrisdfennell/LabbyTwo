@@ -13,7 +13,7 @@ else
     <div class="metric-value">
         @if (_value is { } value)
         {
-            @value.ToString($"F{Decimals}")
+            @LiveText.Number(value, Decimals)
             <span class="metric-unit">@Unit</span>
         }
         else if (_history.Ready)
@@ -55,7 +55,7 @@ else
     // The provider decides what this metric is called and how it reads; the widget's own
     // settings still win, so a user can override a unit they disagree with.
     private MetricSpec Spec => Registry.Metric(Context.Connection, Metric);
-    private int Decimals => Math.Clamp(Context.Widget.Settings.GetInt("decimals", Spec.Decimals), 0, 4);
+    private int Decimals => LiveText.Decimals(Context.Widget.Settings.GetInt("decimals", Spec.Decimals), Spec);
     private string Unit => Context.Widget.Settings.Get("suffix", Spec.Unit);
     private bool ShowConnection => Context.Widget.Settings.GetBool("show_connection", true);
 

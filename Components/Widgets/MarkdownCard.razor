@@ -1,12 +1,8 @@
-@inject Markdown Markdown
+@* Live values and embedded cards are drawn by LiveMarkdown; the card's own id goes with
+   them so a card that embeds itself, directly or through another, stops at once. *@
 
-<div class="markdown-body">@((MarkupString)_html)</div>
+<div class="markdown-body"><LiveMarkdown Content="@Context.Widget.Settings.Get("content")" OwnerId="@Context.Widget.Id" /></div>
 
 @code {
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
-
-    private string _html = "";
-
-    protected override void OnParametersSet() =>
-        _html = Markdown.ToHtml(Context.Widget.Settings.Get("content"));
 }

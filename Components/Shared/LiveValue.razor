@@ -1,0 +1,278 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject CapacityForecasts Forecasts
+@inject HistoryStore History
+@inject Offload Offload
+@inject Registry Registry
+
+@* One live value inside a sentence — {{status: NAS}}, {{metric: NAS / disk_percent}} and
+   friends. Written on one line each, because whitespace here lands in the middle of
+   somebody's prose. Everything it shows comes from memory (the monitor's last probe, the
+   latest readings, the forecasts) except uptime, which is a history query and is loaded
+   the way the uptime card loads it. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_text is null)
+{
+    <span class="sc-value is-waiting" title="@(_title ?? "Loading…")">…</span>
+}
+else
+{
+    <span class="sc-value" title="@_title">@if (_dot is not null){<span class="status-dot @_dot" aria-hidden="true"></span>}@_text</span>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>What names can refer to. Null while it is being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>How far back a stored reading still counts — the metric tile's window, so the two agree.</summary>
+    private static readonly TimeSpan StoredWindow = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// A thirty-day percentage does not move between sweeps, so it is asked again at most
+    /// this often rather than on every one. The uptime card re-reads each sweep; a runbook
+    /// with that figure in five places should not cost five queries every thirty seconds.
+    /// </summary>
+    private static readonly TimeSpan UptimeRefresh = TimeSpan.FromMinutes(5);
+
+    private string? _problem;
+    private string? _text;
+    private string? _title;
+    private string? _dot;
+    private string? _connectionId;
+
+    private BackgroundLoad _uptimeLoad = default!;
+    private (string Id, int Days, HistoryStore.Uptime Uptime)? _uptime;
+    private DateTimeOffset _uptimeAsked;
+
+    protected override void OnInitialized()
+    {
+        _uptimeLoad = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnHealthUpdated;
+        Latest.Changed += OnLatestChanged;
+        Forecasts.Changed += OnForecastsChanged;
+    }
+
+    protected override void OnParametersSet() => Show(refresh: false);
+
+    private void Show(bool refresh)
+    {
+        _problem = _text = _title = _dot = null;
+        _connectionId = null;
+
+        if (!Code.IsKnown)
+        {
+            _problem = $"“{Code.Kind}” is not a live value. Use one of {string.Join(", ", Shortcodes.InlineKinds)} — or widget and card on a line of their own. ({Code.Source})";
+            return;
+        }
+        if (Code.IsBlock)
+        {
+            _problem = $"A {Code.Kind} goes on a line of its own. ({Code.Source})";
+            return;
+        }
+        if (Scope is null)
+            return;
+
+        var name = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("connection");
+        if (name.Length == 0)
+        {
+            _problem = $"Say which connection: {{{{{Code.Kind}: NAS}}}}.";
+            return;
+        }
+        if (ShortcodeLookup.Connection(Scope.Connections, name) is not { } connection)
+        {
+            _problem = $"No connection called “{name}”. ({Code.Source})";
+            return;
+        }
+        _connectionId = connection.Id;
+
+        switch (Code.Kind)
+        {
+            case "status":
+                ShowStatus(connection);
+                break;
+            case "metric":
+                ShowMetric(connection);
+                break;
+            case "forecast":
+                ShowForecast(connection);
+                break;
+            case "uptime":
+                ShowUptime(connection, refresh);
+                break;
+            case "since":
+                ShowSince(connection);
+                break;
+        }
+    }
+
+    private void ShowStatus(Connection connection)
+    {
+        var state = Health.State(connection.Id);
+        (_text, _dot) = LiveText.Status(connection, state);
+        _title = state is null ? $"{connection.Name}: not checked yet" : $"{connection.Name}: {state.Message}";
+    }
+
+    private void ShowMetric(Connection connection)
+    {
+        var wanted = Code.Part(1) is { Length: > 0 } part ? part : Code.Option("metric");
+        if (wanted.Length == 0)
+        {
+            _problem = $"Say which metric: {{{{metric: {connection.Name} / cpu_percent}}}}.";
+            return;
+        }
+
+        // The live probe first and the newest stored reading after it — the metric tile's
+        // order, so the sentence and the card never disagree about the same number.
+        var live = Health.State(connection.Id)?.Metrics ?? new Dictionary<string, double>();
+        var stored = Latest.Get(connection.Id, StoredWindow);
+        if (ShortcodeLookup.MetricKey(Registry, connection, wanted, live.Keys.Concat(stored.Keys)) is not { } key)
+        {
+            _problem = $"{connection.Name} has not reported a metric called “{wanted}”. ({Code.Source})";
+            return;
+        }
+
+        var spec = Registry.Metric(connection, key);
+        double? value = live.TryGetValue(key, out var now) ? now
+            : stored.TryGetValue(key, out var recorded) ? recorded
+            : null;
+        var decimals = LiveText.Decimals(int.TryParse(Code.Option("decimals"), out var d) ? d : null, spec);
+        // "suffix" is what the metric tile calls the same setting, so either word works.
+        var unit = Code.Options.TryGetValue("unit", out var written) || Code.Options.TryGetValue("suffix", out written) ? written : spec.Unit;
+
+        _text = value is { } v ? LiveText.Metric(v, decimals, unit) : "—";
+        _title = value is null
+            ? $"{connection.Name} · {spec.Label}: no reading in the last {StoredWindow.TotalHours:0} hours"
+            : $"{connection.Name} · {spec.Label}";
+    }
+
+    private void ShowForecast(Connection connection)
+    {
+        if (!Forecasts.HasRun)
+        {
+            _title = "Working out when things fill up…";
+            return;
+        }
+
+        var wanted = Code.Part(1) is { Length: > 0 } part ? part : Code.Option("metric");
+        CapacityForecasts.Entry? entry;
+        if (wanted.Length > 0)
+        {
+            // A forecast can exist for a metric this process has not seen live yet (a
+            // volume), so an unmatched name is tried as a key before giving up on it.
+            var reported = Forecasts.All.Where(e => e.ConnectionId == connection.Id).Select(e => e.Metric);
+            var key = ShortcodeLookup.MetricKey(Registry, connection, wanted, reported) ?? wanted;
+            entry = Forecasts.Soonest(connection.Id, key);
+        }
+        else
+        {
+            // No metric named: whatever on this connection runs out first, which is the
+            // question "when is the NAS full" is actually asking.
+            entry = CapacityForecasts.Representatives(Forecasts.All.Where(e => e.ConnectionId == connection.Id))
+                .OrderBy(e => e.Forecast.SortKey)
+                .FirstOrDefault();
+        }
+
+        if (entry is null)
+        {
+            _problem = wanted.Length > 0
+                ? $"There is no forecast for “{wanted}” on {connection.Name} — only things that fill up, like disk space, have one. ({Code.Source})"
+                : $"Nothing on {connection.Name} fills up, so there is nothing to forecast. ({Code.Source})";
+            return;
+        }
+
+        _text = LiveText.Forecast(entry.Forecast);
+        _title = $"{connection.Name} · {Registry.Metric(connection, entry.Metric).Label}: {entry.Forecast.Describe()}. {entry.Forecast.Explain()}";
+    }
+
+    private void ShowUptime(Connection connection, bool refresh)
+    {
+        var days = Math.Clamp(int.TryParse(Code.Option("days"), out var d) ? d : 30, 1, 90);
+        var id = connection.Id;
+
+        if (_uptime is { } loaded && loaded.Id == id && loaded.Days == days)
+        {
+            _text = loaded.Uptime.Samples > 0 ? LiveText.Uptime(loaded.Uptime.Percent) : "—";
+            _title = loaded.Uptime.Samples > 0
+                ? $"{connection.Name} · uptime over the last {days} days"
+                : $"{connection.Name} · nothing recorded in the last {days} days";
+        }
+        else
+        {
+            _title = $"{connection.Name} · uptime over the last {days} days";
+        }
+
+        Task<HistoryStore.Uptime> Fetch(CancellationToken ct) =>
+            Offload.Run(c => History.UptimeAsync(id, TimeSpan.FromDays(days), c), ct);
+
+        void Apply(HistoryStore.Uptime uptime)
+        {
+            _uptime = (id, days, uptime);
+            Show(refresh: false);
+        }
+
+        if (refresh && DateTimeOffset.UtcNow - _uptimeAsked >= UptimeRefresh)
+        {
+            _uptimeAsked = DateTimeOffset.UtcNow;
+            _uptimeLoad.Refresh((id, days), Fetch, Apply);
+        }
+        else if (!refresh)
+        {
+            if (_uptimeAsked == default)
+                _uptimeAsked = DateTimeOffset.UtcNow;
+            _uptimeLoad.Load((id, days), Fetch, Apply);
+        }
+    }
+
+    private void ShowSince(Connection connection)
+    {
+        var state = Health.State(connection.Id);
+        if (state?.ChangedAt is not { } changed)
+        {
+            _text = "—";
+            _title = $"{connection.Name}: not checked yet";
+            return;
+        }
+        var (word, _) = LiveText.Status(connection, state);
+        _text = LiveText.Since(changed, DateTimeOffset.Now);
+        _title = $"{connection.Name} has been {word} since {changed.ToLocalTime():d MMM yyyy HH:mm}";
+    }
+
+    private void Redraw() => _ = InvokeAsync(() =>
+    {
+        Show(refresh: true);
+        StateHasChanged();
+    });
+
+    private void OnHealthUpdated()
+    {
+        if (Code.Kind is "status" or "metric" or "uptime" or "since")
+            Redraw();
+    }
+
+    private void OnLatestChanged(string connectionId)
+    {
+        if (Code.Kind == "metric" && (connectionId == _connectionId || _connectionId is null))
+            Redraw();
+    }
+
+    private void OnForecastsChanged()
+    {
+        if (Code.Kind == "forecast")
+            Redraw();
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnHealthUpdated;
+        Latest.Changed -= OnLatestChanged;
+        Forecasts.Changed -= OnForecastsChanged;
+        _uptimeLoad?.Dispose();
+    }
+}
