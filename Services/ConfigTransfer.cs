@@ -9,8 +9,12 @@ namespace LabbyTwo.Services;
 /// Exports and imports the whole configuration as JSON. Ids are preserved so the
 /// widget → connection bindings survive the round trip, which is what makes a shared
 /// dashboard land intact on somebody else's install.
+///
+/// The template store is optional so the many tests that build one of these by hand for
+/// connections and rules need not know templates exist; the app always supplies it.
 /// </summary>
-public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Registry registry)
+public sealed class ConfigTransfer(
+    ConfigStore config, AlertRuleStore rules, Registry registry, TemplateStore? templates = null)
 {
     // 2 added alert rules. Version 1 files still import — they simply carry none.
     public const int CurrentVersion = 2;
@@ -46,6 +50,14 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
         public List<TabDto> Tabs { get; init; } = [];
         public List<WidgetDto> Widgets { get; init; } = [];
         public List<RuleDto> Rules { get; init; } = [];
+
+        /// <summary>
+        /// Tabs saved as templates. Added without a version bump for the reason
+        /// <see cref="IncludesLinks"/> gives: a file from before templates simply has none,
+        /// and an older LabbyTwo reading a newer file ignores the list rather than refusing
+        /// everything else in it.
+        /// </summary>
+        public List<TemplateDto> Templates { get; init; } = [];
     }
 
     // DependsOn and ChannelId come last and default to null, so a file written before they
@@ -70,7 +82,17 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
         string Comparison, double Threshold, double? ClearThreshold, int ForMinutes, bool Enabled,
         string? ChannelId = null, string? Kind = null, string? UnusualBy = null);
 
-    public sealed record ImportResult(int Connections, int Tabs, int Widgets, int Rules, List<string> Warnings);
+    /// <summary>
+    /// A template, with what it holds as the shared-tab file it is stored as. Nested as an
+    /// object rather than a string so a backup stays readable, and so the one format for a
+    /// tab without its ids is the same inside a backup as out of it.
+    /// </summary>
+    public sealed record TemplateDto(string Id, string Name, string Icon, string Description,
+        long CreatedAt, ShareTransfer.Share Content);
+
+    // Templates comes last and defaults to zero so the positional shape callers know stays.
+    public sealed record ImportResult(int Connections, int Tabs, int Widgets, int Rules, List<string> Warnings,
+        int Templates = 0);
 
     public async Task<string> ExportAsync(bool includeSecrets, CancellationToken ct = default)
     {
@@ -78,6 +100,7 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
         var tabs = await config.TabsAsync(ct);
         var widgets = await config.WidgetsAsync(ct);
         var alertRules = await rules.AllAsync(ct);
+        var savedTemplates = templates is null ? [] : await templates.AllAsync(ct);
 
         var bundle = new Bundle
         {
@@ -107,9 +130,30 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
                     r.IsUnusual ? AlertRule.StoredKind(r.Kind) : null,
                     r.IsUnusual ? AlertRule.StoredUnusualBy(r.UnusualBy) : null))
             ],
+            Templates = [.. savedTemplates.SelectMany(Describe)],
         };
 
         return JsonSerializer.Serialize(bundle, Json);
+    }
+
+    /// <summary>
+    /// One template for the file, or none when its stored content cannot be read — a whole
+    /// backup failing over one damaged template would be a poor trade.
+    /// </summary>
+    private static IEnumerable<TemplateDto> Describe(TabTemplate template)
+    {
+        ShareTransfer.Share content;
+        try
+        {
+            content = ShareTransfer.Read(template.Content);
+        }
+        catch (InvalidOperationException)
+        {
+            yield break;
+        }
+
+        yield return new TemplateDto(template.Id, template.Name, template.Icon, template.Description,
+            template.CreatedAt.ToUnixTimeSeconds(), content);
     }
 
     /// <summary>
@@ -293,6 +337,31 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
             importedRules++;
         }
 
-        return new ImportResult(bundle.Connections.Count, bundle.Tabs.Count, imported, importedRules, warnings);
+        // Upserted by id like everything else here, so restoring a backup twice leaves one
+        // of each rather than two. What a template holds names its connections rather than
+        // pointing at them, so there is nothing to check against what was imported above.
+        var importedTemplates = 0;
+        foreach (var dto in templates is null ? [] : bundle.Templates)
+        {
+            if (dto.Content is not { Tab: not null } content)
+            {
+                warnings.Add($"Skipped the template “{dto.Name}” — it holds no tab.");
+                continue;
+            }
+
+            await templates!.SaveAsync(new TabTemplate
+            {
+                Id = dto.Id,
+                Name = dto.Name,
+                Icon = dto.Icon,
+                Description = dto.Description,
+                CreatedAt = DateTimeOffset.FromUnixTimeSeconds(dto.CreatedAt),
+                Content = ShareTransfer.Write(content with { Kind = ShareTransfer.TabKind, Template = null }),
+            }, ct);
+            importedTemplates++;
+        }
+
+        return new ImportResult(bundle.Connections.Count, bundle.Tabs.Count, imported, importedRules, warnings,
+            importedTemplates);
     }
 }

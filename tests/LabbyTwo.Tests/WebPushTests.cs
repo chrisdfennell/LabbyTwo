@@ -397,7 +397,11 @@ public sealed class WebPushTests : IDisposable
         await using var check = await upgraded.OpenAsync();
         var read = check.CreateCommand();
         read.CommandText = "SELECT (SELECT name FROM connections WHERE id = 'nas') || ':' || (SELECT user_version FROM pragma_user_version)";
-        Assert.Equal("NAS:14", (string)(await read.ExecuteScalarAsync())!);
+        // At least 13 rather than exactly: a later migration moving the stamp on is not this
+        // one failing to run.
+        var answer = (string)(await read.ExecuteScalarAsync())!;
+        Assert.StartsWith("NAS:", answer);
+        Assert.True(int.Parse(answer["NAS:".Length..]) >= 13, answer);
         Microsoft.Data.Sqlite.SqliteConnection.ClearPool(check);
     }
 
