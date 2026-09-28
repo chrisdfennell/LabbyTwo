@@ -2,12 +2,17 @@
 @inject ConfigStore Config
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject Offload Offload
 
 @* What happened while you were out. Every other card says how things are *now*; nothing
    said what changed, so a service that dropped at lunchtime and came back looks identical
    to one that never moved. *@
 
-@if (_events.Count == 0)
+@if (!_load.Ready)
+{
+    <div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
+}
+else if (_events.Count == 0)
 {
     <p class="tile-meta mb-0">Nothing has changed in the last @Hours hours.</p>
 }
@@ -37,39 +42,56 @@ else
 
     private IReadOnlyList<Entry> _events = [];
     private IReadOnlyList<Connection> _connections = [];
+    private BackgroundLoad _load = default!;
 
     private int Hours => Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 720);
     private int Limit => Math.Clamp(Context.Widget.Settings.GetInt("limit", 8), 1, 50);
     private bool DownOnly => Context.Widget.Settings.GetBool("down_only", false);
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
-        await LoadAsync();
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    // The connection list is cached in memory and fine to wait for; the events are
+    // history, started here and not waited for (see BackgroundLoad).
+    protected override async Task OnParametersSetAsync() => await LoadAsync(refresh: false);
 
-    private async Task LoadAsync()
+    private async Task LoadAsync(bool refresh)
     {
         _connections = await Config.ConnectionsAsync();
 
-        // Asked for generously and trimmed here: the store returns the newest events across
-        // everything, and the window is what makes this "today" rather than "ever".
-        var since = DateTimeOffset.Now.AddHours(-Hours);
+        var id = Context.Connection?.Id;
+        var hours = Hours;
+        var limit = Limit;
+        var downOnly = DownOnly;
 
-        // A card bound to a connection shows only that one; unbound shows everything, which
-        // is the more useful default on a dashboard.
-        var events = await History.RecentEventsAsync(Context.Connection?.Id, Limit * 4);
+        async Task<IReadOnlyList<Entry>> Fetch(CancellationToken ct)
+        {
+            // Asked for generously and trimmed here: the store returns the newest events across
+            // everything, and the window is what makes this "today" rather than "ever".
+            var since = DateTimeOffset.Now.AddHours(-hours);
 
-        _events =
-        [
-            .. events
-                .Where(e => e.At >= since)
-                .Where(e => !DownOnly || !e.IsUp)
-                .Take(Limit)
-                .Select(e => new Entry(e)),
-        ];
+            // A card bound to a connection shows only that one; unbound shows everything, which
+            // is the more useful default on a dashboard.
+            var events = await Offload.Run(c => History.RecentEventsAsync(id, limit * 4, c), ct);
+
+            return
+            [
+                .. events
+                    .Where(e => e.At >= since)
+                    .Where(e => !downOnly || !e.IsUp)
+                    .Take(limit)
+                    .Select(e => new Entry(e)),
+            ];
+        }
+
+        var key = (id, hours, limit, downOnly);
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, events => _events = events);
+        else
+            _ = _load.Load(key, Fetch, events => _events = events);
     }
 
     private string Name(string connectionId) =>
@@ -77,9 +99,13 @@ else
 
     private void OnUpdated() => _ = InvokeAsync(async () =>
     {
-        await LoadAsync();
+        await LoadAsync(refresh: true);
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _load?.Dispose();
+    }
 }

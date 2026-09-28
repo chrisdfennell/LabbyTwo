@@ -114,6 +114,8 @@ builder.Services.AddSingleton<AlertRuleStore>();
 builder.Services.AddSingleton<ConfigStore>();
 builder.Services.AddSingleton<HistoryStore>();
 builder.Services.AddSingleton<LatestReadings>();
+builder.Services.AddSingleton<Offload>();
+builder.Services.AddSingleton<SharedSeries>();
 builder.Services.AddSingleton<NotesStore>();
 builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<Markdown>();

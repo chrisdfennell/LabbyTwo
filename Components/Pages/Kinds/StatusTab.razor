@@ -2,6 +2,7 @@
 @inject ConfigStore Config
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject Offload Offload
 
 <div class="page-head">
     <div>
@@ -10,7 +11,15 @@
     </div>
 </div>
 
-@if (_rows.Count == 0)
+@if (!_load.Ready && _monitored > 0)
+{
+    @* The page, its heading and a placeholder at once; the uptime figures are four
+       history queries per connection, and arrive when they arrive. *@
+    <div class="panel p-3 mb-4">
+        <div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
+    </div>
+}
+else if (_rows.Count == 0)
 {
     <div class="empty-state">
         <p class="mb-3">Nothing is being monitored yet.</p>
@@ -102,36 +111,77 @@ else
     private List<Row> _rows = [];
     private IReadOnlyList<HistoryStore.StatusEvent> _events = [];
     private Dictionary<string, string> _names = [];
+    private BackgroundLoad _load = default!;
+
+    /// <summary>How many connections are monitored, known before their history is.</summary>
+    private int _monitored;
 
     private int WindowDays => Math.Clamp(Tab.Settings.GetInt("days", 30), 7, 90);
 
-    protected override void OnInitialized() => Health.Updated += OnUpdated;
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnUpdated;
+    }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    // The connection list is cached and fine to wait for. The uptime is history, and is
+    // started here and not waited for — see BackgroundLoad.
+    protected override async Task OnParametersSetAsync() => await LoadAsync(refresh: false);
 
-    private async Task LoadAsync()
+    private async Task LoadAsync(bool refresh)
     {
         var all = await Config.ConnectionsAsync();
         var connections = all.Where(Health.IsMonitored).ToList();
         // Name every connection, not just the monitored ones, so an old event from
         // something since unmonitored still reads as itself rather than "(deleted)".
         _names = all.ToDictionary(c => c.Id, c => c.Name);
+        _monitored = connections.Count;
 
-        var rows = new List<Row>();
-        foreach (var connection in connections)
+        var windowDays = WindowDays;
+
+        async Task<(List<Row> Rows, IReadOnlyList<HistoryStore.StatusEvent> Events)> Fetch(CancellationToken ct)
         {
-            rows.Add(new Row(
-                connection,
-                Health.State(connection.Id),
-                await History.UptimeAsync(connection.Id, TimeSpan.FromHours(24)),
-                await History.UptimeAsync(connection.Id, TimeSpan.FromDays(7)),
-                await History.UptimeAsync(connection.Id, TimeSpan.FromDays(30)),
-                await History.DailyUptimeAsync(connection.Id, WindowDays)));
+            // All in one offloaded read rather than one per figure: it is one page's worth,
+            // and taking a gate slot four times per connection would let a dashboard's
+            // charts overtake it at every step.
+            return await Offload.Run(async c =>
+            {
+                var rows = new List<Row>();
+                foreach (var connection in connections)
+                {
+                    rows.Add(new Row(
+                        connection,
+                        null,
+                        await History.UptimeAsync(connection.Id, TimeSpan.FromHours(24), c),
+                        await History.UptimeAsync(connection.Id, TimeSpan.FromDays(7), c),
+                        await History.UptimeAsync(connection.Id, TimeSpan.FromDays(30), c),
+                        await History.DailyUptimeAsync(connection.Id, windowDays, c)));
+                }
+
+                // Only events for things currently monitored — an alert channel is not an outage.
+                var monitored = connections.Select(x => x.Id).ToHashSet();
+                IReadOnlyList<HistoryStore.StatusEvent> events =
+                    [.. (await History.RecentEventsAsync(null, 60, c)).Where(e => monitored.Contains(e.ConnectionId)).Take(25)];
+                return (rows, events);
+            }, ct);
         }
-        _rows = rows;
-        // Only events for things currently monitored — an alert channel is not an outage.
-        var monitored = connections.Select(c => c.Id).ToHashSet();
-        _events = [.. (await History.RecentEventsAsync(null, 60)).Where(e => monitored.Contains(e.ConnectionId)).Take(25)];
+
+        // The probe state is live, so it is read when the rows are shown rather than when
+        // their history was fetched.
+        void Apply((List<Row> Rows, IReadOnlyList<HistoryStore.StatusEvent> Events) loaded)
+        {
+            _rows = [.. loaded.Rows.Select(row => row with { State = Health.State(row.Connection.Id) })];
+            _events = loaded.Events;
+        }
+
+        var key = $"{windowDays}|{string.Join(",", connections.Select(c => $"{c.Id}:{c.Name}:{c.Icon}"))}";
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, Apply);
+        else
+            _ = _load.Load(key, Fetch, Apply);
+
+        // A sweep changes the dots before it changes any history worth waiting for.
+        _rows = [.. _rows.Select(row => row with { State = Health.State(row.Connection.Id) })];
     }
 
     private string NameOf(string id) => _names.TryGetValue(id, out var name) ? name : "(deleted)";
@@ -172,9 +222,13 @@ else
 
     private void OnUpdated() => _ = InvokeAsync(async () =>
     {
-        await LoadAsync();
+        await LoadAsync(refresh: true);
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _load?.Dispose();
+    }
 }

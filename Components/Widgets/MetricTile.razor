@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 @inject Registry Registry
 
 @if (Context.Connection is null)
@@ -15,9 +16,13 @@ else
             @value.ToString($"F{Decimals}")
             <span class="metric-unit">@Unit</span>
         }
-        else
+        else if (_history.Ready)
         {
             <span class="metric-unit">no data yet</span>
+        }
+        else
+        {
+            <span class="metric-unit">…</span>
         }
     </div>
     @* On a page where every tile is the same connection, repeating its name four times is
@@ -37,6 +42,14 @@ else
 
     private double? _value;
     private IReadOnlyList<double> _series = [];
+    private BackgroundLoad _history = default!;
+
+    /// <summary>
+    /// The newest stored sample, and which series it came from. Kept with its key so a
+    /// tile switched to another metric never shows the old metric's number under the new
+    /// one's name while the new history is on its way.
+    /// </summary>
+    private (object Key, double? Value)? _recorded;
 
     private string Metric => Context.Widget.Settings.Get("metric", "latency_ms");
     // The provider decides what this metric is called and how it reads; the widget's own
@@ -46,42 +59,70 @@ else
     private string Unit => Context.Widget.Settings.Get("suffix", Spec.Unit);
     private bool ShowConnection => Context.Widget.Settings.GetBool("show_connection", true);
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
+        _history = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
-        await LoadAsync();
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    private void Load(bool refresh)
     {
         if (Context.Connection is null)
             return;
 
+        var id = Context.Connection.Id;
+        var metric = Metric;
+        var key = (id, metric);
+
         // Prefer the live probe; fall back to the last stored sample so a tile still reads
         // sensibly right after a restart, before the first sweep lands.
         //
-        // Worked out afresh every time and assigned once at the end. It used to be kept
-        // between loads, so a metric that stopped reporting showed its last value for ever,
-        // and switching the tile to another metric in the editor showed the old metric's
-        // number under the new one's name. Assigned at the end rather than cleared at the
-        // start so a render during the await does not flash "no data yet".
-        double? value = null;
-        var state = Health.State(Context.Connection.Id);
-        if (state?.Metrics.TryGetValue(Metric, out var live) == true)
-            value = live;
+        // Worked out afresh every time. It used to be kept between loads, so a metric that
+        // stopped reporting showed its last value for ever, and switching the tile to
+        // another metric in the editor showed the old metric's number under the new one's
+        // name.
+        ShowValue(key);
+        if (_recorded is not { } shown || !Equals(shown.Key, key))
+            _series = [];
 
-        var samples = await History.SamplesAsync(Context.Connection.Id, Metric, TimeSpan.FromHours(6));
-        _series = [.. samples.Select(s => s.Value)];
-        _value = value ?? (samples.Count > 0 ? samples[^1].Value : null);
+        // The sparkline and the stored fallback need history: started, not waited for.
+        Task<IReadOnlyList<HistoryStore.Sample>> Fetch(CancellationToken ct) =>
+            Series.SamplesAsync(id, metric, TimeSpan.FromHours(6), ct);
+
+        void Apply(IReadOnlyList<HistoryStore.Sample> samples)
+        {
+            _series = [.. samples.Select(s => s.Value)];
+            _recorded = (key, samples.Count > 0 ? samples[^1].Value : null);
+            ShowValue(key);
+        }
+
+        if (refresh)
+            _history.Refresh(key, Fetch, Apply);
+        else
+            _history.Load(key, Fetch, Apply);
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void ShowValue(object key)
     {
-        await LoadAsync();
+        double? value = null;
+        if (Health.State(Context.Connection!.Id)?.Metrics.TryGetValue(Metric, out var live) == true)
+            value = live;
+        else if (_recorded is { } recorded && Equals(recorded.Key, key))
+            value = recorded.Value;
+        _value = value;
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Load(refresh: true);
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _history?.Dispose();
+    }
 }

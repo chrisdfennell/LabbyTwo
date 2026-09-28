@@ -1,6 +1,8 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
 
@@ -11,6 +13,10 @@
 @if (Context.Connection is null)
 {
     <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (!_load.Ready)
+{
+    <div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
 }
 else if (_rows.Count == 0)
 {
@@ -69,6 +75,7 @@ else
     private List<Column> _columns = [];
     private List<Row> _rows = [];
     private Units.Preferences _units = Units.Preferences.Default;
+    private BackgroundLoad _load = default!;
 
     private bool StartOpen => Context.Widget.Settings.GetBool("open", false);
     private int Hours => HoursOverride ?? Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
@@ -80,53 +87,77 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
         _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    private sealed record Loaded(List<string> Metrics, List<Row> Rows);
+
+    /// <summary>
+    /// Started, not waited for — see BackgroundLoad. A table of a week of every metric is
+    /// one of the heavier reads on the page, and nothing else should wait behind it.
+    /// </summary>
+    private void Load(bool refresh)
     {
         if (Context.Connection is null)
             return;
 
-        var wanted = MetricNames.ToList();
-        if (wanted.Count == 0)
+        var id = Context.Connection.Id;
+        var named = MetricNames.ToList();
+        var hours = Hours;
+        var limit = Limit;
+        var window = TimeSpan.FromHours(hours);
+
+        async Task<Loaded> Fetch(CancellationToken ct)
         {
-            // Nothing named: show whatever the connection actually records, minus the
-            // probe's own latency, which is about LabbyTwo rather than about the thing.
-            wanted = [.. (await History.MetricsAsync(Context.Connection.Id))
-                .Where(m => m != "latency_ms")
-                .Take(8)];
-        }
-
-        _columns = [.. wanted.Select(m => new Column(m, Registry.Metric(Context.Connection, m).Label,
-                                                     Registry.Metric(Context.Connection, m)))];
-
-        // Readings arrive per metric; the table wants them per timestamp. Grouping by the
-        // instant works because one probe writes every metric with the same stamp.
-        var window = TimeSpan.FromHours(Hours);
-        var byTime = new SortedDictionary<DateTimeOffset, Dictionary<string, double>>();
-
-        foreach (var column in _columns)
-        {
-            foreach (var sample in await History.SamplesAsync(Context.Connection.Id, column.Key, window))
+            var wanted = named;
+            if (wanted.Count == 0)
             {
-                if (!byTime.TryGetValue(sample.At, out var row))
-                    byTime[sample.At] = row = [];
-                row[column.Key] = sample.Value;
+                // Nothing named: show whatever the connection actually records, minus the
+                // probe's own latency, which is about LabbyTwo rather than about the thing.
+                wanted = [.. (await Offload.Run(c => History.MetricsAsync(id, c), ct))
+                    .Where(m => m != "latency_ms")
+                    .Take(8)];
             }
+
+            // Readings arrive per metric; the table wants them per timestamp. Grouping by the
+            // instant works because one probe writes every metric with the same stamp.
+            var byTime = new SortedDictionary<DateTimeOffset, Dictionary<string, double>>();
+            foreach (var metric in wanted)
+            {
+                foreach (var sample in await Series.SamplesAsync(id, metric, window, ct))
+                {
+                    if (!byTime.TryGetValue(sample.At, out var row))
+                        byTime[sample.At] = row = [];
+                    row[metric] = sample.Value;
+                }
+            }
+
+            return new Loaded(wanted, [.. byTime.Reverse().Take(limit).Select(pair => new Row(pair.Key, pair.Value))]);
         }
 
-        _rows = [.. byTime.Reverse().Take(Limit).Select(pair => new Row(pair.Key, pair.Value))];
+        var key = (id, string.Join(",", named), hours, limit);
+        if (refresh)
+            _load.Refresh(key, Fetch, Apply);
+        else
+            _load.Load(key, Fetch, Apply);
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void Apply(Loaded loaded)
     {
-        await LoadAsync();
-        StateHasChanged();
-    });
+        _columns = [.. loaded.Metrics.Select(m => new Column(m, Registry.Metric(Context.Connection, m).Label,
+                                                             Registry.Metric(Context.Connection, m)))];
+        _rows = loaded.Rows;
+    }
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnUpdated() => _ = InvokeAsync(() => Load(refresh: true));
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _load?.Dispose();
+    }
 }

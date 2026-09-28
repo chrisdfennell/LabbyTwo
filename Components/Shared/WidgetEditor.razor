@@ -1,6 +1,8 @@
+@implements IDisposable
 @inject Registry Registry
 @inject ConfigStore Config
 @inject HistoryStore History
+@inject Offload Offload
 
 <Modal Title="@($"Edit {_type?.DisplayName ?? "widget"}")" OnClose="OnClose">
     <ChildContent>
@@ -67,9 +69,11 @@
     private string _connectionId = "";
     private int _width = 4;
     private SettingsBag _settings = new();
+    private BackgroundLoad _recorded = default!;
 
     protected override async Task OnInitializedAsync()
     {
+        _recorded = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         _type = Registry.WidgetType(Widget.Type);
         _title = Widget.Title;
         _connectionId = Widget.ConnectionId ?? "";
@@ -93,21 +97,38 @@
         if (_type?.Fields.All(f => f.Kind != FieldKind.Metric) != false || _connectionId.Length == 0)
         {
             _metricOptions = [];
+            _recorded.Cancel();
             return;
         }
 
-        var connection = await Config.ConnectionAsync(_connectionId);
+        var connectionId = _connectionId;
+        var connection = await Config.ConnectionAsync(connectionId);
+        if (connectionId != _connectionId)
+            return; // Changed again while that was looked up; the newer call has it.
         var declared = Registry.MetricsFor(connection);
-        var recorded = await History.MetricsAsync(_connectionId);
 
+        // What the provider declares is offered straight away, so the form is usable at
+        // once; what history has recorded is a query, run off the render thread and
+        // added when it lands (see BackgroundLoad). Switching connection again before it
+        // does makes the older answer stale, and it is dropped rather than shown.
+        _metricOptions = Options(declared, []);
+        _ = _recorded.Load(
+            connectionId,
+            ct => Offload.Run(c => History.MetricsAsync(connectionId, c), ct),
+            recorded => _metricOptions = Options(declared, recorded));
+    }
+
+    private static List<SelectOption> Options(IEnumerable<MetricSpec> declared, IReadOnlyList<string> recorded)
+    {
         var options = declared.Select(m => new SelectOption(m.Key, m.Label)).ToList();
-        var known = declared.Select(m => m.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var known = options.Select(o => o.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         options.AddRange(recorded
             .Where(key => !known.Contains(key))
             .Select(key => new SelectOption(key, MetricSpec.Fallback(key).Label + " (recorded)")));
-
-        _metricOptions = options;
+        return options;
     }
+
+    public void Dispose() => _recorded?.Dispose();
 
     private IReadOnlyList<SelectOption> Suggestions(FieldSpec field) =>
         field.Kind == FieldKind.Metric ? _metricOptions : field.Options ?? [];

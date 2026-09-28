@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject Offload Offload
 
 @* The number people actually quote about a service, and a strip of days behind it so the
    figure has a shape — 99.2% from one bad afternoon reads very differently from 99.2%
@@ -37,6 +38,7 @@ else
 
     private HistoryStore.Uptime? _uptime;
     private IReadOnlyList<HistoryStore.Day> _days = [];
+    private BackgroundLoad _load = default!;
 
     private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 30), 1, 90);
     private bool ShowDays => Context.Widget.Settings.GetBool("show_days", true);
@@ -48,21 +50,38 @@ else
                 ? "No history yet"
                 : $"{Context.Connection?.Name} · last {Days} days";
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
-        await LoadAsync();
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    /// <summary>
+    /// Started, not waited for (see BackgroundLoad): until it lands the card reads "—",
+    /// which is what it already said for a connection with no history.
+    /// </summary>
+    private void Load(bool refresh)
     {
         if (Context.Connection is not { } connection)
             return;
 
-        _uptime = await History.UptimeAsync(connection.Id, TimeSpan.FromDays(Days));
-        _days = ShowDays ? await History.DailyUptimeAsync(connection.Id, Days) : [];
+        var id = connection.Id;
+        var days = Days;
+        var showDays = ShowDays;
+
+        async Task<(HistoryStore.Uptime Uptime, IReadOnlyList<HistoryStore.Day> Days)> Fetch(CancellationToken ct) => (
+            await Offload.Run(c => History.UptimeAsync(id, TimeSpan.FromDays(days), c), ct),
+            showDays ? await Offload.Run(c => History.DailyUptimeAsync(id, days, c), ct) : []);
+
+        void Apply((HistoryStore.Uptime Uptime, IReadOnlyList<HistoryStore.Day> Days) loaded) =>
+            (_uptime, _days) = loaded;
+
+        if (refresh)
+            _load.Refresh((id, days, showDays), Fetch, Apply);
+        else
+            _load.Load((id, days, showDays), Fetch, Apply);
     }
 
     /// <summary>
@@ -85,11 +104,11 @@ else
     private string AltText =>
         _days.Count == 0 ? "" : $"Daily uptime for the last {_days.Count} days";
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
-    {
-        await LoadAsync();
-        StateHasChanged();
-    });
+    private void OnUpdated() => _ = InvokeAsync(() => Load(refresh: true));
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _load?.Dispose();
+    }
 }

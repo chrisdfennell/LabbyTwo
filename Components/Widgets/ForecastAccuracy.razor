@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 @inject ConfigStore Config
 @inject AppSettingsStore AppSettings
 
@@ -17,6 +18,10 @@
 else if (_station is null)
 {
     <p class="tile-meta mb-0">Edit this widget and pick the weather station to compare against.</p>
+}
+else if (!_load.Ready)
+{
+    <div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
 }
 else if (_rows.Count == 0)
 {
@@ -70,18 +75,22 @@ else
     private IReadOnlyList<Row> _rows = [];
     private double _averageError;
     private Units.Preferences _units = Units.Preferences.Default;
+    private BackgroundLoad _load = default!;
 
     private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 30);
 
     protected override async Task OnInitializedAsync()
     {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
         _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    // The station is looked up from the cached connection list, which is fine to wait
+    // for; the two series are history, and are started without waiting (BackgroundLoad).
+    protected override async Task OnParametersSetAsync() => await LoadAsync(refresh: false);
 
-    private async Task LoadAsync()
+    private async Task LoadAsync(bool refresh)
     {
         if (Context.Connection is not { } forecast)
             return;
@@ -94,12 +103,29 @@ else
             return;
 
         // A day either side of the window, so the earliest day compared is a whole one.
-        var window = TimeSpan.FromDays(Days + 1);
-        var predicted = await History.SamplesAsync(forecast.Id, "temp_high_c", window);
-        var observed = await History.SamplesAsync(_station.Id, "temp_outdoor_c", window);
+        var days = Days;
+        var window = TimeSpan.FromDays(days + 1);
+        var forecastId = forecast.Id;
+        var stationId = _station.Id;
 
-        _rows = Compare(predicted, observed, DateOnly.FromDateTime(DateTime.Now), Days);
-        _averageError = _rows.Count == 0 ? 0 : _rows.Average(r => Math.Abs(r.Error));
+        async Task<IReadOnlyList<Row>> Fetch(CancellationToken ct)
+        {
+            var predicted = await Series.SamplesAsync(forecastId, "temp_high_c", window, ct);
+            var observed = await Series.SamplesAsync(stationId, "temp_outdoor_c", window, ct);
+            return Compare(predicted, observed, DateOnly.FromDateTime(DateTime.Now), days);
+        }
+
+        void Apply(IReadOnlyList<Row> rows)
+        {
+            _rows = rows;
+            _averageError = rows.Count == 0 ? 0 : rows.Average(r => Math.Abs(r.Error));
+        }
+
+        var key = (forecastId, stationId, days);
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, Apply);
+        else
+            _ = _load.Load(key, Fetch, Apply);
     }
 
     /// <summary>
@@ -141,9 +167,13 @@ else
 
     private void OnUpdated() => _ = InvokeAsync(async () =>
     {
-        await LoadAsync();
+        await LoadAsync(refresh: true);
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _load?.Dispose();
+    }
 }

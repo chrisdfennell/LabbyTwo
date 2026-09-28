@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 @inject LatestReadings Latest
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
@@ -58,6 +59,14 @@ else
     private List<Cell> _cells = [];
     private SunTimes.Day? _sun;
     private Units.Preferences _units = Units.Preferences.Default;
+    private BackgroundLoad _history = default!;
+
+    /// <summary>The highest and lowest of each metric over the window, once history has answered.</summary>
+    private IReadOnlyDictionary<string, (double Max, double Min)> _extremes =
+        new Dictionary<string, (double Max, double Min)>();
+
+    /// <summary>What history is asked for: temperature for the high and low, the rest for a peak.</summary>
+    private static readonly string[] FromHistory = ["temp_outdoor_c", "gust_mph", "uv_index", "solar_wm2"];
 
     private int Hours => HoursOverride ?? Math.Clamp(Context.Widget.Settings.GetInt("hours", 24), 1, 24 * 30);
     private double Latitude => Context.Widget.Settings.GetDouble("latitude");
@@ -65,52 +74,86 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _history = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
         _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    /// <summary>
+    /// The live cells are drawn at once; the ones from history are started here and not
+    /// waited for (see BackgroundLoad), and join the strip when they land.
+    /// </summary>
+    private void Load(bool refresh)
     {
         if (Context.Connection is null)
             return;
 
-        var window = TimeSpan.FromHours(Hours);
-        var cells = new List<Cell>();
-
-        // High and low from recorded history rather than from the station: Ambient reports
-        // today's extremes only for some fields, and history is true for every metric.
-        var temperatures = await History.SamplesAsync(Context.Connection.Id, "temp_outdoor_c", window);
-        if (temperatures.Count > 0)
-        {
-            var spec = Registry.Metric(Context.Connection, "temp_outdoor_c");
-            cells.Add(new Cell($"High / low ({Hours}h)",
-                $"{Units.Format(spec, temperatures.Max(s => s.Max), _units, 1)} / " +
-                $"{Units.Format(spec, temperatures.Min(s => s.Min), _units, 1)}"));
-        }
-
-        await AddPeak(cells, "gust_mph", "Peak gust", window);
-        AddLatest(cells, "rain_in", "Rain today");
-        await AddPeak(cells, "uv_index", "Max UV", window, decimals: 0);
-        await AddPeak(cells, "solar_wm2", "Peak solar", window, decimals: 0);
-
-        _cells = cells;
+        Build();
 
         // Only computable with a position, and a wrong one is worse than none.
         _sun = Latitude is not 0 || Longitude is not 0
             ? SunTimes.For(DateOnly.FromDateTime(DateTime.Now), Latitude, Longitude, DateTimeOffset.Now.Offset)
             : null;
+
+        var id = Context.Connection.Id;
+        var hours = Hours;
+        var window = TimeSpan.FromHours(hours);
+
+        async Task<IReadOnlyDictionary<string, (double Max, double Min)>> Fetch(CancellationToken ct)
+        {
+            var found = new Dictionary<string, (double Max, double Min)>();
+            foreach (var metric in FromHistory)
+            {
+                var samples = await Series.SamplesAsync(id, metric, window, ct);
+                if (samples.Count > 0)
+                    found[metric] = (samples.Max(s => s.Max), samples.Min(s => s.Min));
+            }
+            return found;
+        }
+
+        if (refresh)
+            _history.Refresh((id, hours), Fetch, Apply);
+        else
+            _history.Load((id, hours), Fetch, Apply);
     }
 
-    private async Task AddPeak(List<Cell> cells, string metric, string label, TimeSpan window, int? decimals = null)
+    private void Apply(IReadOnlyDictionary<string, (double Max, double Min)> extremes)
     {
-        var samples = await History.SamplesAsync(Context.Connection!.Id, metric, window);
-        if (samples.Count == 0)
+        _extremes = extremes;
+        Build();
+    }
+
+    private void Build()
+    {
+        var cells = new List<Cell>();
+
+        // High and low from recorded history rather than from the station: Ambient reports
+        // today's extremes only for some fields, and history is true for every metric.
+        if (_extremes.TryGetValue("temp_outdoor_c", out var temperature))
+        {
+            var spec = Registry.Metric(Context.Connection, "temp_outdoor_c");
+            cells.Add(new Cell($"High / low ({Hours}h)",
+                $"{Units.Format(spec, temperature.Max, _units, 1)} / " +
+                $"{Units.Format(spec, temperature.Min, _units, 1)}"));
+        }
+
+        AddPeak(cells, "gust_mph", "Peak gust");
+        AddLatest(cells, "rain_in", "Rain today");
+        AddPeak(cells, "uv_index", "Max UV", decimals: 0);
+        AddPeak(cells, "solar_wm2", "Peak solar", decimals: 0);
+
+        _cells = cells;
+    }
+
+    private void AddPeak(List<Cell> cells, string metric, string label, int? decimals = null)
+    {
+        if (!_extremes.TryGetValue(metric, out var extremes))
             return;
         var spec = Registry.Metric(Context.Connection, metric);
-        cells.Add(new Cell(label, Units.Format(spec, samples.Max(s => s.Max), _units, decimals)));
+        cells.Add(new Cell(label, Units.Format(spec, extremes.Max, _units, decimals)));
     }
 
     private void AddLatest(List<Cell> cells, string metric, string label)
@@ -126,9 +169,9 @@ else
             cells.Add(new Cell(label, Units.Format(Registry.Metric(Context.Connection, metric), found, _units)));
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load(refresh: true);
         StateHasChanged();
     });
 
@@ -142,5 +185,6 @@ else
     {
         Health.Updated -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
+        _history?.Dispose();
     }
 }

@@ -2,6 +2,7 @@
 @inject MediaStack Stack
 @inject HealthMonitor Health
 @inject Registry Registry
+@inject Offload Offload
 
 @* A whole page for the media stack, rather than twenty widgets to arrange by hand — the
    same argument the weather station tab makes.
@@ -327,7 +328,9 @@ else
     private async Task LoadAsync()
     {
         _snapshot = await Stack.ReadAsync(CalendarDays);
-        _recorded = await Stack.RecordedMetricsAsync();
+        // Offloaded because it asks history for every connection's metric names, and
+        // SQLite would otherwise do that on the render thread; the stack itself is HTTP.
+        _recorded = await Offload.Run(Stack.RecordedMetricsAsync);
         _loaded = true;
     }
 
