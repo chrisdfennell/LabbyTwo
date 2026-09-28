@@ -19,6 +19,10 @@ public sealed class ContainersTabKind : ITabKind
     public const string KindKey = "containers";
 
     public string Kind => KindKey;
+
+    // A page of container rows grouped into cards: on a wide screen the groups should
+    // spread out like a dashboard, not sit in the narrow column the settings pages keep.
+    public bool FillsWideScreens => true;
     public string DisplayName => "Containers";
     public string Icon => "🐳";
 
