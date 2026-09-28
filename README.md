@@ -513,6 +513,34 @@ LabbyTwo ships a web-app manifest and icons, so **Add to Home Screen** on a phon
 proper icon and a standalone window. A full PWA install needs HTTPS — put it behind a
 reverse proxy with a certificate if you want that.
 
+### Live values in Markdown
+
+A Markdown card or a note can quote the dashboard back to you, and keeps it current:
+
+```markdown
+NAS is {{status: NAS}} with {{metric: NAS / disk_percent}} used — full {{forecast: NAS}}.
+
+{{card: gauge connection="NAS" metric="Disk used" title="NAS disk"}}
+```
+
+| Shortcode | Shows |
+|---|---|
+| `{{status: NAS}}` | up / down / checking / paused, with the tile's coloured dot |
+| `{{metric: NAS / cpu_percent}}` | the value as the metric tile formats it; `decimals=` and `unit=` override |
+| `{{forecast: NAS}}` | "in about 6 weeks", "now" — the soonest to fill, or `{{forecast: NAS / disk_percent}}` |
+| `{{uptime: NAS}}` | uptime over 30 days, or `days=7` |
+| `{{since: NAS}}` | how long it has been up (or down), "3d 4h" |
+| `{{widget: CPU chart}}` | an existing card, by title or id, drawn read-only — on a line of its own |
+| `{{card: gauge connection="NAS" metric="cpu_percent"}}` | a card that exists only here, any type, settings as `key=value` |
+
+Connections are named by name (any case) or id, metrics by key or label. A name with a
+slash in it goes in quotes. Anything that names nothing shows a small **?** whose tooltip
+says why; `\{{` and code spans leave a shortcode as text. The editor's **Insert live
+value…** writes one for you. What you type is never turned into HTML — shortcodes are
+drawn by components after the Markdown is rendered and sanitised, so a shortcode cannot
+smuggle script in. None of this reaches anyone signed out: the public status page shows
+no cards or notes, and an exported tab or card carries the shortcodes as the text they are.
+
 ### Weather and radar
 
 **Settings → Where you are** holds one location for the whole install, and the forecast,
