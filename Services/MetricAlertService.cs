@@ -313,6 +313,8 @@ public sealed class MetricAlertService(
                 $"{connection.Name} · {spec.Label} is back to {reading}",
                 $"{spec.Label} returned past {limit}.");
 
+        alert = alert with { Tag = $"rule:{rule.Id}:{connection.Id}", Link = "settings/alerts" };
+
         log.Log(level == AlertLevel.Down ? LogLevel.Warning : LogLevel.Information,
             "Alert rule {Rule} {State} for {Connection}: {Metric} = {Value}",
             rule.Describe(spec.Label, connection.Name),

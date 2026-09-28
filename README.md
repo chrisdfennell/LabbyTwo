@@ -214,6 +214,7 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **Unmanic** | Pending tasks and how many workers are busy. |
 | **Webhook** | *Alert channel.* Discord, Slack or ntfy — the payload shape is detected from the URL. |
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
+| **Browser push** | *Alert channel.* Notifications straight from LabbyTwo to a phone or desktop browser via Web Push — no third-party account. Needs HTTPS; on iPhone, LabbyTwo added to the Home Screen (iOS 16.4+). |
 | **Healthchecks** | Scheduled jobs that have stopped checking in. Catches the cron that silently stopped, which nothing else here can see. |
 | **Cloudflare Tunnel** | Whether your tunnels are healthy and how many connectors each has — the outage nobody on the LAN can see. |
 | **OPNsense** | Gateway packet loss and latency, WAN addresses, memory. The router is never "down"; it just starts dropping things. |
@@ -386,6 +387,14 @@ edit or delete.
 
 Alert channels are connections too. Add a webhook or Pushover channel and both kinds start
 being delivered — there is no separate notification settings screen.
+
+Or skip the third-party service: open **Alerts → Browser push** on your phone or computer
+and press **Notify this device**. LabbyTwo signs and encrypts Web Push messages itself, so
+notifications arrive through the push service the browser already uses. Each device gets a
+name, a Send test button and a Remove; a Browser push channel is created with the first one
+and follows quiet hours like any other. Browsers only allow this over HTTPS (your Cloudflare
+or reverse-proxy address, not `http://nas:5150`), and on iPhone and iPad only for LabbyTwo
+added to the Home Screen.
 
 ### Tabs — what's in the nav
 

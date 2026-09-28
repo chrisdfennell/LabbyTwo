@@ -45,6 +45,10 @@ public sealed class AlertService(
                     : "Recovered.")
             : new Alert(AlertLevel.Down, $"{change.Connection.Name} is down", change.Message);
 
+        // Down and back share a tag, so a channel that can replace a notification shows
+        // whichever is true now rather than both.
+        alert = alert with { Tag = $"status:{change.Connection.Id}", Link = "settings/connections" };
+
         await BroadcastAsync(alert, CancellationToken.None);
     }
 
