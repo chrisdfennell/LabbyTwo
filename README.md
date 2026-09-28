@@ -1212,6 +1212,85 @@ and keeps a fortnight of them, using SQLite's own backup API so a copy taken mid
 still a valid database. Somebody had to remember to click the button before, which meant
 the answer to "I deleted the wrong tab" was a shrug.
 
+### Off-site copies
+
+That nightly copy sits on the same disk as the database it protects, so it is no help when
+the NAS dies, is stolen, or is encrypted by ransomware. **Settings → Off-site copies** sends
+each night's copy somewhere else, straight after it is taken — and **Back up now** runs the
+whole chain on demand. Add as many destinations as you like:
+
+- **A folder** — a USB disk, or an SMB/NFS share mounted on the host, mapped into the
+  container (`- /mnt/usb/labbytwo:/offsite` under `volumes:`). A folder that does not
+  exist is reported rather than created, so an unmounted share can never be silently
+  replaced by a folder on the very disk you are trying to get away from.
+- **An S3-compatible bucket** — AWS S3, Backblaze B2, Cloudflare R2, Wasabi, MinIO. Give it
+  the endpoint (blank for AWS), region (`auto` for R2), bucket, a prefix, and an access key
+  that may put and list objects in that bucket — and delete them, if LabbyTwo is to tidy up.
+  Tick path-style for MinIO and most self-hosted stores. The secret key is stored encrypted.
+
+Each destination keeps the last N copies or N days (0 keeps everything). Only files named
+`labbytwo-YYYY-MM-DD.db` / `.l2backup` directly in that folder or prefix are ever deleted,
+and never the newest. For ransomware resistance, use a key that **cannot** delete, set Keep
+to 0, and let the bucket expire old copies with its own lifecycle rule (with object lock or
+versioning on, if your provider has it) — then nothing on the NAS can remove its backups.
+
+Each destination shows when it last succeeded, what it sent and how big it was. Transient
+failures (a 503, a dropped connection) are retried with a back-off; a destination that
+still fails alerts once through your alert channels, and once more when it recovers — not
+every night in between. It also shows on the health page, as a failed backup job.
+
+**The passphrase, and why it matters.** Every password and API key in the database is
+encrypted with the keyring in `data/keys`, which the database does not contain. So:
+
+- **With a passphrase set**, each copy goes off-site as one encrypted file,
+  `labbytwo-YYYY-MM-DD.l2backup`, holding the database *and* the keyring. A restore from it
+  brings back everything, credentials included. Keep the passphrase somewhere that is not
+  the NAS: without it the file cannot be opened, by you or by anybody else.
+- **Without one**, only the database goes (`labbytwo-YYYY-MM-DD.db`). Restoring from it
+  brings back every tab, card and connection, but each stored credential will need
+  entering again. LabbyTwo never sends the keyring unencrypted, because whoever could read
+  the bucket could then read every credential in it.
+
+The `.l2backup` format is AES-256-GCM in 1 MiB chunks, keyed by PBKDF2-HMAC-SHA256
+(600,000 rounds) from the passphrase — described in full in
+[`Services/Offsite/BackupBundle.cs`](Services/Offsite/BackupBundle.cs), and short enough
+that [`scripts/decrypt-backup.py`](scripts/decrypt-backup.py) opens it in forty lines.
+Changing the passphrase only affects new copies.
+
+### Restoring
+
+1. **Get the file.** From a folder destination, copy it off the disk or share. From S3,
+   download it with the provider's web console, or any S3 tool —
+   `aws s3 cp s3://BUCKET/PREFIX/labbytwo-2026-09-28.l2backup .` (add
+   `--endpoint-url https://…` for anything but AWS).
+2. **If it is an `.l2backup`, decrypt it** into a zip of `labbytwo.db` and `keys/`. Either
+   in the browser — any LabbyTwo, including a fresh install on a new machine:
+   **Settings → Off-site copies → Open an encrypted backup**, give it the passphrase and
+   the file, and the zip downloads — or on any machine with Python:
+
+   ```bash
+   pip install cryptography
+   python3 scripts/decrypt-backup.py labbytwo-2026-09-28.l2backup   # asks for the passphrase
+   unzip labbytwo-2026-09-28.zip -d restore
+   ```
+
+3. **Put it in place** with LabbyTwo stopped. The database goes where `DatabasePath` says
+   (`/app/data/labbytwo.db` in the container), and the keyring, if you have it, replaces
+   `/app/data/keys`:
+
+   ```bash
+   docker compose stop labbytwo
+   docker compose cp restore/labbytwo.db labbytwo:/app/data/labbytwo.db   # or labbytwo-2026-09-28.db
+   docker compose cp restore/keys/. labbytwo:/app/data/keys/              # .l2backup only
+   docker compose start labbytwo
+   ```
+
+   Delete any `labbytwo.db-wal` and `labbytwo.db-shm` left beside the old database first:
+   they belong to it, not to the copy. With a plain `.db` and no keyring, LabbyTwo starts
+   with everything in place, but each connection that had a password or API key fails to
+   sign in until you enter it again under Connections — and the off-site destinations need
+   their secret keys and passphrase entering again too.
+
 Import is an upsert by id, so re-importing the same file changes nothing and importing
 someone's dashboard adds to your setup rather than replacing it. Anything it cannot place —
 a provider you don't have installed, a tab slug already taken — is reported rather than

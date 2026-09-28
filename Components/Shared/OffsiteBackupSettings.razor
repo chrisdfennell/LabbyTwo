@@ -1,0 +1,445 @@
+@using LabbyTwo.Services.Offsite
+@inject OffsiteSettingsStore Store
+@inject OffsiteBackups Offsite
+@inject BackupJob Backup
+@inject IHostApplicationLifetime Lifetime
+@implements IDisposable
+
+@* Off-site copies of the nightly backup. Its own component, like the weekly summary, because
+   Settings.razor is long enough; it sits beside the Backup card because that is where
+   somebody looks for "where do my backups go". *@
+
+<div class="widget">
+    <div class="widget-head">
+        <h2 class="widget-title">Off-site copies</h2>
+        <button class="btn btn-sm btn-outline-primary" disabled="@_running" @onclick="BackUpNowAsync"
+                title="Take a backup now and send it to every destination below">
+            @(_running ? "Backing up…" : "Back up now")
+        </button>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            The nightly backup is written into <code>data/backups</code> — the same disk as the database it
+            protects. Add somewhere else for it to go: a share or USB disk mapped into the container, or an
+            S3-compatible bucket (AWS, Backblaze B2, Cloudflare R2, Wasabi, MinIO). Each is sent a copy right
+            after the nightly backup, and you are alerted once if one starts failing, and once when it recovers.
+        </p>
+
+        @if (_runMessage is { Length: > 0 })
+        {
+            <div class="alert @(_runOk ? "alert-success" : "alert-warning") py-2" style="white-space: pre-line">@_runMessage</div>
+        }
+
+        <h3 class="h6 mt-3">Passphrase</h3>
+        @if (_hasPassphrase)
+        {
+            <p class="tile-meta mb-2">
+                <span class="text-success">Set.</span> Copies go off-site as an encrypted <code>.l2backup</code>
+                holding the database <em>and</em> the keyring, so a restore brings back every stored password and API
+                key. Keep the passphrase somewhere that is not this NAS — without it the copies cannot be opened.
+            </p>
+        }
+        else
+        {
+            <div class="alert alert-warning py-2 small">
+                No passphrase, so only the database goes off-site. The passwords and API keys in it are encrypted with
+                a keyring that stays on this machine; restoring from an off-site copy alone brings back every tab and
+                connection, but each credential will need entering again. The keyring is never sent unencrypted —
+                whoever could read the bucket could read your credentials.
+            </div>
+        }
+        <div class="d-flex gap-2 flex-wrap mb-1" style="max-width: 34rem">
+            <input type="password" class="form-control" style="flex: 1 1 14rem" autocomplete="new-password"
+                   placeholder="@(_hasPassphrase ? "New passphrase" : "Passphrase")" @bind="_passphrase" />
+            <button class="btn btn-outline-secondary" disabled="@(_passphrase.Length == 0)" @onclick="SavePassphraseAsync">
+                @(_hasPassphrase ? "Change" : "Set")
+            </button>
+            @if (_hasPassphrase)
+            {
+                <button class="btn btn-outline-danger" @onclick="ClearPassphraseAsync">Remove</button>
+            }
+        </div>
+        @if (_passphraseMessage is { Length: > 0 })
+        {
+            <div class="form-text text-warning">@_passphraseMessage</div>
+        }
+        <div class="form-text">
+            At least 12 characters; a few random words is ideal. Changing it only affects new copies — older ones
+            still open with the passphrase they were made with.
+        </div>
+
+        <h3 class="h6 mt-4">Destinations</h3>
+        @if (_destinations.Count == 0)
+        {
+            <p class="tile-meta">None yet — the nightly backup stays on this machine only.</p>
+        }
+        else
+        {
+            <div class="list-group mb-2">
+                @foreach (var destination in _destinations)
+                {
+                    var status = _statuses.GetValueOrDefault(destination.Id);
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                            <div>
+                                <strong>@(destination.IsS3 ? "☁️" : "📁") @destination.Name</strong>
+                                @if (!destination.Enabled)
+                                {
+                                    <span class="badge text-bg-secondary ms-1">off</span>
+                                }
+                                <div class="tile-meta small font-monospace">@destination.Describe()</div>
+                                <div class="tile-meta small">
+                                    Keeps @(destination.Keep == 0 ? "everything" : $"{destination.Keep} {(destination.KeepUnit == RetentionUnit.Days ? "days" : "copies")}")
+                                </div>
+                            </div>
+                            <div class="d-flex gap-1">
+                                <button class="btn btn-sm btn-outline-secondary" disabled="@(_testing == destination.Id)"
+                                        @onclick="() => TestAsync(destination)">@(_testing == destination.Id ? "Testing…" : "Test")</button>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(destination)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _removing = destination">Remove</button>
+                            </div>
+                        </div>
+                        <div class="small mt-1">
+                            @if (status?.LastRunAt is null)
+                            {
+                                <span class="tile-meta">Not tried yet.</span>
+                            }
+                            else if (status.Ok)
+                            {
+                                <span class="text-success">✓ @status.LastSuccessAt?.ToLocalTime().ToString("ddd d MMM HH:mm")</span>
+                                <span class="tile-meta"> · @status.LastName · @OffsiteBackups.Bytes(status.LastSize)</span>
+                                @if (status.Message.Contains("not tidied"))
+                                {
+                                    <div class="text-warning">@status.Message</div>
+                                }
+                            }
+                            else
+                            {
+                                <span class="text-danger">✗ Failed @status.LastFailureAt?.ToLocalTime().ToString("ddd d MMM HH:mm"):</span>
+                                <span> @status.Message</span>
+                                <div class="tile-meta">
+                                    @(status.LastSuccessAt is { } good ? $"Last good copy {good.ToLocalTime():ddd d MMM HH:mm}." : "No good copy there yet.")
+                                </div>
+                            }
+                        </div>
+                        @if (_tested.TryGetValue(destination.Id, out var tested))
+                        {
+                            <div class="small mt-1 @(tested.Ok ? "text-success" : "text-warning")">@tested.Message</div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @if (_editing is null)
+        {
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => New(OffsiteDestination.FolderKind)">+ Folder or share</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => New(OffsiteDestination.S3Kind)">+ S3-compatible bucket</button>
+            </div>
+        }
+        else
+        {
+            <div class="border rounded p-3 mt-2">
+                <div class="row g-2">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label" for="offsite-name">Name</label>
+                        <input id="offsite-name" class="form-control" @bind="_form.Name" placeholder="@(_form.Kind == OffsiteDestination.S3Kind ? "Backblaze" : "USB disk")" />
+                    </div>
+                    <div class="col-12 col-md-6 d-flex align-items-end">
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" role="switch" id="offsite-enabled" @bind="_form.Enabled" />
+                            <label class="form-check-label" for="offsite-enabled">Send copies here</label>
+                        </div>
+                    </div>
+
+                    @if (_form.Kind == OffsiteDestination.FolderKind)
+                    {
+                        <div class="col-12">
+                            <label class="form-label" for="offsite-path">Folder, as the container sees it</label>
+                            <input id="offsite-path" class="form-control font-monospace" @bind="_form.Path" placeholder="/offsite" />
+                            <div class="form-text">
+                                Map the share or disk into the container first — <code>- /mnt/usb/labbytwo:/offsite</code>
+                                under <code>volumes:</code>. A folder that does not exist is reported, not created, so an
+                                unmounted share is never quietly replaced by a folder on this disk.
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="col-12 col-md-8">
+                            <label class="form-label" for="offsite-endpoint">Endpoint</label>
+                            <input id="offsite-endpoint" class="form-control font-monospace" @bind="_form.Endpoint"
+                                   placeholder="blank for AWS · https://s3.us-west-004.backblazeb2.com" />
+                            <div class="form-text">
+                                R2: <code>https://&lt;account&gt;.r2.cloudflarestorage.com</code> (region <code>auto</code>) ·
+                                Wasabi: <code>https://s3.&lt;region&gt;.wasabisys.com</code> · MinIO: its API address.
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <label class="form-label" for="offsite-region">Region</label>
+                            <input id="offsite-region" class="form-control font-monospace" @bind="_form.Region" placeholder="us-east-1" />
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label class="form-label" for="offsite-bucket">Bucket</label>
+                            <input id="offsite-bucket" class="form-control font-monospace" @bind="_form.Bucket" />
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label class="form-label" for="offsite-prefix">Prefix (folder in the bucket)</label>
+                            <input id="offsite-prefix" class="form-control font-monospace" @bind="_form.Prefix" placeholder="labbytwo" />
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label class="form-label" for="offsite-access">Access key ID</label>
+                            <input id="offsite-access" class="form-control font-monospace" autocomplete="off" @bind="_form.AccessKey" />
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label class="form-label" for="offsite-secret">Secret key</label>
+                            <input id="offsite-secret" type="password" class="form-control font-monospace" autocomplete="new-password"
+                                   @bind="_form.SecretKey" placeholder="@(_editingHasSecret ? "unchanged" : "")" />
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="offsite-pathstyle" @bind="_form.PathStyle" />
+                                <label class="form-check-label" for="offsite-pathstyle">Path-style addressing (MinIO and most self-hosted stores)</label>
+                            </div>
+                            <div class="form-text">
+                                Give the key only what it needs: put and list in this bucket, and delete if LabbyTwo is to tidy
+                                up old copies. Stored encrypted.
+                            </div>
+                        </div>
+                    }
+
+                    <div class="col-6 col-md-3">
+                        <label class="form-label" for="offsite-keep">Keep</label>
+                        <input id="offsite-keep" type="number" min="0" max="3650" class="form-control" @bind="_form.Keep" />
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label" for="offsite-unit">&nbsp;</label>
+                        <select id="offsite-unit" class="form-select" @bind="_form.KeepUnit">
+                            <option value="@RetentionUnit.Copies">copies</option>
+                            <option value="@RetentionUnit.Days">days</option>
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-6 d-flex align-items-end">
+                        <div class="form-text">0 keeps everything — for a key that may not delete, or a bucket with its own lifecycle rule.</div>
+                    </div>
+                </div>
+
+                @if (_formError is { Length: > 0 })
+                {
+                    <div class="alert alert-warning py-2 mt-2 mb-0">@_formError</div>
+                }
+
+                <div class="d-flex gap-2 mt-3">
+                    <button class="btn btn-sm btn-primary" @onclick="SaveAsync">Save</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => { _editing = null; _formError = null; }">Cancel</button>
+                </div>
+            </div>
+        }
+
+        <h3 class="h6 mt-4">Open an encrypted backup</h3>
+        <p class="tile-meta mb-2">
+            Turns a <code>.l2backup</code> back into a zip of the database and keyring, for the restore steps in the
+            README. It works on any LabbyTwo, including a fresh one on a new machine.
+        </p>
+        @* A plain form posting to an endpoint rather than an InputFile, so a bundle of hundreds
+           of megabytes streams through instead of squeezing through the circuit. The passphrase
+           comes first because the endpoint decrypts the file as it arrives. *@
+        <form method="post" action="ext/backup-bundle/decrypt" enctype="multipart/form-data"
+              class="d-flex gap-2 flex-wrap" style="max-width: 44rem">
+            <input type="password" name="passphrase" class="form-control" style="flex: 1 1 12rem"
+                   placeholder="Passphrase" autocomplete="off" required />
+            <input type="file" name="file" class="form-control" style="flex: 2 1 16rem" accept=".l2backup" required />
+            <button type="submit" class="btn btn-outline-secondary">Decrypt</button>
+        </form>
+    </div>
+</div>
+
+@if (_removing is { } removing)
+{
+    <ConfirmDialog Title="@($"Stop sending copies to {removing.Name}?")"
+                   Message="Copies already there are left alone."
+                   ConfirmText="Remove"
+                   OnCancel="() => _removing = null"
+                   OnConfirm="() => RemoveAsync(removing)" />
+}
+
+@code {
+    /// <summary>The form's working copy. Mutable because the inputs bind to it.</summary>
+    private sealed class Form
+    {
+        public string Id { get; set; } = "";
+        public string Kind { get; set; } = OffsiteDestination.FolderKind;
+        public string Name { get; set; } = "";
+        public bool Enabled { get; set; } = true;
+        public string Path { get; set; } = "";
+        public string Endpoint { get; set; } = "";
+        public string Region { get; set; } = "";
+        public string Bucket { get; set; } = "";
+        public string Prefix { get; set; } = "labbytwo";
+        public string AccessKey { get; set; } = "";
+        public string SecretKey { get; set; } = "";
+        public bool PathStyle { get; set; }
+        public int Keep { get; set; } = 14;
+        public RetentionUnit KeepUnit { get; set; } = RetentionUnit.Copies;
+    }
+
+    private List<OffsiteDestination> _destinations = [];
+    private IReadOnlyDictionary<string, DestinationStatus> _statuses = new Dictionary<string, DestinationStatus>();
+    private readonly Dictionary<string, (bool Ok, string Message)> _tested = [];
+    private bool _hasPassphrase;
+    private string _passphrase = "";
+    private string? _passphraseMessage;
+
+    private OffsiteDestination? _editing;
+    private bool _editingHasSecret;
+    private Form _form = new();
+    private string? _formError;
+    private OffsiteDestination? _removing;
+    private string? _testing;
+
+    private bool _running;
+    private bool _runOk;
+    private string? _runMessage;
+    private bool _disposed;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _destinations = [.. await Store.DestinationsAsync()];
+        _statuses = await Store.StatusesAsync();
+        _hasPassphrase = (await Store.PassphraseAsync()).Length > 0;
+    }
+
+    private async Task SavePassphraseAsync()
+    {
+        if (_passphrase.Length < 12)
+        {
+            _passphraseMessage = "Use at least 12 characters. It is all that stands between the bucket and every stored credential.";
+            return;
+        }
+        await Store.SavePassphraseAsync(_passphrase);
+        _passphrase = "";
+        _passphraseMessage = null;
+        await LoadAsync();
+    }
+
+    private async Task ClearPassphraseAsync()
+    {
+        await Store.SavePassphraseAsync("");
+        _passphraseMessage = null;
+        await LoadAsync();
+    }
+
+    private void New(string kind)
+    {
+        _editing = new OffsiteDestination { Kind = kind };
+        _editingHasSecret = false;
+        _form = new Form { Id = _editing.Id, Kind = kind };
+        _formError = null;
+    }
+
+    private void Edit(OffsiteDestination destination)
+    {
+        _editing = destination;
+        _editingHasSecret = destination.SecretKey.Length > 0;
+        _form = new Form
+        {
+            Id = destination.Id, Kind = destination.Kind, Name = destination.Name, Enabled = destination.Enabled,
+            Path = destination.Path, Endpoint = destination.Endpoint, Region = destination.Region,
+            Bucket = destination.Bucket, Prefix = destination.Prefix, AccessKey = destination.AccessKey,
+            PathStyle = destination.PathStyle, Keep = destination.Keep, KeepUnit = destination.KeepUnit,
+            // Never sent to the browser: blank means "keep what is stored".
+            SecretKey = "",
+        };
+        _formError = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is null)
+            return;
+
+        var destination = new OffsiteDestination
+        {
+            Id = _form.Id, Kind = _form.Kind, Name = _form.Name.Trim(), Enabled = _form.Enabled,
+            Path = _form.Path.Trim(), Endpoint = _form.Endpoint.Trim(), Region = _form.Region.Trim(),
+            Bucket = _form.Bucket.Trim(), Prefix = _form.Prefix.Trim(), AccessKey = _form.AccessKey.Trim(),
+            SecretKey = _form.SecretKey.Length > 0 ? _form.SecretKey.Trim() : _editing.SecretKey,
+            PathStyle = _form.PathStyle, Keep = _form.Keep, KeepUnit = _form.KeepUnit,
+        };
+
+        if (destination.Problem() is { } problem)
+        {
+            _formError = problem;
+            return;
+        }
+
+        var list = _destinations.Where(d => d.Id != destination.Id).ToList();
+        var at = _destinations.FindIndex(d => d.Id == destination.Id);
+        list.Insert(at < 0 ? list.Count : at, destination);
+
+        await Store.SaveDestinationsAsync(list);
+        _editing = null;
+        _formError = null;
+        await LoadAsync();
+    }
+
+    private async Task RemoveAsync(OffsiteDestination destination)
+    {
+        _removing = null;
+        await Store.SaveDestinationsAsync(_destinations.Where(d => d.Id != destination.Id));
+        await LoadAsync();
+    }
+
+    private async Task TestAsync(OffsiteDestination destination)
+    {
+        _testing = destination.Id;
+        _tested.Remove(destination.Id);
+        try
+        {
+            // The app's lifetime rather than the circuit's: a test is short, but a closed tab
+            // half-way through should not leave a probe file behind.
+            _tested[destination.Id] = (true, await Task.Run(() => Offsite.TestAsync(destination, Lifetime.ApplicationStopping)));
+        }
+        catch (Exception ex)
+        {
+            _tested[destination.Id] = (false, ex.Message);
+        }
+        finally
+        {
+            _testing = null;
+        }
+    }
+
+    private async Task BackUpNowAsync()
+    {
+        _running = true;
+        _runMessage = null;
+        try
+        {
+            // Also on the app's lifetime: leaving the page must not cancel a backup half-sent.
+            var results = await Task.Run(() => Backup.RunNowAsync(Lifetime.ApplicationStopping));
+            _runOk = results.All(r => r.Ok);
+            _runMessage = results.Count == 0
+                ? "Backed up locally. There are no off-site destinations to send it to yet."
+                : string.Join("\n", results.Select(r => $"{(r.Ok ? "✓" : "✗")} {r.Destination.Name}: {r.Message}"));
+        }
+        catch (Exception ex)
+        {
+            _runOk = false;
+            _runMessage = $"The backup did not finish: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            _running = false;
+        }
+
+        if (_disposed)
+            return;
+        await LoadAsync();
+    }
+
+    public void Dispose() => _disposed = true;
+}

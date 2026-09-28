@@ -1,4 +1,5 @@
 using LabbyTwo.Core;
+using LabbyTwo.Services.Offsite;
 using LabbyTwo.Storage;
 using Microsoft.Extensions.Options;
 
@@ -14,9 +15,12 @@ namespace LabbyTwo.Services;
 ///
 /// It uses SQLite's own backup API rather than copying the file, so a copy taken while the
 /// health monitor is mid-write is still a valid database.
+///
+/// That copy lives on the same disk as the database, so each run then hands it to
+/// <see cref="OffsiteBackups"/> to be copied somewhere that is not this machine.
 /// </summary>
 public sealed class BackupJob(
-    Db db, AppSettingsStore settings, IOptions<LabbyOptions> options,
+    Db db, AppSettingsStore settings, OffsiteBackups offsite, IOptions<LabbyOptions> options,
     IHostEnvironment environment, ILogger<BackupJob> log) : IBackgroundJob
 {
     public const string EnabledKey = "backup_enabled";
@@ -38,6 +42,10 @@ public sealed class BackupJob(
     /// </summary>
     public bool RunAtStartup => true;
 
+    // The nightly run and the "Back up now" button share one of these, so a press at the
+    // moment the timer fires waits for it rather than writing the same file twice at once.
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     public async Task RunAsync(CancellationToken ct)
     {
         var stored = await settings.AllAsync(ct);
@@ -45,17 +53,48 @@ public sealed class BackupJob(
         if (!stored.GetBool(EnabledKey, true))
             return;
 
-        var folder = Folder(stored);
-        Directory.CreateDirectory(folder);
+        var results = await RunChainAsync(ct);
 
-        var path = Path.Combine(folder, $"labbytwo-{DateTimeOffset.Now:yyyy-MM-dd}.db");
+        // Thrown after every destination has had its turn, so the runner records the job as
+        // failed — which is what puts it on the health page — without one bad destination
+        // stopping the rest.
+        if (results.Where(r => !r.Ok).ToList() is { Count: > 0 } failed)
+            throw new InvalidOperationException(
+                "The local copy was written, but the off-site copy failed: " +
+                string.Join(" ", failed.Select(r => $"{r.Destination.Name}: {r.Message}")));
+    }
 
-        // One a day: re-running on the same date replaces that day's copy rather than
-        // making a second one, so a NAS rebooted six times still has fourteen days.
-        await db.BackupToAsync(path, ct);
-        log.LogInformation("Wrote a backup to {Path}", path);
+    /// <summary>
+    /// The "Back up now" button: the whole chain, local copy then every destination, even
+    /// with the nightly backup switched off — pressing it is asking for one.
+    /// </summary>
+    public Task<IReadOnlyList<OffsiteBackups.Result>> RunNowAsync(CancellationToken ct) => RunChainAsync(ct);
 
-        Prune(folder, Math.Clamp(stored.GetInt(KeepKey, 14), 1, 365));
+    private async Task<IReadOnlyList<OffsiteBackups.Result>> RunChainAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var stored = await settings.AllAsync(ct);
+            var folder = Folder(stored);
+            Directory.CreateDirectory(folder);
+
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var path = Path.Combine(folder, $"labbytwo-{today:yyyy-MM-dd}.db");
+
+            // One a day: re-running on the same date replaces that day's copy rather than
+            // making a second one, so a NAS rebooted six times still has fourteen days.
+            await db.BackupToAsync(path, ct);
+            log.LogInformation("Wrote a backup to {Path}", path);
+
+            Prune(folder, Math.Clamp(stored.GetInt(KeepKey, 14), 1, 365));
+
+            return await offsite.CopyAsync(path, today, ct);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     /// <summary>
