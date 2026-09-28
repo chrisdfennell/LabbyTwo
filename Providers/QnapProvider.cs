@@ -149,6 +149,10 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
         CapacityMetric.FullWithin("Volume full within 30 days", "disk_percent"),
         new("Running hot", "temp_c", Comparison.Above, 60, ClearThreshold: 55, ForMinutes: 15,
             Why: "Usually a failed fan or a blocked vent."),
+        new("Hotter than usual for the hour", "temp_c", Comparison.Above, 4, ForMinutes: 30,
+            Why: "Catches a fan going well before the fixed limit does, without firing every summer afternoon — " +
+                 "it compares with what this box usually reads at this hour.")
+        { Kind = RuleKind.Unusual, UnusualBy = UnusualBy.Spread },
         new("A disk is failing SMART", "disks_failing", Comparison.Above, 0, ForMinutes: 5,
             Why: "The NAS knows before the array does. This is the warning that arrives while the rebuild is still cheap."),
         new("A fan has stopped", "fan_rpm_min", Comparison.Below, 200, ForMinutes: 10,

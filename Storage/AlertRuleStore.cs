@@ -32,7 +32,7 @@ public sealed class AlertRuleStore(Db db)
             var cmd = connection.CreateCommand();
             cmd.CommandText = """
                 SELECT id, name, connection_id, metric, comparison, threshold, clear_threshold,
-                       for_minutes, enabled, channel_id
+                       for_minutes, enabled, channel_id, kind, unusual_by
                 FROM alert_rules ORDER BY name, metric
                 """;
             var list = new List<AlertRule>();
@@ -45,14 +45,14 @@ public sealed class AlertRuleStore(Db db)
                     Name = reader.GetString(1),
                     ConnectionId = reader.IsDBNull(2) ? null : reader.GetString(2),
                     Metric = reader.GetString(3),
-                    Comparison = string.Equals(reader.GetString(4), "below", StringComparison.OrdinalIgnoreCase)
-                        ? Comparison.Below
-                        : Comparison.Above,
+                    Comparison = AlertRule.ParseComparison(reader.GetString(4)),
                     Threshold = reader.GetDouble(5),
                     ClearThreshold = reader.IsDBNull(6) ? null : reader.GetDouble(6),
                     ForMinutes = reader.GetInt32(7),
                     Enabled = reader.GetInt64(8) != 0,
                     ChannelId = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    Kind = AlertRule.ParseKind(reader.GetString(10)),
+                    UnusualBy = AlertRule.ParseUnusualBy(reader.IsDBNull(11) ? null : reader.GetString(11)),
                 });
             }
             return _cache.Store(list, version);
@@ -73,25 +73,28 @@ public sealed class AlertRuleStore(Db db)
         cmd.CommandText = """
             INSERT INTO alert_rules
                 (id, name, connection_id, metric, comparison, threshold, clear_threshold,
-                 for_minutes, enabled, channel_id)
-            VALUES ($id, $name, $conn, $metric, $comparison, $threshold, $clear, $for, $enabled, $channel)
+                 for_minutes, enabled, channel_id, kind, unusual_by)
+            VALUES ($id, $name, $conn, $metric, $comparison, $threshold, $clear, $for, $enabled, $channel,
+                    $kind, $by)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, connection_id = excluded.connection_id,
                 metric = excluded.metric, comparison = excluded.comparison,
                 threshold = excluded.threshold, clear_threshold = excluded.clear_threshold,
                 for_minutes = excluded.for_minutes, enabled = excluded.enabled,
-                channel_id = excluded.channel_id
+                channel_id = excluded.channel_id, kind = excluded.kind, unusual_by = excluded.unusual_by
             """;
         cmd.Parameters.AddWithValue("$id", rule.Id);
         cmd.Parameters.AddWithValue("$name", rule.Name);
         cmd.Parameters.AddWithValue("$conn", (object?)rule.ConnectionId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$metric", rule.Metric);
-        cmd.Parameters.AddWithValue("$comparison", rule.Comparison == Comparison.Below ? "below" : "above");
+        cmd.Parameters.AddWithValue("$comparison", rule.Comparison.ToString().ToLowerInvariant());
         cmd.Parameters.AddWithValue("$threshold", rule.Threshold);
         cmd.Parameters.AddWithValue("$clear", (object?)rule.ClearThreshold ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$for", rule.ForMinutes);
         cmd.Parameters.AddWithValue("$enabled", rule.Enabled ? 1 : 0);
         cmd.Parameters.AddWithValue("$channel", (object?)rule.ChannelId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$kind", AlertRule.StoredKind(rule.Kind));
+        cmd.Parameters.AddWithValue("$by", rule.IsUnusual ? AlertRule.StoredUnusualBy(rule.UnusualBy) : DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
         Invalidate();
     }

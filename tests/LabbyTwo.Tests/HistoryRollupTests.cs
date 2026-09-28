@@ -406,7 +406,8 @@ public sealed class HistoryRollupTests : IDisposable
         {
             var version = check.CreateCommand();
             version.CommandText = "PRAGMA user_version";
-            Assert.Equal(10L, (long)(await version.ExecuteScalarAsync())!);
+            // At least past the summaries; later migrations move the number on.
+            Assert.True((long)(await version.ExecuteScalarAsync())! >= 10L);
         }
 
         var history = new HistoryStore(reopened, Options.Create(new LabbyOptions()));

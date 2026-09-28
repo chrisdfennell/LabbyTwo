@@ -18,13 +18,18 @@ public sealed class MetricAlertService(
     AlertService alerts,
     AppSettingsStore appSettings,
     CapacityForecasts forecasts,
+    MetricBaselines baselines,
     ILogger<MetricAlertService> log) : IHostedService
 {
     /// <summary>
     /// Live state per rule *and* connection: a rule with no connection watches many, and
     /// each has to breach and clear on its own.
     /// </summary>
-    public sealed record Breach(string RuleId, string ConnectionId, DateTimeOffset? Since, bool Firing, double LastValue);
+    public sealed record Breach(string RuleId, string ConnectionId, DateTimeOffset? Since, bool Firing, double LastValue)
+    {
+        /// <summary>What the value is usually at this hour, for an unusual rule — so the page can say "usually 520".</summary>
+        public Usual? Usual { get; init; }
+    }
 
     private readonly ConcurrentDictionary<string, Breach> _breaches = new();
 
@@ -155,18 +160,29 @@ public sealed class MetricAlertService(
                 var key = Key(rule.Id, connection.Id);
                 watched.Add(key);
 
-                if (!TryReading(connection.Id, rule.Metric, out var value))
+                // An unusual rule is judged against what is usual now, which the baselines
+                // job keeps in memory. Asked only for those rules, so a threshold rule costs
+                // nothing it did not before.
+                var hasReading = TryReading(connection.Id, rule.Metric, out var value);
+                var usual = hasReading && rule.IsUnusual ? baselines.UsualAt(connection.Id, rule.Metric, now) : null;
+
+                // No reading is no news, and so is an unusual rule with nothing to compare
+                // against yet — still learning, or a percentage of a usual zero. Neither may
+                // fire or clear: a rule that went quiet while it was learning would announce
+                // a recovery nobody saw, and one that fired on three days of history would
+                // be the reason people turn these off.
+                if (!hasReading || rule.Judge(value, usual) is not { } verdict)
                 {
-                    // No reading, so no news: a firing breach stays firing, and will clear
-                    // (and say so) when a reading says it has. A breach still inside its
-                    // sustain window starts the window again, though — minutes in which
-                    // nobody could see the value are not minutes it was seen to hold.
+                    // A firing breach stays firing, and will clear (and say so) when a
+                    // reading says it has. A breach still inside its sustain window starts
+                    // the window again, though — minutes in which nobody could see the value
+                    // are not minutes it was seen to hold.
                     if (_breaches.TryGetValue(key, out var waiting) && waiting is { Firing: false, Since: not null })
                         _breaches[key] = waiting with { Since = null };
                     continue;
                 }
 
-                await ApplyAsync(rule, connection, value, now, ct);
+                await ApplyAsync(rule, connection, value, verdict, usual, now, ct);
             }
         }
 
@@ -195,13 +211,14 @@ public sealed class MetricAlertService(
         return monitor.State(connectionId)?.Metrics.TryGetValue(metric, out value) == true;
     }
 
-    private async Task ApplyAsync(AlertRule rule, Connection connection, double value, DateTimeOffset now, CancellationToken ct)
+    private async Task ApplyAsync(
+        AlertRule rule, Connection connection, double value, Verdict verdict, Usual? usual, DateTimeOffset now, CancellationToken ct)
     {
         var key = Key(rule.Id, connection.Id);
         var previous = _breaches.GetValueOrDefault(key);
         var spec = registry.Metric(connection, rule.Metric);
 
-        if (rule.IsBreaching(value))
+        if (verdict == Verdict.Breaching)
         {
             var since = previous?.Since ?? now;
             var sustained = now - since >= TimeSpan.FromMinutes(Math.Max(0, rule.ForMinutes));
@@ -210,31 +227,55 @@ public sealed class MetricAlertService(
             // The new state is written before the send is awaited, not after. The send is
             // the slow part — a webhook, an SMTP server — and anything that reads this
             // breach in the meantime has to see that the alert is already on its way.
-            _breaches[key] = new Breach(rule.Id, connection.Id, since, firing || sustained, value);
+            _breaches[key] = new Breach(rule.Id, connection.Id, since, firing || sustained, value) { Usual = usual };
 
             if (!firing && sustained)
-                await SendAsync(rule, connection, spec, value, AlertLevel.Down, ct);
+                await SendAsync(rule, connection, spec, value, usual, AlertLevel.Down, ct);
             return;
         }
 
-        if (rule.IsCleared(value))
+        if (verdict == Verdict.Cleared)
         {
-            _breaches[key] = new Breach(rule.Id, connection.Id, null, false, value);
+            _breaches[key] = new Breach(rule.Id, connection.Id, null, false, value) { Usual = usual };
 
             if (previous?.Firing == true)
-                await SendAsync(rule, connection, spec, value, AlertLevel.Up, ct);
+                await SendAsync(rule, connection, spec, value, usual, AlertLevel.Up, ct);
             return;
         }
 
         // Between the two thresholds: hold whatever it was doing, but keep the value
         // fresh so the UI shows the real reading.
         _breaches[key] = previous is null
-            ? new Breach(rule.Id, connection.Id, null, false, value)
-            : previous with { LastValue = value };
+            ? new Breach(rule.Id, connection.Id, null, false, value) { Usual = usual }
+            : previous with { LastValue = value, Usual = usual };
+    }
+
+    /// <summary>
+    /// A usual value as it is said: "about 520 Mbps", not "519.7 Mbps". Two significant
+    /// figures, after converting to the reader's units, because a median of a month of
+    /// evenings is not known to the decimal and pretending otherwise invites an argument
+    /// with the notification.
+    /// </summary>
+    public static string About(MetricSpec spec, double value, Units.Preferences system)
+    {
+        var (converted, _) = Units.Display(value, spec.Unit, system);
+        if (converted == 0 || !double.IsFinite(converted))
+            return Units.Format(spec, value, system, 0);
+
+        var magnitude = (int)Math.Floor(Math.Log10(Math.Abs(converted)));
+        var decimals = Math.Max(0, 1 - magnitude);
+        var rounded = Math.Round(converted, decimals);
+        var scale = Math.Pow(10, magnitude - 1);
+        if (magnitude > 1)
+            rounded = Math.Round(converted / scale) * scale;
+
+        // Formatted from the rounded display value, then handed back through Format so the
+        // unit label is the one the rest of the page uses.
+        return Units.Format(spec, Units.Store(rounded, spec.Unit, system), system, decimals);
     }
 
     private async Task SendAsync(
-        AlertRule rule, Connection connection, MetricSpec spec, double value, AlertLevel level, CancellationToken ct)
+        AlertRule rule, Connection connection, MetricSpec spec, double value, Usual? usual, AlertLevel level, CancellationToken ct)
     {
         // A notification saying "-6.0°C" to someone who thinks in Fahrenheit is a puzzle
         // rather than a warning, so the message follows the same setting the UI does.
@@ -248,7 +289,9 @@ public sealed class MetricAlertService(
             ? forecasts.Get(connection.Id, measured)
             : null;
 
-        var alert = forecast is not null
+        var alert = rule.IsUnusual && usual is not null
+            ? UnusualAlert(rule, connection, spec, reading, usual, system, level)
+            : forecast is not null
             ? level == AlertLevel.Down
                 ? new Alert(AlertLevel.Down,
                     $"{connection.Name} · {registry.Metric(connection, measured).Label} {forecast.Describe()}",
@@ -280,5 +323,26 @@ public sealed class MetricAlertService(
         }
 
         await alerts.BroadcastAsync(alert, ct, rule.ChannelId);
+    }
+
+    /// <summary>
+    /// An unusual rule says what it saw next to what it expected — "Internet · Download is
+    /// 180 Mbps — usually about 520 Mbps at this hour" — because the number alone means
+    /// nothing without the usual it was measured against, and the usual is the thing the
+    /// reader does not have in their head.
+    /// </summary>
+    private static Alert UnusualAlert(
+        AlertRule rule, Connection connection, MetricSpec spec, string reading, Usual usual, Units.Preferences system, AlertLevel level)
+    {
+        var expected = $"usually about {About(spec, usual.Median, system)} {usual.When}".TrimEnd();
+
+        return level == AlertLevel.Down
+            ? new Alert(AlertLevel.Down,
+                $"{connection.Name} · {spec.Label} is {reading} — {expected}",
+                $"That is {rule.UnusualPhrase()}" +
+                (rule.ForMinutes > 0 ? $", and it has stayed that way for {rule.ForMinutes} minute(s)." : "."))
+            : new Alert(AlertLevel.Up,
+                $"{connection.Name} · {spec.Label} is back to normal",
+                $"Now {reading}; {expected}.");
     }
 }

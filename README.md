@@ -366,6 +366,17 @@ Two details that stop alert fatigue: **sustained for N minutes** ignores the spi
 nightly backup causes, and **clears past** is a separate recovery threshold, so a metric
 sitting exactly on the line cannot alert, recover, and alert again every thirty seconds.
 
+Some numbers have no single right line: a connection that is quick at 4am and slow at 8pm,
+a NAS that runs warm in the afternoon. For those a rule can alert on **what is unusual for
+the time** instead — "download is less than half its usual", "temperature well above
+usual". It learns what each hour usually looks like from the last four weeks, weekdays
+and weekends apart, and says so in the notification:
+
+> Internet · Download is 180.0 Mbps — usually about 520 Mbps at this hour
+
+A rule like that needs five days of history before it will judge anything, and until then
+the editor says how many more it needs rather than alerting on a guess.
+
 You should not have to work out which numbers matter, either. Each integration **suggests
 its own rules** — a UPS offers "running on battery" and "battery low", a weather station
 offers frost and high wind, TrueNAS offers "pool not healthy" and warns at 80% because

@@ -48,6 +48,11 @@ public sealed class SynologyProvider(IHttpClientFactory httpFactory, ILogger<Syn
 
         new("Running hot", "temp_c", Comparison.Above, 60, ClearThreshold: 55, ForMinutes: 15,
             Why: "Usually a failed fan or a blocked vent."),
+
+        new("Hotter than usual for the hour", "temp_c", Comparison.Above, 4, ForMinutes: 30,
+            Why: "Catches a fan going well before the fixed limit does, without firing every summer afternoon — " +
+                 "it compares with what this box usually reads at this hour.")
+        { Kind = RuleKind.Unusual, UnusualBy = UnusualBy.Spread },
     ];
 
     private readonly ConcurrentDictionary<string, string> _sessions = new();

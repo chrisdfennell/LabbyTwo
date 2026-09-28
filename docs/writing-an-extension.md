@@ -176,6 +176,17 @@ public IReadOnlyList<SuggestedRule> SuggestedRules =>
 ];
 ```
 
+  Where no fixed number is right for everyone — a line's speed, a box's temperature — offer
+  an "unusual for the time" rule instead. `Threshold` is then a percentage of usual
+  (`UnusualBy.Percent`: 50 below is "less than half") or a distance in normal spreads
+  (`UnusualBy.Spread`: 4 is "well above"):
+
+```csharp
+new("Download is less than half its usual", "download_mbps", Comparison.Below, 50, ForMinutes: 30,
+    Why: "Learns what this line does at each hour.")
+{ Kind = RuleKind.Unusual, UnusualBy = UnusualBy.Percent },
+```
+
 - **Say what fills up.** A metric that climbs towards a limit — percent used, or free space
   running down to zero — can say so with `Capacity`, and LabbyTwo then forecasts when it
   runs out: the "Running out" card lists it ("full in about 7 weeks"), and alert rules can

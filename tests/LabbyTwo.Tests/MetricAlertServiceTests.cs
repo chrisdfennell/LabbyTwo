@@ -94,6 +94,7 @@ public sealed class MetricAlertServiceTests : IDisposable
         services.AddSingleton<HealthMonitor>();
         services.AddSingleton<AlertService>();
         services.AddSingleton<CapacityForecasts>();
+        services.AddSingleton<MetricBaselines>();
         services.AddSingleton<MetricAlertService>();
         _services = services.BuildServiceProvider();
     }
@@ -486,6 +487,133 @@ public sealed class MetricAlertServiceTests : IDisposable
 
         var recorded = await Get<HistoryStore>().MetricsAsync(connection.Id);
         Assert.Equal(["disk_percent"], recorded);
+    }
+
+    // ---------- Unusual rules ----------
+
+    private static AlertRule HalfOfUsual(int forMinutes = 0) => new()
+    {
+        Metric = "disk_percent",
+        Kind = RuleKind.Unusual,
+        UnusualBy = UnusualBy.Percent,
+        Comparison = Comparison.Below,
+        Threshold = 50,
+        ForMinutes = forMinutes,
+    };
+
+    /// <summary>
+    /// A connection whose metric has read <paramref name="usual"/> every hour for
+    /// <paramref name="days"/> days, with the baseline worked out — as the hourly job would
+    /// have done by the time anyone relied on it.
+    /// </summary>
+    private async Task<Connection> LearnAsync(AlertRule rule, double days = 14, double usual = 80)
+    {
+        var connection = await SetUpAsync(rule);
+        await Get<AlertRuleStore>().SaveAsync(rule with { ConnectionId = connection.Id });
+        await WriteHistoryAsync(connection, _ => usual, days);
+        await Get<MetricBaselines>().RefreshAsync(connection.Id, "disk_percent", CancellationToken.None);
+        return connection;
+    }
+
+    [Fact]
+    public async Task AnUnusualRuleFiresOnceTheDropHasHeldForItsWindow()
+    {
+        var connection = await LearnAsync(HalfOfUsual(forMinutes: 30));
+        var start = DateTimeOffset.Now;
+
+        await TickAsync(connection, 30, start);
+        await TickAsync(connection, 30, start.AddMinutes(20));
+        Assert.Empty(_channel.Sent);
+
+        await TickAsync(connection, 30, start.AddMinutes(30));
+
+        var alert = Assert.Single(_channel.Sent);
+        Assert.Equal(AlertLevel.Down, alert.Level);
+        Assert.StartsWith("NAS · Disk used is 30.0% — usually about 80%", alert.Title);
+        Assert.Contains("at this hour", alert.Title);
+        Assert.Equal("That is less than half its usual, and it has stayed that way for 30 minute(s).", alert.Body);
+    }
+
+    [Fact]
+    public async Task AnUnusualRuleClearsOnlyOnceItIsWellBackTowardsUsual()
+    {
+        var connection = await LearnAsync(HalfOfUsual());
+        var start = DateTimeOffset.Now;
+
+        await TickAsync(connection, 30, start);
+        Assert.Single(_channel.Sent);
+
+        // 62% of usual: out of the alert band, not yet two thirds of the way back.
+        await TickAsync(connection, 50, start.AddMinutes(1));
+        Assert.Single(_channel.Sent);
+        Assert.NotEmpty(Get<MetricAlertService>().Firing);
+
+        // 75%: that is a recovery.
+        await TickAsync(connection, 60, start.AddMinutes(2));
+
+        Assert.Equal(2, _channel.Sent.Count);
+        var recovery = _channel.Sent[1];
+        Assert.Equal(AlertLevel.Up, recovery.Level);
+        Assert.Equal("NAS · Disk used is back to normal", recovery.Title);
+        Assert.StartsWith("Now 60.0%; usually about 80%", recovery.Body);
+        Assert.Empty(Get<MetricAlertService>().Firing);
+    }
+
+    [Fact]
+    public async Task WhileStillLearningAnUnusualRuleNeverFires()
+    {
+        var connection = await LearnAsync(HalfOfUsual(), days: 2);
+        Assert.True(Get<MetricBaselines>().Get(connection.Id, "disk_percent")!.IsLearning);
+        var start = DateTimeOffset.Now;
+
+        for (var i = 0; i < 5; i++)
+            await TickAsync(connection, 1, start.AddMinutes(i));
+
+        Assert.Empty(_channel.Sent);
+        Assert.Empty(Get<MetricAlertService>().Firing);
+    }
+
+    [Fact]
+    public async Task LosingItsBaselineNeitherClearsNorRefiresAFiringRule()
+    {
+        var connection = await LearnAsync(HalfOfUsual());
+        var start = DateTimeOffset.Now;
+        await TickAsync(connection, 30, start);
+        Assert.Single(_channel.Sent);
+
+        // History cut back to two days — a restored backup, say — so it is learning again.
+        await WriteHistoryAsync(connection, _ => 80, days: 2);
+        await Get<MetricBaselines>().RefreshAsync(connection.Id, "disk_percent", CancellationToken.None);
+
+        // A perfectly usual reading now is no news: the alert stays up rather than
+        // announcing a recovery nothing was in a position to judge.
+        await TickAsync(connection, 80, start.AddMinutes(1));
+        Assert.Single(_channel.Sent);
+        Assert.NotEmpty(Get<MetricAlertService>().Firing);
+
+        // And once there is enough history again, the same reading clears it.
+        await WriteHistoryAsync(connection, _ => 80);
+        await Get<MetricBaselines>().RefreshAsync(connection.Id, "disk_percent", CancellationToken.None);
+        await TickAsync(connection, 80, start.AddMinutes(2));
+        Assert.Equal(2, _channel.Sent.Count);
+        Assert.Equal(AlertLevel.Up, _channel.Sent[1].Level);
+    }
+
+    [Fact]
+    public async Task TheFirstPassAsksForTheBaselineAndALaterOneUsesIt()
+    {
+        var connection = await SetUpAsync(HalfOfUsual());
+        await Get<AlertRuleStore>().SaveAsync((await Get<AlertRuleStore>().AllAsync()).Single() with { ConnectionId = connection.Id });
+        await WriteHistoryAsync(connection, _ => 80);
+        var start = DateTimeOffset.Now;
+
+        // Nothing worked out yet: this pass cannot judge, and starts the work instead.
+        await TickAsync(connection, 30, start);
+        Assert.Empty(_channel.Sent);
+
+        await WaitUntilAsync(() => Get<MetricBaselines>().Get(connection.Id, "disk_percent") is not null);
+        await TickAsync(connection, 30, start.AddMinutes(1));
+        Assert.Single(_channel.Sent);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)

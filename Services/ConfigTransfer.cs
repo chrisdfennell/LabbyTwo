@@ -60,9 +60,12 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
     public sealed record WidgetDto(string Id, string TabId, string Type, string Title,
         string? ConnectionId, int Sort, int Width, Dictionary<string, string> Settings);
 
+    // Kind and UnusualBy, like ChannelId, come last and default to null: a file from before
+    // unusual rules has neither, and every rule in it was a threshold. A threshold rule is
+    // written without them, so its line in a new export is exactly what an old one said.
     public sealed record RuleDto(string Id, string Name, string? ConnectionId, string Metric,
         string Comparison, double Threshold, double? ClearThreshold, int ForMinutes, bool Enabled,
-        string? ChannelId = null);
+        string? ChannelId = null, string? Kind = null, string? UnusualBy = null);
 
     public sealed record ImportResult(int Connections, int Tabs, int Widgets, int Rules, List<string> Warnings);
 
@@ -97,7 +100,9 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
             [
                 .. alertRules.Select(r => new RuleDto(r.Id, r.Name, r.ConnectionId, r.Metric,
                     r.Comparison.ToString(), r.Threshold, r.ClearThreshold, r.ForMinutes, r.Enabled,
-                    r.ChannelId))
+                    r.ChannelId,
+                    r.IsUnusual ? AlertRule.StoredKind(r.Kind) : null,
+                    r.IsUnusual ? AlertRule.StoredUnusualBy(r.UnusualBy) : null))
             ],
         };
 
@@ -270,9 +275,9 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
                 Name = dto.Name,
                 ConnectionId = dto.ConnectionId,
                 Metric = dto.Metric,
-                Comparison = string.Equals(dto.Comparison, nameof(Core.Comparison.Below), StringComparison.OrdinalIgnoreCase)
-                    ? Core.Comparison.Below
-                    : Core.Comparison.Above,
+                Comparison = AlertRule.ParseComparison(dto.Comparison),
+                Kind = AlertRule.ParseKind(dto.Kind),
+                UnusualBy = AlertRule.ParseUnusualBy(dto.UnusualBy),
                 Threshold = dto.Threshold,
                 ClearThreshold = dto.ClearThreshold,
                 ForMinutes = dto.ForMinutes,
