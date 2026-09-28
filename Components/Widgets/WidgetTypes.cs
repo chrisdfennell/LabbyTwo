@@ -180,6 +180,30 @@ public sealed class StatusSummaryWidget : IWidgetType
     public Type Component => typeof(StatusSummary);
 }
 
+/// <summary>
+/// What sits behind what, with live status. The connection is optional, the way it is on
+/// Recent changes: bound to one, the card draws that connection and what sits behind it;
+/// bound to nothing, the whole map, which is the usual choice.
+/// </summary>
+public sealed class DependencyMapWidget : IWidgetType
+{
+    public string Type => "dependency-map";
+    public string DisplayName => "Dependency map";
+    public string Icon => "🗺️";
+    public string Description =>
+        "What sits behind what — and, when something goes down, what went down with it. " +
+        "Bind it to a connection to draw only what sits behind that one.";
+    public IReadOnlyList<string> ProviderTypes => AnyProvider.Types;
+    public bool NeedsConnection => false;
+    public int DefaultWidth => 6;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show_standalone", "Show stand-alone connections", FieldKind.Bool, Default: "false",
+            Help: "The ones nothing sits behind and that sit behind nothing. Off keeps the card to the chains."),
+    ];
+    public Type Component => typeof(DependencyMapCard);
+}
+
 public sealed class ActiveAlertsWidget : IWidgetType
 {
     public string Type => "active-alerts";

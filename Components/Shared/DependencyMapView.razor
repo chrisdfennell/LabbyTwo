@@ -1,0 +1,213 @@
+@using System.Globalization
+
+@* The dependency map itself: an SVG of the trees, the stand-alone connections underneath,
+   and the same thing as an indented list. It takes the nodes as a parameter and injects
+   nothing, so the page, the card and the tests all draw exactly the same thing.
+
+   The list is always in the markup. Below phone width it is what shows, because a map of
+   thirty boxes shrunk to 360 pixels is unreadable; above it, it is kept off screen for
+   screen readers and comes into view if a keyboard user tabs into it. The SVG is hidden
+   from assistive technology and its links are out of the tab order, so nobody meets every
+   connection twice. *@
+
+@if (_missingRoot)
+{
+    <p class="tile-meta mb-0">The connection this map starts from no longer exists. Pick another in the card's settings.</p>
+}
+else if (_nodes.Count == 0)
+{
+    <p class="tile-meta mb-0">No connections to draw yet.</p>
+}
+else
+{
+    <div class="depmap @(ListOnly ? "is-list-only" : "")">
+        @if (!ListOnly && _layout.Nodes.Count > 0)
+        {
+            <div class="depmap-scroll">
+                <svg class="depmap-svg" viewBox="0 0 @Num(_layout.Width) @Num(_layout.Height)"
+                     style="@SvgStyle" aria-hidden="true" focusable="false"
+                     xmlns="http://www.w3.org/2000/svg">
+                    @foreach (var edge in _layout.Edges)
+                    {
+                        <path class="depmap-edge @(IsCut(edge.ParentId) ? "is-cut" : "")" d="@edge.Path" />
+                    }
+                    @foreach (var placed in _layout.Nodes)
+                    {
+                        var node = _byId[placed.Id];
+                        var cause = Cause(node.Id);
+                        var note = DependencyMapModel.Note(node, cause, placed.Broken);
+                        <a href="@Link(node.Id)" tabindex="-1"
+                           class="depmap-node @DependencyMapModel.CssClass(node.Status) @(cause is null ? "" : "is-affected")">
+                            <title>@Tooltip(node, note, placed.Broken)</title>
+                            <rect class="depmap-box" x="@Num(placed.X)" y="@Num(placed.Y)"
+                                  width="@Num(DependencyLayout.NodeWidth)" height="@Num(DependencyLayout.NodeHeight)" rx="10" />
+                            <rect class="depmap-bar" x="@Num(placed.X + 5)" y="@Num(placed.Y + 9)"
+                                  width="4" height="@Num(DependencyLayout.NodeHeight - 18)" rx="2" />
+                            <text class="depmap-icon" x="@Num(placed.X + 16)" y="@Num(placed.Y + 31)">@node.Icon</text>
+                            <text class="depmap-name" x="@Num(placed.X + 44)" y="@Num(placed.Y + 20)">@Clip(node.Name, 21)@(node.Silenced ? " 🔕" : "")</text>
+                            <text class="depmap-status" x="@Num(placed.X + 44)" y="@Num(placed.Y + 37)">@DependencyMapModel.Glyph(node.Status) @Clip(note, 30)</text>
+                        </a>
+                    }
+                </svg>
+            </div>
+        }
+
+        @if (!ListOnly && ShowStandAlone && _layout.StandAlone.Count > 0)
+        {
+            <div class="depmap-standalone" aria-hidden="true">
+                @if (_layout.Nodes.Count > 0)
+                {
+                    <div class="tile-meta mb-1">Stand-alone — nothing sits behind these, and they sit behind nothing</div>
+                }
+                <div class="depmap-chips">
+                    @foreach (var placed in _layout.StandAlone)
+                    {
+                        var node = _byId[placed.Id];
+                        var note = DependencyMapModel.Note(node, null, placed.Broken);
+                        <a class="depmap-chip @DependencyMapModel.CssClass(node.Status)" href="@Link(node.Id)" tabindex="-1"
+                           title="@Tooltip(node, note, placed.Broken)">
+                            <span class="depmap-glyph">@DependencyMapModel.Glyph(node.Status)</span>
+                            <span>@node.Icon</span>
+                            <span class="text-truncate">@node.Name</span>
+                            <span class="tile-meta">@note@(node.Silenced ? " · silenced" : "")</span>
+                        </a>
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="depmap-list">
+            <ul class="depmap-tree" aria-label="What sits behind what">
+                @foreach (var root in _roots)
+                {
+                    @Item(root)
+                }
+            </ul>
+            @if (ShowStandAlone && _layout.StandAlone.Count > 0)
+            {
+                @if (_layout.Nodes.Count > 0)
+                {
+                    <div class="tile-meta mt-2 mb-1">Stand-alone</div>
+                }
+                <ul class="depmap-tree" aria-label="Stand-alone connections">
+                    @foreach (var placed in _layout.StandAlone)
+                    {
+                        @Item(placed)
+                    }
+                </ul>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<MapNode> Nodes { get; set; } = [];
+
+    /// <summary>Draw only this connection and what sits behind it. Null or empty draws everything.</summary>
+    [Parameter] public string? RootId { get; set; }
+
+    [Parameter] public bool ShowStandAlone { get; set; } = true;
+
+    /// <summary>Show the indented list at every width, instead of the drawing.</summary>
+    [Parameter] public bool ListOnly { get; set; }
+
+    /// <summary>
+    /// Null fits the drawing to the width it is given, down to 75% of its natural size, and
+    /// scrolls after that. A number draws it at that scale and scrolls.
+    /// </summary>
+    [Parameter] public double? Zoom { get; set; }
+
+    private IReadOnlyList<MapNode> _nodes = [];
+    private Dictionary<string, MapNode> _byId = [];
+    private DependencyLayoutResult _layout = DependencyLayoutResult.Empty;
+    private IReadOnlyDictionary<string, string> _cause = new Dictionary<string, string>();
+    private ILookup<string, PlacedNode> _children = Array.Empty<PlacedNode>().ToLookup(node => node.Id);
+    private IReadOnlyList<PlacedNode> _roots = [];
+    private bool _missingRoot;
+
+    protected override void OnParametersSet()
+    {
+        var all = Nodes.DistinctBy(node => node.Id).ToList();
+        var inputs = all.Select(node => new DependencyInput(node.Id, node.ParentId)).ToList();
+
+        _missingRoot = false;
+        if (RootId is { Length: > 0 } root)
+        {
+            var keep = DependencyLayout.Subtree(inputs, root).ToHashSet();
+            _missingRoot = keep.Count == 0 && all.Count > 0;
+            all = [.. all.Where(node => keep.Contains(node.Id))];
+            // The root's own parent is outside the part being drawn, not missing, so it is
+            // cut here rather than left for the layout to flag as a deleted parent.
+            inputs = [.. inputs.Where(input => keep.Contains(input.Id)).Select(input => input.Id == root ? input with { ParentId = null } : input)];
+        }
+
+        _nodes = all;
+        _byId = all.ToDictionary(node => node.Id);
+        _layout = DependencyLayout.Layout(inputs);
+        _cause = DependencyLayout.Affected(_layout.Parents, id => _byId[id].Status == MapStatus.Down);
+        _children = _layout.Nodes.Where(node => node.ParentId is not null).ToLookup(node => node.ParentId!);
+        _roots = [.. _layout.Nodes.Where(node => node.ParentId is null)];
+    }
+
+    private string? Cause(string id) => _cause.TryGetValue(id, out var cause) ? _byId[cause].Name : null;
+
+    /// <summary>An edge out of something that is down, or out of something already cut off by that.</summary>
+    private bool IsCut(string parentId) =>
+        _byId[parentId].Status == MapStatus.Down || _cause.ContainsKey(parentId);
+
+    private static string Link(string id) => $"settings/connections?edit={Uri.EscapeDataString(id)}";
+
+    private string SvgStyle => Zoom is { } zoom
+        ? $"width:{Num(_layout.Width * zoom)}px"
+        : $"width:100%;max-width:{Num(_layout.Width)}px;min-width:{Num(_layout.Width * 0.75)}px";
+
+    private static string Num(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
+
+    /// <summary>SVG text does not wrap or ellipsise, so a long name is cut here and given in full in the tooltip.</summary>
+    private static string Clip(string text, int length) =>
+        text.Length <= length ? text : text[..(length - 1)].TrimEnd() + "…";
+
+    private static string Tooltip(MapNode node, string note, BrokenLink broken)
+    {
+        var parts = new List<string> { $"{node.Name} — {note}" };
+        if (node.Silenced)
+            parts.Add("Alerts are silenced.");
+        if (DependencyMapModel.Explain(broken) is { Length: > 0 } explain)
+            parts.Add(explain);
+        if (node.Detail.Length > 0)
+            parts.Add(node.Detail);
+        parts.Add("Click to edit.");
+        return string.Join("\n", parts);
+    }
+
+    private RenderFragment Item(PlacedNode placed) => __builder =>
+    {
+        var node = _byId[placed.Id];
+        var cause = Cause(node.Id);
+        var note = DependencyMapModel.Note(node, cause, placed.Broken);
+        var kids = _children[placed.Id].ToList();
+        <li class="@DependencyMapModel.CssClass(node.Status) @(cause is null ? "" : "is-affected")">
+            <a href="@Link(node.Id)">
+                <span class="depmap-glyph" aria-hidden="true">@DependencyMapModel.Glyph(node.Status)</span>
+                <span aria-hidden="true">@node.Icon</span>
+                <span class="depmap-list-name">@node.Name</span>
+            </a>
+            <span class="depmap-list-note">
+                — @note@(node.Silenced ? ", alerts silenced" : "")@(kids.Count > 0 ? $", {kids.Count} behind it" : "")
+            </span>
+            @if (DependencyMapModel.Explain(placed.Broken) is { Length: > 0 } explain)
+            {
+                <span class="visually-hidden">@explain</span>
+            }
+            @if (kids.Count > 0)
+            {
+                <ul>
+                    @foreach (var kid in kids)
+                    {
+                        @Item(kid)
+                    }
+                </ul>
+            }
+        </li>
+    };
+}

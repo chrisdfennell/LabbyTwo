@@ -1691,3 +1691,96 @@ html.wall-cursor-hidden * { cursor: none !important; }
     /* A bar that grows is movement too. The counter in the overlay says where the turn is. */
     .wall-progress { display: none; }
 }
+
+/* ---------- dependency map ----------
+
+   Drawn with the same tokens as everything else, so it follows the theme and the palette
+   without a second set of colours. Status is said three ways — the bar's colour, a glyph
+   and a word — because red and green are the pair colour blindness most often merges. */
+
+.depmap { position: relative; }
+.depmap-scroll { overflow: auto; }
+.depmap-svg { display: block; height: auto; }
+
+.depmap-edge { fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: .6; }
+/* A link out of something that is down: whatever is at the other end has lost its way in. */
+.depmap-edge.is-cut { stroke: var(--down); stroke-dasharray: 5 4; opacity: .8; }
+
+.depmap-node { cursor: pointer; }
+.depmap-box { fill: var(--panel-2); stroke: var(--edge); stroke-width: 1; }
+.depmap-node:hover .depmap-box { stroke: var(--accent); }
+.depmap-bar { fill: var(--muted); }
+.depmap-icon { font-size: 18px; }
+.depmap-name { fill: var(--text); font-size: 13px; font-weight: 600; }
+.depmap-status { fill: var(--muted); font-size: 11.5px; }
+
+.depmap-node.is-up .depmap-bar,
+.depmap-node.is-up .depmap-status { fill: var(--up); }
+.depmap-node.is-down .depmap-bar { fill: var(--down); }
+.depmap-node.is-down .depmap-box { fill: color-mix(in srgb, var(--down) 12%, var(--panel)); stroke: var(--down); stroke-width: 1.5; }
+.depmap-node.is-down .depmap-status { fill: var(--down); font-weight: 600; }
+.depmap-node.is-checking .depmap-bar { fill: var(--warn); }
+
+/* Something behind a connection that is down. Faded and dashed, so the one that is actually
+   broken is the box that stands out, and its note names that one. The dash is on the box
+   itself so it survives where the colour does not. */
+.depmap-node.is-affected { opacity: .62; }
+.depmap-node.is-affected .depmap-box { stroke: var(--down); stroke-dasharray: 6 4; stroke-width: 1.5; fill: var(--panel); }
+.depmap-node.is-affected .depmap-status { fill: var(--down); font-weight: 400; }
+
+.depmap-standalone { margin-top: .75rem; }
+.depmap-chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.depmap-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    max-width: 100%;
+    padding: .25rem .6rem;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--text);
+    font-size: .85rem;
+}
+.depmap-chip:hover { border-color: var(--accent); text-decoration: none; color: var(--text); }
+.depmap-chip.is-down { border-color: var(--down); }
+
+.depmap-glyph { font-size: .7em; }
+.is-up > .depmap-glyph, .is-up > a > .depmap-glyph { color: var(--up); }
+.is-down > .depmap-glyph, .is-down > a > .depmap-glyph { color: var(--down); }
+.is-checking > .depmap-glyph, .is-checking > a > .depmap-glyph { color: var(--warn); }
+.is-disabled > .depmap-glyph, .is-disabled > a > .depmap-glyph { color: var(--muted); }
+
+.depmap-tree { list-style: none; padding-left: 0; margin: 0; }
+.depmap-tree ul { list-style: none; padding-left: 1.1rem; margin: .15rem 0 0 .35rem; border-left: 1px solid var(--edge); }
+.depmap-tree li { padding: .15rem 0; }
+.depmap-tree a { color: var(--text); }
+.depmap-list-name { font-weight: 600; }
+.depmap-list-note { color: var(--muted); font-size: .85rem; }
+.depmap-tree li.is-down > .depmap-list-note,
+.depmap-tree li.is-affected > .depmap-list-note { color: var(--down); }
+.depmap-tree li.is-affected > a { opacity: .7; }
+
+/* On a wide screen the list is for screen readers: off screen but still read, and brought
+   into view if a keyboard user tabs into it, rather than leaving the focus invisible. */
+@media (min-width: 576px) {
+    .depmap:not(.is-list-only) .depmap-list:not(:focus-within) {
+        position: absolute !important;
+        width: 1px !important;
+        height: 1px !important;
+        overflow: hidden !important;
+        clip: rect(0, 0, 0, 0) !important;
+        white-space: nowrap !important;
+    }
+    .depmap:not(.is-list-only) .depmap-list:focus-within { margin-top: .75rem; }
+}
+
+/* On a phone the drawing gives way to the list. Thirty boxes at a third of their size are
+   thirty boxes nobody can read or tap. */
+@media (max-width: 575.98px) {
+    .depmap-scroll, .depmap-standalone { display: none; }
+}
+
+/* A card has only so much room; past that the map scrolls inside it rather than stretching
+   the row it sits in. */
+.depmap-card .depmap-scroll { max-height: 30rem; }
