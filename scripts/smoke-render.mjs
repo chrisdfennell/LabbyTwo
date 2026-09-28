@@ -1,6 +1,6 @@
 // Opens one LabbyTwo page in headless Chrome and waits for its cards to draw.
 //
-//   node scripts/smoke-render.mjs <chrome> <url> <profile dir> <seconds>
+//   node scripts/smoke-render.mjs <chrome> <url> <profile dir> <seconds> [options]
 //
 // Part of smoke-boot.sh, which explains why. The short version: the server's first answer
 // is a grid of skeletons, and the cards only draw once a browser has connected its
@@ -10,16 +10,29 @@
 // does not wait on a WebSocket. So this drives Chrome over its DevTools protocol instead,
 // with nothing to install: Node 22 has a WebSocket client built in.
 //
-// Exits 0 when every card has drawn and none failed, 1 when a card failed or Blazor
-// reported an error, and 2 when the deadline passed with cards still waiting.
+// Options, for pages that are not a grid of cards, and for perf-bigdb.sh, which wants to
+// know how long a page took as well as whether it got there:
+//   --until <js>        wait for this expression to be truthy instead of for the cards,
+//                       and print what it returned
+//   --click-text <text> click the first enabled button whose text contains this, about
+//                       once a second until --until holds. The first clicks land before
+//                       the circuit has connected, when the button does nothing yet.
+//   --time              print elapsed_ms=<n> last: from navigating to done
+//
+// Exits 0 when every card has drawn (or --until held) and none failed, 1 when a card
+// failed or Blazor reported an error, and 2 when the deadline passed first.
 
 import { spawn } from 'node:child_process';
 
-const [chrome, url, profile, seconds = '30'] = process.argv.slice(2);
+const [chrome, url, profile, seconds = '30', ...rest] = process.argv.slice(2);
 if (!chrome || !url || !profile) {
-  console.error('usage: smoke-render.mjs <chrome> <url> <profile dir> <seconds>');
+  console.error('usage: smoke-render.mjs <chrome> <url> <profile dir> <seconds> [--until <js>] [--click-text <text>] [--time]');
   process.exit(64);
 }
+const option = name => { const at = rest.indexOf(name); return at >= 0 ? rest[at + 1] : undefined; };
+const until = option('--until');
+const clickText = option('--click-text');
+const timed = rest.includes('--time');
 const deadline = Date.now() + Number(seconds) * 1000;
 
 const browser = spawn(chrome, [
@@ -29,8 +42,10 @@ const browser = spawn(chrome, [
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
 // Whatever happens, the browser goes too. A stray Chrome would keep the CI step open.
+let started = Date.now();
 const finish = (code, message) => {
   if (message) console.log(message);
+  if (timed && code === 0) console.log(`elapsed_ms=${Date.now() - started}`);
   try { browser.kill('SIGKILL'); } catch { /* already gone */ }
   process.exit(code);
 };
@@ -85,7 +100,14 @@ const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
 const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
 await send('Runtime.enable', {}, sessionId);
 await send('Page.enable', {}, sessionId);
+// The clock starts here rather than with Chrome, whose own start is not the page's time.
+started = Date.now();
 await send('Page.navigate', { url }, sessionId);
+
+const evaluate = async expression => {
+  const { result } = await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId);
+  return result.value;
+};
 
 // What the page looks like right now. #blazor-error-ui is the bar Blazor shows when the
 // circuit has died of an unhandled exception.
@@ -97,21 +119,44 @@ const inspect = `JSON.stringify({
                     return !!bar && getComputedStyle(bar).display !== 'none'; })(),
 })`;
 
+// A plain DOM click, which is what Blazor listens for.
+const click = `(() => {
+  const button = [...document.querySelectorAll('button')]
+    .find(b => !b.disabled && b.textContent.includes(${JSON.stringify(clickText ?? '')}));
+  if (button) button.click();
+  return !!button;
+})()`;
+let lastClick = 0;
+
 let state = { cards: 0, waiting: -1, failed: [], crashed: false };
+let reached;
 while (Date.now() < deadline) {
   try {
-    const { result } = await send('Runtime.evaluate', { expression: inspect, returnByValue: true }, sessionId);
-    if (typeof result.value === 'string') state = JSON.parse(result.value);
+    const value = await evaluate(inspect);
+    if (typeof value === 'string') state = JSON.parse(value);
+    if (until) reached = await evaluate(until);
   } catch {
     // Mid-navigation there is no document to ask. The next attempt will have one.
   }
 
   if (state.crashed) finish(1, `Blazor reported an unhandled error.\n${problems.join('\n')}`);
   if (state.failed.length > 0) finish(1, `Failed cards:\n  ${state.failed.join('\n  ')}\n${problems.join('\n')}`);
-  if (state.cards > 0 && state.waiting === 0) finish(0, `${state.cards} cards drawn, none failed.`);
+  if (until) {
+    if (reached) finish(0, typeof reached === 'string' ? reached : 'Done.');
+    if (clickText && Date.now() - lastClick >= 1000) {
+      lastClick = Date.now();
+      try { await evaluate(click); } catch { /* no document to click in yet */ }
+    }
+  } else if (state.cards > 0 && state.waiting === 0) {
+    finish(0, `${state.cards} cards drawn, none failed.`);
+  }
 
   await new Promise(resolve => setTimeout(resolve, 250));
 }
 
+if (until) {
+  finish(2, `After ${seconds}s, the page had still not got as far as: ${until}` +
+    (problems.length ? `\nThe page said:\n${problems.join('\n')}` : ''));
+}
 finish(2, `After ${seconds}s, ${state.waiting} of ${state.cards} cards were still loading.` +
   (problems.length ? `\nThe page said:\n${problems.join('\n')}` : ''));

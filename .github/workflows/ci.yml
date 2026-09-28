@@ -56,3 +56,16 @@ jobs:
       - name: Start the app with every plugin loaded
         timeout-minutes: 10
         run: bash scripts/smoke-boot.sh
+
+      # Two hangs in one week came from queries that were only slow on a big database:
+      # the dashboard never loaded, then the alert rules page never opened, on a NAS with
+      # a month of history — and both were instant on every machine they were written on,
+      # and in the smoke test above, which seeds a few dozen rows. This seeds five and a
+      # half million, the size of a busy install, then times the pages that read them and
+      # the history queries on their own, each against a budget several times what a
+      # healthy build needs. Like the smoke test it is part of what a release runs.
+      #
+      # As above, the step's timeout is only a backstop for the script's own deadlines.
+      - name: Time the pages on a big database
+        timeout-minutes: 15
+        run: bash scripts/perf-bigdb.sh
