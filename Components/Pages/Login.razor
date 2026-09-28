@@ -8,6 +8,7 @@
 @using Microsoft.Extensions.Options
 @inject IOptions<LabbyOptions> Options
 @inject NavigationManager Nav
+@inject LoginThrottle Throttle
 
 <PageTitle>Sign in · LabbyTwo</PageTitle>
 
@@ -66,11 +67,27 @@
             return;
         }
 
-        if (!string.Equals(model.Username, auth.Username, StringComparison.OrdinalIgnoreCase) ||
-            !CryptographicEquals(model.Password, auth.Password))
+        // The address after ForwardedHeaders has had its say, which it only does for a
+        // proxy listed in Labby:Proxy:TrustedProxies — see ForwardedHeadersSetup.
+        var result = Throttle.Attempt(HttpContext.Connection.RemoteIpAddress,
+            () => LoginCredentials.Matches(auth, model.Username, model.Password));
+
+        switch (result.Outcome)
         {
-            _error = "Wrong username or password.";
-            return;
+            case LoginThrottle.Outcome.Throttled:
+                // The same words whichever of the two was wrong, and nothing about which:
+                // the password was not even looked at. 429 so a script sees it as a refusal
+                // rather than a page that rendered.
+                HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                HttpContext.Response.Headers.RetryAfter =
+                    ((int)Math.Ceiling(result.RetryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                _error = $"Too many attempts — try again in {LoginThrottle.Describe(result.RetryAfter)}.";
+                return;
+            case LoginThrottle.Outcome.Failed:
+                _error = result.RetryAfter > TimeSpan.Zero
+                    ? $"Wrong username or password. Too many attempts — try again in {LoginThrottle.Describe(result.RetryAfter)}."
+                    : "Wrong username or password.";
+                return;
         }
 
         var identity = new ClaimsIdentity(
@@ -94,9 +111,4 @@
         && !path.Contains('\\')
         && !path.Contains(':')
         && Uri.IsWellFormedUriString(path, UriKind.Relative);
-
-    private static bool CryptographicEquals(string presented, string expected) =>
-        System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(presented)),
-            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(expected)));
 }

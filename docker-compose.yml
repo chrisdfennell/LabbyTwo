@@ -27,6 +27,17 @@ services:
       # is fine on a trusted LAN and not fine anywhere else.
       Labby__Auth__Username: ${LABBY_AUTH_USERNAME:-labby}
       Labby__Auth__Password: ${LABBY_AUTH_PASSWORD:-}
+      # Reverse proxies allowed to say who the client really is, as addresses or CIDR
+      # ranges separated by commas. Wrong passwords are slowed per client address, so this
+      # matters once a login is set: empty ignores X-Forwarded-For from everyone, and every
+      # visitor through a proxy or Cloudflare Tunnel then shares the proxy's address — one
+      # person guessing locks everyone out. Name only the proxy itself (the cloudflared
+      # container's address, or its Docker network's range): anything listed here can
+      # pick the address its requests are counted against.
+      Labby__Proxy__TrustedProxies: ${LABBY_TRUSTED_PROXIES:-}
+      # Which header holds the client address. CF-Connecting-IP behind Cloudflare, which
+      # Cloudflare sets itself; X-Forwarded-For for Caddy, nginx, Traefik and the rest.
+      Labby__Proxy__ClientIpHeader: ${LABBY_CLIENT_IP_HEADER:-X-Forwarded-For}
       # Seconds between probes of every connection.
       Labby__ProbeSeconds: ${LABBY_PROBE_SECONDS:-30}
       # Consecutive failures before a service is called down. Raise it for something that

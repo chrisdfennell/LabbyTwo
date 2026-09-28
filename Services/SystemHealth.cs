@@ -22,7 +22,8 @@ public sealed class SystemHealth(
     ModuleCatalog catalog,
     ConfigStore config,
     Db db,
-    HistoryStore history)
+    HistoryStore history,
+    LoginThrottle logins)
 {
     public enum Level
     {
@@ -62,12 +63,14 @@ public sealed class SystemHealth(
         int ThreadPoolThreads,
         int ProcessorCount);
 
+    /// <param name="Logins">What the login throttle has done since startup. Null only in tests.</param>
     public sealed record LiveStatus(
         DateTimeOffset At,
         MonitorStatus Monitor,
         IReadOnlyList<JobRun> Jobs,
         PluginStatus Plugins,
-        ProcessStatus Process);
+        ProcessStatus Process,
+        LoginThrottle.Status? Logins = null);
 
     /// <param name="SamplesEstimate">
     /// From the rowid range rather than COUNT(*), which reads the whole table. An upper
@@ -126,7 +129,7 @@ public sealed class SystemHealth(
             ThreadPool.ThreadCount,
             Environment.ProcessorCount);
 
-        return new LiveStatus(now, monitor.Status, jobs.Runs, pluginStatus, processStatus);
+        return new LiveStatus(now, monitor.Status, jobs.Runs, pluginStatus, processStatus, logins.Snapshot());
     }
 
     /// <summary>
@@ -296,6 +299,14 @@ public sealed class SystemHealth(
             findings.Add(new(Level.Warn, "Process",
                 $"{live.Process.ThreadPoolPending} work items are waiting for a thread. If that keeps growing, " +
                 "something is blocking threads and pages will stop responding."));
+
+        // Somebody guessing the password is worth knowing about after they have stopped,
+        // so the last day's lockouts are reported rather than only the ones still running.
+        if (live.Logins is { LastLockAt: { } lockedAt } logins && now - lockedAt < TimeSpan.FromDays(1))
+            findings.Add(new(Level.Warn, "Sign-in",
+                $"{logins.Failures} failed sign-in(s) since LabbyTwo started, and {logins.Refused} refused for coming too fast. " +
+                $"The last lockout was {Seconds(now - lockedAt)} ago, for {logins.LastLockAddress}." +
+                (logins.GlobalLockedUntil is not null ? " Every sign-in is paused for now." : "")));
 
         if (dns is not null)
         {

@@ -54,6 +54,25 @@ public sealed class LabbyOptions
         public string Password { get; set; } = "";
         public bool Enabled => !string.IsNullOrWhiteSpace(Password);
     }
+
+    /// <summary>Which reverse proxies may say who the client is. See ForwardedHeadersSetup.</summary>
+    public ProxySettings Proxy { get; set; } = new();
+
+    public sealed class ProxySettings
+    {
+        /// <summary>
+        /// Addresses and CIDR ranges, separated by commas or spaces, whose forwarded headers
+        /// are believed. Empty trusts only loopback, so on a bare install nobody can pick
+        /// the address their failed logins are counted against.
+        /// </summary>
+        public string TrustedProxies { get; set; } = "";
+
+        /// <summary>
+        /// The header holding the client's address: X-Forwarded-For, or CF-Connecting-IP
+        /// behind Cloudflare, which Cloudflare sets itself rather than appending to.
+        /// </summary>
+        public string ClientIpHeader { get; set; } = "X-Forwarded-For";
+    }
 }
 
 /// <summary>

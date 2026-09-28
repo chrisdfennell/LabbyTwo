@@ -192,18 +192,22 @@ builder.Services.AddAuthorization(auth =>
 });
 builder.Services.AddCascadingAuthenticationState();
 
-// Behind a TLS-terminating reverse proxy, honour its scheme and host headers so cookies
-// and redirects behave.
-builder.Services.Configure<ForwardedHeadersOptions>(forwarded =>
-{
-    forwarded.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
-                                 | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
-    // Home lab: the proxy is on the LAN, not at a fixed address.
-    forwarded.KnownIPNetworks.Clear();
-    forwarded.KnownProxies.Clear();
-});
+// Guessing the password is slowed per client address and for the install as a whole. See
+// LoginThrottle for the numbers and why they live in memory.
+builder.Services.AddSingleton<LoginThrottle>();
+
+// Behind a TLS-terminating reverse proxy, honour its scheme and client-address headers —
+// but only from the proxies named in Labby:Proxy:TrustedProxies. The client address is
+// what the login throttle counts against, and a header believed from anybody would let
+// an attacker choose a new one for every guess.
+var unreadableProxyEntries = ForwardedHeadersSetup.Apply(new ForwardedHeadersOptions(), options.Proxy);
+builder.Services.Configure<ForwardedHeadersOptions>(forwarded => ForwardedHeadersSetup.Apply(forwarded, options.Proxy));
 
 var app = builder.Build();
+
+if (unreadableProxyEntries.Count > 0)
+    app.Logger.LogWarning("Ignored {Entries} in Labby:Proxy:TrustedProxies: not an address or a CIDR range",
+        string.Join(", ", unreadableProxyEntries));
 
 app.UseForwardedHeaders();
 
