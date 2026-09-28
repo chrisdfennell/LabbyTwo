@@ -316,6 +316,12 @@ now="$(date +%s)"
   for h in $(seq 1 72); do
     echo "INSERT INTO samples (connection_id, metric, ts, value) VALUES ('smoke-self', 'disk_percent', $((now - h * 3600)), $((80 - h / 6)));"
   done
+  # And the same disk as two volumes, one flat and one filling, so the card and the
+  # forecast job go through the per-volume path and the de-duplication against the aggregate.
+  for h in $(seq 1 72); do
+    echo "INSERT INTO samples (connection_id, metric, ts, value) VALUES ('smoke-self', 'disk_percent:vol1', $((now - h * 3600)), 80);"
+    echo "INSERT INTO samples (connection_id, metric, ts, value) VALUES ('smoke-self', 'disk_percent:vol2', $((now - h * 3600)), $((60 - h / 6)));"
+  done
   widget running-out "Running out" "" "{}"
 
   n=0

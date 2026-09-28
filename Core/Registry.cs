@@ -138,6 +138,14 @@ public sealed class Registry(
             if (declared is not null)
                 return declared;
         }
+
+        // One volume the provider has not named yet — after a restart, before its first
+        // probe, or from a plugin that records volumes without declaring them. It inherits
+        // the provider's spec for the measured metric, so its unit and capacity are right
+        // and the forecast knows where "full" is.
+        if (VolumeMetric.TryParse(key, out var metric, out _))
+            return VolumeMetric.SpecFor(Metric(connection, metric), key, null);
+
         return MetricSpec.Fallback(key);
     }
 
@@ -145,11 +153,14 @@ public sealed class Registry(
     /// Whether a metric fills towards a limit, and which. The provider's own declaration
     /// wins; failing that, a well-known name that is a capacity everywhere — disk_percent
     /// means "disk used" whoever reports it — counts even from a provider that declared the
-    /// metric without saying so, which is every plugin written before this existed.
+    /// metric without saying so, which is every plugin written before this existed. A
+    /// volume of a capacity metric (<c>disk_percent:vol2</c>) is a capacity by the same
+    /// reasoning, even when the provider declared the volume without one.
     /// </summary>
     public CapacityLimit? CapacityOf(Connection? connection, string key) =>
         Metric(connection, key).Capacity
-        ?? (MetricSpec.WellKnown.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase))?.Capacity);
+        ?? (MetricSpec.WellKnown.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase))?.Capacity)
+        ?? (VolumeMetric.TryParse(key, out var measured, out _) ? CapacityOf(connection, measured) : null);
 
     /// <summary>
     /// Everything a connection is expected to report, for the metric dropdown in the

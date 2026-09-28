@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using LabbyTwo.Core;
@@ -26,12 +27,23 @@ public sealed class TrueNasProvider(IHttpClientFactory httpFactory) : IConnectio
 
     public IReadOnlyList<MetricSpec> Metrics =>
     [
-        new("disk_percent", "Fullest pool", "%", 1) { Capacity = CapacityLimit.Percent },
+        DiskPercent,
         new("pool_count", "Pools"),
         new("pools_degraded", "Pools not healthy"),
         new("uptime_days", "Uptime", " days", 1),
         new("latency_ms", "Response time", " ms"),
     ];
+
+    private static readonly MetricSpec DiskPercent = new("disk_percent", "Fullest pool", "%", 1) { Capacity = CapacityLimit.Percent };
+
+    /// <summary>The per-pool series the last probe recorded, for their names.</summary>
+    private readonly ConcurrentDictionary<string, IReadOnlyList<VolumeMetric.Series>> _pools = new();
+
+    /// <summary>The fixed metrics plus one per pool, under the pool's own name.</summary>
+    public IReadOnlyList<MetricSpec> MetricsFor(Connection connection) =>
+        _pools.TryGetValue(connection.Id, out var series) && series.Count > 0
+            ? [.. Metrics, .. VolumeMetric.SpecsFor(DiskPercent, series)]
+            : Metrics;
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>
     [
@@ -68,10 +80,17 @@ public sealed class TrueNasProvider(IHttpClientFactory httpFactory) : IConnectio
 
             try
             {
-                var (fullest, count, degraded, worst) = await PoolsAsync(connection, ct);
+                var (fullest, count, degraded, worst, pools) = await PoolsAsync(connection, ct);
                 if (count > 0)
                 {
                     metrics["disk_percent"] = fullest;
+
+                    // Each pool on its own as well, so each gets its own forecast.
+                    var series = VolumeMetric.Select(DiskPercent.Key, pools);
+                    foreach (var pool in series)
+                        metrics[pool.Key] = pool.Percent;
+                    _pools[connection.Id] = series;
+
                     metrics["pool_count"] = count;
                     metrics["pools_degraded"] = degraded;
                     message = degraded > 0
@@ -93,17 +112,33 @@ public sealed class TrueNasProvider(IHttpClientFactory httpFactory) : IConnectio
         }
     }
 
-    private async Task<(double Fullest, int Count, int Degraded, string Worst)> PoolsAsync(
+    private async Task<(double Fullest, int Count, int Degraded, string Worst, IReadOnlyList<VolumeMetric.Reading> Pools)> PoolsAsync(
         Connection connection, CancellationToken ct)
     {
         using var document = await GetAsync(connection, "pool", ct);
+        return ReadPools(document.RootElement);
+    }
 
+    /// <summary>
+    /// The parsing half of <see cref="PoolsAsync"/>, public so it can be tested without a
+    /// server. Each pool is keyed by its name rather than its numeric <c>id</c>: the id is
+    /// a row in TrueNAS's own database that changes on export and import — which is how a
+    /// ZFS pool is renamed — so it is no more stable than the name, and a key of
+    /// <c>disk_percent:tank</c> says which pool it is where <c>disk_percent:3</c> would not.
+    /// </summary>
+    public static (double Fullest, int Count, int Degraded, string Worst, IReadOnlyList<VolumeMetric.Reading> Pools) ReadPools(
+        JsonElement root)
+    {
         double fullest = 0;
         var count = 0;
         var degraded = 0;
         var worst = "";
+        var pools = new List<VolumeMetric.Reading>();
 
-        foreach (var pool in document.RootElement.EnumerateArray())
+        if (root.ValueKind != JsonValueKind.Array)
+            return (fullest, count, degraded, worst, pools);
+
+        foreach (var pool in root.EnumerateArray())
         {
             count++;
 
@@ -122,11 +157,17 @@ public sealed class TrueNasProvider(IHttpClientFactory httpFactory) : IConnectio
                 var used = allocated.GetDouble();
                 var total = used + free.GetDouble();
                 if (total > 0)
+                {
                     fullest = Math.Max(fullest, used / total * 100);
+                    var poolName = pool.TryGetProperty("name", out var named) && named.ValueKind == JsonValueKind.String
+                        ? named.GetString()
+                        : null;
+                    pools.Add(new VolumeMetric.Reading(poolName, poolName, total, used));
+                }
             }
         }
 
-        return (fullest, count, degraded, worst);
+        return (fullest, count, degraded, worst, pools);
     }
 
     private async Task<JsonDocument> GetAsync(Connection connection, string path, CancellationToken ct)

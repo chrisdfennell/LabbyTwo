@@ -102,6 +102,13 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
     {
         public long UsedBytes => TotalBytes - FreeBytes;
         public double UsedPercent => TotalBytes > 0 ? UsedBytes * 100d / TotalBytes : 0;
+
+        /// <summary>
+        /// QTS's own number for the volume (<c>volumeValue</c>), which stays put when the
+        /// volume is renamed. Init-only rather than a constructor parameter, for the reason
+        /// given on <see cref="Snapshot"/>.
+        /// </summary>
+        public string? Id { get; init; }
     }
 
     /// <summary>
@@ -128,12 +135,14 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
     private static readonly HashSet<string> HealthyWords =
         new(["Good", "Normal", "OK", "Ready", "--"], StringComparer.OrdinalIgnoreCase);
 
+    private static readonly MetricSpec DiskPercent = new("disk_percent", "Fullest volume", "%", 1) { Capacity = CapacityLimit.Percent };
+
     public IReadOnlyList<MetricSpec> Metrics =>
     [
         new("cpu_percent", "CPU", "%", 1),
         new("ram_percent", "Memory", "%", 1),
         new("temp_c", "CPU temperature", "°C", 1),
-        new("disk_percent", "Fullest volume", "%", 1) { Capacity = CapacityLimit.Percent },
+        DiskPercent,
         new("uptime_days", "Uptime", " days", 1),
         new("disks_failing", "Disks not healthy"),
         new("disk_temp_max", "Hottest disk", "°C", 1),
@@ -141,6 +150,27 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
         new("firmware_update", "Firmware update waiting"),
         new("latency_ms", "Response time", " ms"),
     ];
+
+    /// <summary>
+    /// The fixed metrics plus one per volume the last probe saw, under the name QTS gives
+    /// it — so the widget editor, the alert rules picker and the charts say "DataVol2"
+    /// rather than "disk_percent:vol2". Before the first probe there are no names to give,
+    /// and the registry labels a recorded volume "Volume 2" from its key until there are.
+    /// </summary>
+    public IReadOnlyList<MetricSpec> MetricsFor(Connection connection) =>
+        LatestSnapshot(connection) is { Volumes.Count: > 0 } snapshot
+            ? [.. Metrics, .. VolumeMetric.SpecsFor(DiskPercent, VolumeSeries(snapshot.Volumes))]
+            : Metrics;
+
+    /// <summary>
+    /// The per-volume series a set of volumes is recorded as. Keyed by QTS's volume number
+    /// as <c>vol1</c>, <c>vol2</c> — the number survives a rename in Storage &amp; Snapshots,
+    /// where the label does not — and by the label only on a firmware that sends no number.
+    /// </summary>
+    public static IReadOnlyList<VolumeMetric.Series> VolumeSeries(IEnumerable<VolumeInfo> volumes) =>
+        VolumeMetric.Select(DiskPercent.Key, volumes.Select(v => new VolumeMetric.Reading(
+            v.Id is { Length: > 0 } id && id.All(char.IsAsciiDigit) ? "vol" + id : v.Id,
+            v.Label, v.TotalBytes, v.UsedBytes)));
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>
     [
@@ -185,6 +215,12 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
                 volumes = await VolumesAsync(connection, ct);
                 if (volumes.Count > 0)
                     metrics["disk_percent"] = volumes.Max(v => v.UsedPercent);
+
+                // And each volume on its own, so each gets its own forecast: the fullest
+                // volume is often the one that is not moving. The aggregate above stays,
+                // exactly as it was, because rules and dashboards already read it.
+                foreach (var series in VolumeSeries(volumes))
+                    metrics[series.Key] = series.Percent;
             }
             catch (Exception ex)
             {
@@ -330,15 +366,59 @@ public sealed class QnapProvider(IHttpClientFactory httpFactory, ILogger<QnapPro
         var doc = await GetXmlAsync(connection,
             sid => $"cgi-bin/management/chartReq.cgi?chart_func=disk_usage&disk_select=all&include=all&sid={sid}", ct);
 
+        return ReadVolumes(doc);
+    }
+
+    /// <summary>
+    /// The parsing half of <see cref="VolumesAsync"/>, public so it can be tested without a
+    /// NAS. Written from community documentation rather than a device, so it accepts both
+    /// shapes that documentation describes and throws on neither:
+    /// <list type="bullet">
+    /// <item>Sizes inside each <c>&lt;volume&gt;</c>, which is what this provider has always read.</item>
+    /// <item>Names in <c>&lt;volumeList&gt;&lt;volume&gt;</c> and sizes in a separate
+    /// <c>&lt;volumeUseList&gt;&lt;volumeUse&gt;</c>, joined on <c>volumeValue</c> — the shape
+    /// the widely used qnapstats library reads from this same endpoint.</item>
+    /// </list>
+    /// A volume with no size is left out: unmounted, still initialising, or a list entry
+    /// with nothing behind it, and none of those is a volume filling up.
+    /// </summary>
+    public static IReadOnlyList<VolumeInfo> ReadVolumes(XContainer doc)
+    {
+        // Sizes by volume number, from the separate usage list when there is one.
+        var usage = new Dictionary<string, (double? Total, double? Free)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var use in doc.Descendants("volumeUse"))
+        {
+            if (Str(use, "volumeValue") is { } id)
+                usage.TryAdd(id, (Num(use, "total_size"), Num(use, "free_size")));
+        }
+
         var volumes = new List<VolumeInfo>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var volume in doc.Descendants("volume"))
         {
-            var label = Str(volume, "volumeLabel") ?? Str(volume, "volumeValue") ?? $"Volume {volumes.Count + 1}";
-            var total = (long)(Num(volume, "total_size") ?? 0);
-            var free = (long)(Num(volume, "free_size") ?? 0);
-            if (total > 0)
-                volumes.Add(new VolumeInfo(label.Trim(), total, free));
+            var id = Str(volume, "volumeValue");
+            var joined = id is not null && usage.TryGetValue(id, out var sizes) ? sizes : (null, null);
+            var total = Num(volume, "total_size") ?? joined.Total ?? 0;
+            var free = Num(volume, "free_size") ?? joined.Free ?? 0;
+
+            // The same volume listed twice would be recorded twice under two keys.
+            if (total <= 0 || (id is not null && !seen.Add(id)))
+                continue;
+
+            var label = Str(volume, "volumeLabel") ?? (id is not null ? $"Volume {id}" : $"Volume {volumes.Count + 1}");
+            volumes.Add(new VolumeInfo(label, (long)total, (long)Math.Clamp(free, 0, total)) { Id = id });
         }
+
+        // A firmware that sends usage but no volume list still has volumes worth showing.
+        if (volumes.Count == 0)
+        {
+            foreach (var (id, sizes) in usage)
+            {
+                if (sizes.Total is { } total && total > 0)
+                    volumes.Add(new VolumeInfo($"Volume {id}", (long)total, (long)Math.Clamp(sizes.Free ?? 0, 0, total)) { Id = id });
+            }
+        }
+
         return volumes;
     }
 

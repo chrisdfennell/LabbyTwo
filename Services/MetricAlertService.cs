@@ -285,9 +285,14 @@ public sealed class MetricAlertService(
 
         // A forecast is said in words. "Days until full is 23.4 days" claims a precision two
         // weeks of history does not have, and a recovery to "∞ days" is not a sentence.
-        var forecast = CapacityMetric.TryParse(rule.Metric, out var measured)
-            ? forecasts.Get(connection.Id, measured)
+        // The soonest volume, and named: a rule on the aggregate answers for every volume
+        // (see CapacityForecasts.TryGetValue), so the message says which one it means.
+        var soonest = CapacityMetric.TryParse(rule.Metric, out var measured)
+            ? forecasts.Soonest(connection.Id, measured)
             : null;
+        var forecast = soonest?.Forecast;
+        if (soonest is not null)
+            measured = soonest.Metric;
 
         var alert = rule.IsUnusual && usual is not null
             ? UnusualAlert(rule, connection, spec, reading, usual, system, level)

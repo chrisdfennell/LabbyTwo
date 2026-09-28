@@ -574,7 +574,9 @@ else
             }
             foreach (var key in await History.MetricsAsync(connection.Id))
             {
-                declared.TryAdd(key, MetricSpec.Fallback(key).Label);
+                // Through the registry rather than the bare fallback, so a volume recorded
+                // before this page's provider has probed is still labelled after its metric.
+                declared.TryAdd(key, Registry.Metric(connection, key).Label);
                 keys.Add(key);
             }
 
@@ -769,9 +771,25 @@ else
     /// </summary>
     private string Reading(AlertRule rule, MetricAlertService.Breach breach) =>
         CapacityMetric.TryParse(rule.Metric, out var measured)
-        && Forecasts.Get(breach.ConnectionId, measured) is { } forecast
-            ? forecast.Describe()
+        && Forecasts.Soonest(breach.ConnectionId, measured) is { } soonest
+            ? SoonestText(rule, breach.ConnectionId, soonest)
             : Units.Format(SpecFor(rule, breach.ConnectionId), breach.LastValue, _units, 1);
+
+    /// <summary>
+    /// "full in about 3 weeks", and which volume when a rule on the aggregate is answering
+    /// for one of them — otherwise the Now column would show a date for the fullest volume's
+    /// name that is really Volume 2's.
+    /// </summary>
+    private string SoonestText(AlertRule rule, string connectionId, CapacityForecasts.Entry soonest)
+    {
+        var text = soonest.Forecast.Describe();
+        if (!CapacityMetric.TryParse(rule.Metric, out var measured)
+            || string.Equals(measured, soonest.Metric, StringComparison.OrdinalIgnoreCase))
+            return text;
+
+        var connection = _connections.FirstOrDefault(c => c.Id == connectionId);
+        return $"{Registry.Metric(connection, soonest.Metric).Label} {text}";
+    }
 
     private string NameOf(string? connectionId) =>
         _connections.FirstOrDefault(c => c.Id == connectionId)?.Name ?? "";

@@ -72,9 +72,12 @@ else
     {
         var connections = (await Config.ConnectionsAsync()).ToDictionary(c => c.Id);
 
-        var rows = Forecasts.All
+        // Volumes listed one by one, and the fullest-volume aggregate only while they have
+        // no forecasts of their own, so a NAS with one volume is one row rather than two
+        // saying the same thing. A metric filter of disk_percent takes in its volumes too.
+        var rows = CapacityForecasts.Representatives(Forecasts.All)
             .Where(e => Context.Connection is null || e.ConnectionId == Context.Connection.Id)
-            .Where(e => Metric.Length == 0 || string.Equals(e.Metric, Metric, StringComparison.OrdinalIgnoreCase))
+            .Where(e => Metric.Length == 0 || VolumeMetric.BelongsTo(e.Metric, Metric))
             .Where(e => connections.ContainsKey(e.ConnectionId))
             .Where(e => ShowIdle || e.Forecast.State is ForecastState.Filling or ForecastState.Full)
             .Where(e => WithinDays <= 0 || e.Forecast.State == ForecastState.Full
