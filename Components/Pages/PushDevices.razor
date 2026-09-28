@@ -1,0 +1,436 @@
+@page "/settings/push"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject PushSubscriptionStore Store
+@inject LabbyTwo.Services.WebPush.VapidKeys Keys
+@inject LabbyTwo.Services.WebPush.WebPushSender Sender
+@inject ConfigStore Config
+@inject IJSRuntime JS
+@inject ILogger<PushDevices> Log
+
+<PageTitle>Browser push · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>📳 Browser push</h1>
+        <p class="subtitle">
+            Notifications on your phone or computer straight from LabbyTwo — no Pushover or ntfy account.
+            Open this page on each device you want to hear from and press the button.
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="settings/alerts">Alert rules</a>
+        <a class="btn btn-sm btn-outline-secondary" href="settings/connections">Alert channels</a>
+    </div>
+</div>
+
+<div class="widget mb-3" id="push-this-device">
+    <div class="widget-head">
+        <h2 class="widget-title">This device</h2>
+        @if (_browser is { } shown && shown.Endpoint is not null && _devices.Any(d => d.Endpoint == shown.Endpoint))
+        {
+            <span class="tile-meta">Subscribed as “@_devices.First(d => d.Endpoint == shown.Endpoint).Name”</span>
+        }
+    </div>
+    <div class="widget-body">
+        @if (_browser is null)
+        {
+            <p class="tile-meta mb-0">Checking what this browser can do…</p>
+        }
+        else if (Blocker(_browser) is { } blocker)
+        {
+            <div class="alert alert-warning mb-0" data-push-blocker>
+                <strong>@blocker.Title</strong>
+                <div>@blocker.Detail</div>
+            </div>
+        }
+        else
+        {
+            <div class="row g-2 align-items-end">
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="push-device-name">Call this device</label>
+                    <input id="push-device-name" class="form-control" maxlength="60"
+                           @bind="_name" @bind:event="oninput" placeholder="Chris's phone" />
+                </div>
+                <div class="col-12 col-md-6">
+                    @* Deliberately no @onclick: push.js handles this click in the browser, so the
+                       permission prompt is asked for inside the tap. See init() there. *@
+                    <button type="button" class="btn btn-primary" data-push-subscribe
+                            disabled="@(_busy || string.IsNullOrWhiteSpace(_name))">
+                        @(_busy ? "Working…" : ThisDevice is null ? "🔔 Notify this device" : "Update this device")
+                    </button>
+                </div>
+            </div>
+            @if (_browser.Permission == "denied")
+            {
+                <p class="text-warning mb-0 mt-2">
+                    Notifications from this site are blocked in this browser. Allow them in the site settings
+                    (the icon beside the address), then press the button again.
+                </p>
+            }
+            <p class="tile-meta mb-0 mt-2">
+                The browser asks for permission once. Nothing is sent until an alert is — and only
+                through a Browser push channel, which is created for you with the first device.
+            </p>
+        }
+
+        @if (_message is { Length: > 0 })
+        {
+            <div class="alert @(_messageIsError ? "alert-danger" : "alert-success") py-2 mt-2 mb-0" data-push-message>@_message</div>
+        }
+    </div>
+</div>
+
+<div class="widget">
+    <div class="widget-head">
+        <h2 class="widget-title">Subscribed devices</h2>
+        <span class="tile-meta">@_devices.Count</span>
+    </div>
+    <div class="widget-body @(_devices.Count > 0 ? "p-0" : "")">
+        @if (_devices.Count == 0)
+        {
+            <p class="tile-meta mb-0">None yet.</p>
+        }
+        else
+        {
+            <table class="table table-sm align-middle mb-0" data-push-devices>
+                <tbody>
+                    @foreach (var device in _devices)
+                    {
+                        var current = device;
+                        <tr>
+                            <td>
+                                @if (_renaming == current.Id)
+                                {
+                                    <div class="d-flex gap-1">
+                                        <input class="form-control form-control-sm" maxlength="60" @bind="_rename" />
+                                        <button class="btn btn-sm btn-primary" @onclick="() => RenameAsync(current)">Save</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _renaming = null">Cancel</button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="tile-name">
+                                        @current.Name
+                                        @if (current.Endpoint == _browser?.Endpoint)
+                                        {
+                                            <span class="badge text-bg-secondary ms-1">this device</span>
+                                        }
+                                    </div>
+                                }
+                                <div class="tile-meta">
+                                    @Host(current.Endpoint) · added @Ago.Since(current.CreatedAt)
+                                    @if (current.LastSentAt is { } sent)
+                                    {
+                                        <text> · last delivered @Ago.Since(sent)</text>
+                                    }
+                                </div>
+                                @if (current.LastError is { Length: > 0 })
+                                {
+                                    <div class="text-warning small">@current.LastError</div>
+                                }
+                            </td>
+                            <td class="text-end text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary" disabled="@(_testing == current.Id)"
+                                        @onclick="() => TestAsync(current)">@(_testing == current.Id ? "Sending…" : "Send test")</button>
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        @onclick="() => { _renaming = current.Id; _rename = current.Name; }">Rename</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveAsync(current)">Remove</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+<p class="tile-meta mt-3">
+    Every Browser push channel sends to all of these unless its Devices setting names some. Quiet hours,
+    silences and maintenance apply exactly as they do to any other channel. Urgent alerts — severe weather —
+    stay on screen until dismissed.
+</p>
+
+@code {
+    private IReadOnlyList<PushSubscription> _devices = [];
+    private BrowserStatus? _browser;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<PushDevices>? _self;
+    private string _name = "";
+    private bool _busy;
+    private string? _message;
+    private bool _messageIsError;
+    private string? _testing;
+    private string? _renaming;
+    private string _rename = "";
+
+    /// <summary>What push.js reports about this browser. Names match its status() object.</summary>
+    public sealed record BrowserStatus(
+        bool Secure,
+        bool ServiceWorker,
+        bool PushManager,
+        bool Notification,
+        string Permission,
+        bool Ios,
+        bool Standalone,
+        string Origin,
+        string UserAgent,
+        string? Endpoint,
+        bool WorkerActive);
+
+    private sealed record Problem(string Title, string Detail);
+
+    private PushSubscription? ThisDevice => _devices.FirstOrDefault(d => d.Endpoint == _browser?.Endpoint);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Store.Changed += OnChanged;
+        _devices = await Store.AllAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        try
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./push.js");
+            _self = DotNetObjectReference.Create(this);
+            await _module.InvokeVoidAsync("init", _self, await Keys.PublicKeyAsync());
+            await _module.InvokeAsync<bool>("prepare");
+            await RefreshBrowserAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private async Task RefreshBrowserAsync()
+    {
+        if (_module is null)
+            return;
+        _browser = await _module.InvokeAsync<BrowserStatus>("status");
+        if (_name.Length == 0)
+            _name = ThisDevice?.Name ?? GuessName(_browser.UserAgent);
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Why this browser cannot subscribe, in the terms of what to do about it — or null if it
+    /// can. Order matters: an iPhone on plain http needs HTTPS before anything else will help,
+    /// and telling it to add the app to its home screen first would send it round in a circle.
+    /// </summary>
+    private static Problem? Blocker(BrowserStatus browser)
+    {
+        if (!browser.Secure)
+            return new Problem("This needs HTTPS.",
+                $"Browsers only allow notifications on a secure address. You are on {browser.Origin}, " +
+                "which is not one — open LabbyTwo through its https address instead (a Cloudflare tunnel or a " +
+                "reverse proxy with a certificate works; http://nas:5150 doesn't). http://localhost is the one exception.");
+
+        if (browser.Ios && !browser.Standalone)
+            return new Problem("Add LabbyTwo to your Home Screen first.",
+                "On iPhone and iPad, web notifications only work for a site installed as an app (iOS 16.4 or later). " +
+                "Tap Share, then Add to Home Screen, open LabbyTwo from that icon, and come back to this page there.");
+
+        if (!browser.ServiceWorker || !browser.PushManager || !browser.Notification)
+            return browser.Ios
+                ? new Problem("This iOS version cannot receive web notifications.",
+                    "Web push on iPhone and iPad needs iOS 16.4 or later, and LabbyTwo opened from its Home Screen icon.")
+                : new Problem("This browser cannot receive web notifications.",
+                    "It has no Push API — possibly a private window, a browser that does not support it, or one where " +
+                    "it has been switched off. Current Chrome, Edge, Firefox and Safari all work.");
+
+        return null;
+    }
+
+    [JSInvokable]
+    public async Task Subscribed(string endpoint, string p256dh, string auth, string userAgent)
+    {
+        await InvokeAsync(async () =>
+        {
+            _busy = true;
+            StateHasChanged();
+            try
+            {
+                var name = string.IsNullOrWhiteSpace(_name) ? GuessName(userAgent) : _name.Trim();
+                var saved = await Store.SaveAsync(new PushSubscription
+                {
+                    Name = name,
+                    Endpoint = endpoint,
+                    P256dh = p256dh,
+                    Auth = auth,
+                    UserAgent = userAgent,
+                });
+
+                var created = await EnsureChannelAsync();
+                _devices = await Store.AllAsync();
+                await RefreshBrowserAsync();
+
+                var outcome = await Sender.SendAsync(saved, new LabbyTwo.Services.WebPush.PushMessage(
+                    "🔔 LabbyTwo can reach this device", $"“{name}” will now receive alerts.", Tag: "labbytwo-test"), default);
+
+                Show(outcome.Result == LabbyTwo.Services.WebPush.PushResult.Delivered
+                        ? $"“{name}” is subscribed, and a confirmation is on its way." +
+                          (created ? " A Browser push channel was created to send alerts to it." : "")
+                        : $"“{name}” is subscribed, but the confirmation did not go through: {outcome.Message}",
+                    outcome.Result != LabbyTwo.Services.WebPush.PushResult.Delivered);
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning(ex, "Could not store a push subscription");
+                Show($"Could not save the subscription: {ex.Message}", true);
+            }
+            finally
+            {
+                _busy = false;
+                StateHasChanged();
+            }
+        });
+    }
+
+    [JSInvokable]
+    public async Task SubscribeFailed(string reason)
+    {
+        await InvokeAsync(async () =>
+        {
+            Show(reason switch
+            {
+                "denied" => "Notifications were blocked for this site. Allow them in the browser's site settings and try again.",
+                "default" => "The permission prompt was dismissed. Press the button again and choose Allow.",
+                _ => $"The browser could not subscribe: {reason}",
+            }, true);
+            await RefreshBrowserAsync();
+        });
+    }
+
+    /// <summary>
+    /// The first device gets a channel to go with it. A subscribed phone that nothing sends
+    /// to looks exactly like a broken one, and "now go and add a connection too" is the step
+    /// people would miss.
+    /// </summary>
+    private async Task<bool> EnsureChannelAsync()
+    {
+        var connections = await Config.ConnectionsAsync();
+        if (connections.Any(c => c.Provider == BrowserPushProvider.ProviderType))
+            return false;
+
+        await Config.SaveConnectionAsync(new Connection
+        {
+            Provider = BrowserPushProvider.ProviderType,
+            Name = "Browser push",
+            Icon = "📳",
+            Sort = connections.Count == 0 ? 0 : connections.Max(c => c.Sort) + 1,
+        });
+        return true;
+    }
+
+    private async Task TestAsync(PushSubscription device)
+    {
+        _testing = device.Id;
+        try
+        {
+            var outcome = await Sender.SendAsync(device, new LabbyTwo.Services.WebPush.PushMessage(
+                "🔔 Test notification", "If you are reading this, LabbyTwo can reach this device.",
+                Tag: "labbytwo-test", Url: "settings/push"), default);
+            Show(outcome.Result == LabbyTwo.Services.WebPush.PushResult.Delivered
+                ? $"Sent to “{device.Name}”. It should appear within a few seconds."
+                : outcome.Message, outcome.Result != LabbyTwo.Services.WebPush.PushResult.Delivered);
+        }
+        finally
+        {
+            _testing = null;
+        }
+    }
+
+    private async Task RenameAsync(PushSubscription device)
+    {
+        if (!string.IsNullOrWhiteSpace(_rename))
+        {
+            await Store.RenameAsync(device.Id, _rename);
+
+            // Keep the box above in step, or pressing Update later would quietly undo this.
+            if (device.Id == ThisDevice?.Id)
+                _name = _rename.Trim();
+        }
+        _renaming = null;
+    }
+
+    private async Task RemoveAsync(PushSubscription device)
+    {
+        await Store.DeleteAsync(device.Id);
+
+        // Removing this browser's own row should stop it being a subscriber at all, not just
+        // leave a subscription behind that nothing will ever send to.
+        if (device.Endpoint == _browser?.Endpoint && _module is not null)
+        {
+            try
+            {
+                await _module.InvokeAsync<bool>("unsubscribe");
+            }
+            catch (JSException)
+            {
+            }
+            await RefreshBrowserAsync();
+        }
+        Show($"“{device.Name}” was removed.", false);
+    }
+
+    private void Show(string message, bool error)
+    {
+        _message = message;
+        _messageIsError = error;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        _devices = await Store.AllAsync();
+        StateHasChanged();
+    });
+
+    /// <summary>The push service's host, which says which browser family the device uses.</summary>
+    private static string Host(string endpoint) =>
+        Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ? uri.Host : "unknown push service";
+
+    /// <summary>A starting name, so the box is never empty. People are expected to change it.</summary>
+    public static string GuessName(string userAgent)
+    {
+        var device = userAgent switch
+        {
+            _ when userAgent.Contains("iPhone") => "iPhone",
+            _ when userAgent.Contains("iPad") => "iPad",
+            _ when userAgent.Contains("Android") => "Android phone",
+            _ when userAgent.Contains("Windows") => "Windows PC",
+            _ when userAgent.Contains("Mac OS X") || userAgent.Contains("Macintosh") => "Mac",
+            _ when userAgent.Contains("Linux") => "Linux PC",
+            _ => "This device",
+        };
+        var browser = userAgent switch
+        {
+            _ when userAgent.Contains("Edg/") => "Edge",
+            _ when userAgent.Contains("Firefox/") => "Firefox",
+            _ when userAgent.Contains("Chrome/") => "Chrome",
+            _ when userAgent.Contains("Safari/") => "Safari",
+            _ => "",
+        };
+        return browser.Length > 0 && device is not ("iPhone" or "iPad") ? $"{device} · {browser}" : device;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Store.Changed -= OnChanged;
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("dispose");
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+        _self?.Dispose();
+    }
+}

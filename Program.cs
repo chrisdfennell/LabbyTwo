@@ -152,6 +152,12 @@ builder.Services.AddSingleton<MediaStack>();
 // discovered; this is the part it and the Settings preview share.
 builder.Services.AddSingleton<WeeklySummaryGatherer>();
 
+// Web Push: the devices that asked for notifications, this install's signing key, and the
+// sender the Browser push channel and the devices page share.
+builder.Services.AddSingleton<PushSubscriptionStore>();
+builder.Services.AddSingleton<LabbyTwo.Services.WebPush.VapidKeys>();
+builder.Services.AddSingleton<LabbyTwo.Services.WebPush.WebPushSender>();
+
 builder.Services.AddSingleton<HealthMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthMonitor>());
 builder.Services.AddSingleton<AlertService>();

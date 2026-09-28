@@ -291,6 +291,22 @@ public sealed class Db
         // 12 — what an unusual rule's threshold is measured in: a percentage of usual, or
         // spreads away from it. Null on a threshold rule, which has neither.
         "ALTER TABLE alert_rules ADD COLUMN unusual_by TEXT",
+
+        // 13 — browsers and phones subscribed to Web Push notifications, for the Browser push
+        // channel. One row per browser profile; the endpoint is unique because it identifies
+        // the device to its push service, so subscribing twice from one phone updates the row.
+        """
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL DEFAULT '',
+            endpoint     TEXT NOT NULL UNIQUE,
+            p256dh       TEXT NOT NULL,
+            auth         TEXT NOT NULL,
+            user_agent   TEXT NOT NULL DEFAULT '',
+            created_at   INTEGER NOT NULL,
+            last_sent_at INTEGER,
+            last_error   TEXT NOT NULL DEFAULT '')
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

@@ -25,6 +25,7 @@
     </div>
     <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary" href="settings/connections">Alert channels</a>
+        <a class="btn btn-sm btn-outline-secondary" href="settings/push">📳 Browser push</a>
         <button class="btn btn-sm btn-primary" @onclick="StartNew">+ New rule</button>
     </div>
 </div>
@@ -33,7 +34,8 @@
 {
     <div class="alert alert-warning py-2">
         No alert channel is configured, so nothing will actually be delivered.
-        <a href="settings/connections">Add a webhook or Pushover channel</a> first.
+        <a href="settings/connections">Add a webhook or Pushover channel</a>, or
+        <a href="settings/push">turn on notifications for this device</a>, first.
     </div>
 }
 
