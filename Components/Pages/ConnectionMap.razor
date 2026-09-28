@@ -1,0 +1,123 @@
+@page "/settings/connections/map"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ConfigStore Config
+@inject Registry Registry
+@inject HealthMonitor Health
+
+<PageTitle>Dependency map · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>🗺️ Dependency map</h1>
+        <p class="subtitle">What sits behind what, and what goes down with it.</p>
+    </div>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+        @if (!_listOnly && _hasLinks)
+        {
+            @* Zoom on the server rather than with a script: the drawing is plain SVG whose
+               width is all that changes, and a round trip for a button press is nothing. *@
+            <div class="btn-group btn-group-sm" role="group" aria-label="Zoom">
+                <button class="btn btn-outline-secondary" title="Smaller" aria-label="Zoom out"
+                        disabled="@(_zoom is <= 0.5)" @onclick="() => ZoomBy(-0.25)">−</button>
+                <button class="btn @(_zoom is null ? "btn-secondary" : "btn-outline-secondary")"
+                        title="Fit the page width" @onclick="() => _zoom = null">Fit</button>
+                <button class="btn btn-outline-secondary" title="Larger" aria-label="Zoom in"
+                        disabled="@(_zoom is >= 2)" @onclick="() => ZoomBy(0.25)">+</button>
+            </div>
+        }
+        <div class="btn-group btn-group-sm" role="group" aria-label="View">
+            <button class="btn @(_listOnly ? "btn-outline-secondary" : "btn-secondary")"
+                    aria-pressed="@(!_listOnly)" @onclick="() => _listOnly = false">Map</button>
+            <button class="btn @(_listOnly ? "btn-secondary" : "btn-outline-secondary")"
+                    aria-pressed="@_listOnly" @onclick="() => _listOnly = true">List</button>
+        </div>
+        <a class="btn btn-sm btn-outline-secondary" href="settings/connections">Connections</a>
+    </div>
+</div>
+
+@if (_nodes.Count > 0 && !_hasLinks)
+{
+    @* Without this the page would be a grid of unconnected boxes and no clue why. *@
+    <div class="panel p-3 mb-3">
+        <p class="mb-2"><strong>Nothing sits behind anything yet.</strong></p>
+        <p class="mb-2 tile-meta">
+            Open a connection and choose what it <em>Sits behind</em> — the NAS a container runs on,
+            the router everything else is behind, the VPN gateway a download client goes through.
+            The map then draws the chain, and when a parent goes down it shows what went down with it.
+            Its alerts are held too, so one outage is one notification rather than eleven.
+        </p>
+        <a class="btn btn-sm btn-primary" href="settings/connections">Go to connections</a>
+    </div>
+}
+
+@if (_down.Count > 0)
+{
+    <p class="mb-3" role="status">
+        <strong style="color:var(--down)">@Sentence(_down)</strong>
+    </p>
+}
+
+<div class="panel p-3">
+    <DependencyMapView Nodes="_nodes" ListOnly="_listOnly" Zoom="_zoom" />
+</div>
+
+@code {
+    private IReadOnlyList<MapNode> _nodes = [];
+    private bool _hasLinks;
+    private bool _listOnly;
+    private double? _zoom;
+
+    /// <summary>The roots of each outage, with how many things sit behind each.</summary>
+    private List<(MapNode Node, int Behind)> _down = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Config.Changed += OnChanged;
+        Health.Updated += OnChanged;
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// Connections come from ConfigStore's cache and statuses from the monitor's memory, so
+    /// this runs on every sweep without touching the database.
+    /// </summary>
+    private async Task LoadAsync()
+    {
+        var connections = await Config.ConnectionsAsync();
+        _nodes = DependencyMapModel.From(connections, Health, Registry, DateTimeOffset.Now);
+
+        var layout = DependencyLayout.Layout(_nodes.Select(node => new DependencyInput(node.Id, node.ParentId)));
+        _hasLinks = layout.Edges.Count > 0;
+
+        var byId = _nodes.ToDictionary(node => node.Id);
+        var cause = DependencyLayout.Affected(layout.Parents, id => byId[id].Status == MapStatus.Down);
+        _down =
+        [
+            .. _nodes
+                .Where(node => node.Status == MapStatus.Down && !cause.ContainsKey(node.Id))
+                .Select(node => (node, cause.Count(pair => pair.Value == node.Id)))
+                .Where(pair => pair.Item2 > 0),
+        ];
+    }
+
+    /// <summary>"NAS is down, and 4 connections behind it are affected." — the headline an outage deserves.</summary>
+    private static string Sentence(List<(MapNode Node, int Behind)> down) =>
+        string.Join(" ", down.Select(pair =>
+            $"{pair.Node.Name} is down, and {pair.Behind} {(pair.Behind == 1 ? "connection behind it is" : "connections behind it are")} affected."));
+
+    private void ZoomBy(double step) =>
+        _zoom = Math.Clamp(Math.Round((_zoom ?? 1) + step, 2), 0.5, 2);
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        Health.Updated -= OnChanged;
+    }
+}

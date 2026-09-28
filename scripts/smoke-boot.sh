@@ -210,6 +210,11 @@ now="$(date +%s)"
     widget service-tile "" "smoke-$provider" "{}"
   done
 
+  # Every plugin's connection sits behind the app itself, so the dependency map card and
+  # page have a tree to draw rather than only their "nothing sits behind anything" hint.
+  echo "UPDATE connections SET depends_on = 'smoke-self' WHERE id <> 'smoke-self';"
+  widget dependency-map "Dependency map" "" '{"show_standalone":"true"}'
+
   # Each plugin's own cards, unconfigured, which is exactly how they first appear when
   # somebody adds one: they must say what they need rather than throw.
   for type in $(declared_types IWidgetType); do
@@ -232,6 +237,7 @@ wait_healthy
 fetch_page / "Smoke test"
 fetch_page /t/smoke "Smoke test"
 fetch_page /t/status "Everything"
+fetch_page /settings/connections/map "depmap-edge"
 
 grep -q "Restored the last known status of" "$log" \
   || fail "the monitor did not restore the seeded status at startup."

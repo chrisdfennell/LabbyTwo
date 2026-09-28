@@ -6,6 +6,7 @@
 @inject Registry Registry
 @inject HealthMonitor Health
 @inject AppSettingsStore AppSettings
+@inject NavigationManager Nav
 
 <PageTitle>Connections · LabbyTwo</PageTitle>
 
@@ -54,6 +55,11 @@
                     }
                 </div>
             }
+        }
+        @if (_connections.Count > 0)
+        {
+            <a class="btn btn-sm btn-outline-secondary" href="settings/connections/map"
+               title="What sits behind what, and what an outage takes down with it">🗺️ Map</a>
         }
         <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add connection</button>
     </div>
@@ -462,6 +468,18 @@ else
         await LoadAsync();
     }
 
+    /// <summary>
+    /// A connection to open in the editor straight away. The dependency map links here, so
+    /// clicking a box lands on that connection's settings rather than on the whole list.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "edit")] public string? EditId { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (EditId is { Length: > 0 } id && _draft is null && _connections.FirstOrDefault(c => c.Id == id) is { } connection)
+            Edit(connection);
+    }
+
     private async Task LoadAsync()
     {
         _connections = await Config.ConnectionsAsync();
@@ -563,6 +581,9 @@ else
     {
         _draft = null;
         _draftProvider = null;
+        // Otherwise a reload, or coming back to this page, would open the editor again.
+        if (EditId is { Length: > 0 })
+            Nav.NavigateTo("settings/connections", replace: true);
         await LoadAsync();
     }
 

@@ -1,0 +1,58 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject Registry Registry
+@inject HealthMonitor Health
+
+@* The map as a card, for a dashboard or the wall. Same drawing as the page, fitted to the
+   card's width, and optionally only the part behind one connection — "everything on the
+   NAS" is a card worth having on its own. *@
+
+@if (_nodes.Count > 0 && !_nodes.Any(node => node.ParentId is not null))
+{
+    <p class="tile-meta mb-0">
+        Nothing sits behind anything yet. Set <em>Sits behind</em> on a connection in
+        <a href="settings/connections">Connections</a> to draw the map.
+    </p>
+}
+else
+{
+    <div class="depmap-card">
+        <DependencyMapView Nodes="_nodes" RootId="@RootId" ShowStandAlone="ShowStandAlone" />
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private IReadOnlyList<MapNode> _nodes = [];
+
+    // The widget's own id rather than Context.Connection, so a card bound to a connection
+    // that has since been deleted says so instead of quietly drawing everything.
+    private string? RootId => Context.Widget.ConnectionId is { Length: > 0 } root ? root : null;
+
+    private bool ShowStandAlone => Context.Widget.Settings.GetBool("show_standalone", false);
+
+    protected override void OnInitialized()
+    {
+        Config.Changed += OnChanged;
+        Health.Updated += OnChanged;
+    }
+
+    // Both reads are memory: ConfigStore's cache and the monitor's states.
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync() =>
+        _nodes = DependencyMapModel.From(await Config.ConnectionsAsync(), Health, Registry, DateTimeOffset.Now);
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        Health.Updated -= OnChanged;
+    }
+}
