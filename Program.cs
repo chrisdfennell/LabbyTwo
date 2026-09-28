@@ -122,6 +122,8 @@ builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
 builder.Services.AddSingleton<ShareTransfer>();
+builder.Services.AddSingleton<TemplateStore>();
+builder.Services.AddSingleton<TabTemplates>();
 builder.Services.AddSingleton<FaviconService>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<SelfUpdater>();
@@ -293,6 +295,20 @@ var shareWidget = app.MapGet("/api/share/widget", async (ShareTransfer share, st
     }
 });
 
+// A saved template as a file, for the same reason: it is a shared-tab file with a name.
+var shareTemplate = app.MapGet("/api/share/template", async (TabTemplates templates, string id, CancellationToken ct) =>
+{
+    try
+    {
+        var (json, name) = await templates.ExportAsync(id, ct);
+        return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", name);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.NotFound(ex.Message);
+    }
+});
+
 var backup = app.MapGet("/api/backup", async (Db db, CancellationToken ct) =>
 {
     var temp = Path.Combine(Path.GetTempPath(), $"labbytwo-{Guid.NewGuid():N}.db");
@@ -324,6 +340,7 @@ if (authEnabled)
     backup.RequireAuthorization();
     shareTab.RequireAuthorization();
     shareWidget.RequireAuthorization();
+    shareTemplate.RequireAuthorization();
     // The icon endpoint fetches a URL the caller supplies. That is the same reach a
     // connection already has, but it should not be available to an unauthenticated
     // caller on an install that has a login.

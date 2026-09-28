@@ -30,9 +30,14 @@ else
     @* The last line of defence, behind each card's own. A tab kind that throws — a
        plugin's, say — should cost that tab, not the sidebar and every other page the
        circuit would take with it. Keyed on the tab so moving to another one starts clean. *@
-    <CardBoundary Name="@($"The “{_tab.Name}” tab")" Version="@($"{_tab.Kind}|{_tab.Settings.ToJson()}")" @key="_tab.Id">
-        <DynamicComponent Type="_kind.Component" Parameters="_parameters" />
-    </CardBoundary>
+    @* The wrapper draws no box of its own (app.css gives it display: contents); it is there
+       so the layout around the page can see what kind of page it holds. The page column is
+       capped for reading, and a dashboard kind lifts the cap — see .tab-page in app.css. *@
+    <div class="@(_kind.FillsWideScreens ? "tab-page fills-width" : "tab-page")">
+        <CardBoundary Name="@($"The “{_tab.Name}” tab")" Version="@($"{_tab.Kind}|{_tab.Settings.ToJson()}")" @key="_tab.Id">
+            <DynamicComponent Type="_kind.Component" Parameters="_parameters" />
+        </CardBoundary>
+    </div>
 }
 
 @code {

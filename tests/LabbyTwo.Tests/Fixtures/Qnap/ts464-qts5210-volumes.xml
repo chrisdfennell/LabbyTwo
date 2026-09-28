@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<QDocRoot version="1.0">
+<authPassed><![CDATA[1]]></authPassed><model><modelName><![CDATA[TS-X64]]></modelName><internalModelName><![CDATA[TS-X64]]></internalModelName><platform><![CDATA[TS-NASX86]]></platform><platform_ex><![CDATA[X86_JASPERLAKE]]></platform_ex><customModelName><![CDATA[]]></customModelName><displayModelName><![CDATA[TS-464]]></displayModelName><sas_model><![CDATA[0]]></sas_model><storage_v2>1</storage_v2>
+<encryptfsSupported><![CDATA[1]]></encryptfsSupported><is_zfs><![CDATA[0]]></is_zfs><node><![CDATA[]]></node><dual_node><![CDATA[]]></dual_node></model>
+<firmware><name><![CDATA[QTS]]></name><version><![CDATA[5.2.10]]></version><number><![CDATA[3577]]></number><build><![CDATA[20260731]]></build><patch><![CDATA[0]]></patch><buildTime><![CDATA[2026/07/31]]></buildTime></firmware>
+<rfs_bits><![CDATA[64]]></rfs_bits><specVersion><![CDATA[1.0]]></specVersion><hostname><![CDATA[Fennell-NAS]]></hostname><DemoSiteSuppurt><![CDATA[no]]></DemoSiteSuppurt><customLogo><customFrontLogo><![CDATA[]]></customFrontLogo><customLoginLogo><![CDATA[]]></customLoginLogo></customLogo>
+<volumeList><volume><volumeStat><![CDATA[raid5]]></volumeStat><volumeDisks><![CDATA[ 3,4,5,6]]></volumeDisks><volumeStatus><![CDATA[0]]></volumeStatus><Progress><![CDATA[100]]></Progress><volumeType><![CDATA[1]]></volumeType><volumeValue><![CDATA[1]]></volumeValue><freeSize><![CDATA[5286]]></freeSize><fstype><![CDATA[9]]></fstype><volumeLabel><![CDATA[DataVol1]]></volumeLabel><FSRVP_support><![CDATA[0]]></FSRVP_support><edge_cache_support><![CDATA[0]]></edge_cache_support><edge_cache_type><![CDATA[-1]]></edge_cache_type><FolderCounter><![CDATA[8]]></FolderCounter><is_legacy_volume><![CDATA[0]]></is_legacy_volume><is_default_volume><![CDATA[1]]></is_default_volume><pool_vjbod><![CDATA[0]]></pool_vjbod><encryptfs_bool><![CDATA[0]]></encryptfs_bool><encryptfs_active_bool><![CDATA[0]]></encryptfs_active_bool><encryptfs_key_flag><![CDATA[N]]></encryptfs_key_flag></volume>
+</volumeList>
+<volumeUseList><volumeUse><volumeValue><![CDATA[1]]></volumeValue><total_size><![CDATA[18793549795328]]></total_size><free_size><![CDATA[5687991943168]]></free_size><folder_element><sharename><![CDATA[Container]]></sharename><used_size><![CDATA[271890518016]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[Browser Station]]></sharename><used_size><![CDATA[1064960]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[Media]]></sharename><used_size><![CDATA[10687484489728]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[Profiles]]></sharename><used_size><![CDATA[286650118144]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[DashboardData]]></sharename><used_size><![CDATA[90112]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[Public]]></sharename><used_size><![CDATA[873471025152]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[Web]]></sharename><used_size><![CDATA[36999168]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[Fennell]]></sharename><used_size><![CDATA[982688968704]]></used_size></folder_element>
+<folder_element><sharename><![CDATA[System Reserved]]></sharename><used_size><![CDATA[38164553728]]></used_size><type><![CDATA[system]]></type></folder_element>
+<others_size><![CDATA[13102223273984]]></others_size><found_quota><![CDATA[0]]></found_quota></volumeUse>
+<volumeUse><volumeValue><![CDATA[2]]></volumeValue><total_size><![CDATA[0]]></total_size><free_size><![CDATA[0]]></free_size><folder_element></folder_element>
+<folder_element><sharename><![CDATA[System Reserved]]></sharename><used_size><![CDATA[0]]></used_size><type><![CDATA[system]]></type></folder_element>
+<found_quota><![CDATA[0]]></found_quota></volumeUse>
+</volumeUseList>
+</QDocRoot>

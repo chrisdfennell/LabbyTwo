@@ -20,6 +20,15 @@ public interface ITabKind
 
     /// <summary>Component rendered for this kind. Receives the tab as a parameter named "Tab".</summary>
     Type Component { get; }
+
+    /// <summary>
+    /// Whether the page is a dashboard that should spread across a wide screen rather than
+    /// sit in the readable column the settings pages keep to. Cards, charts and status bars
+    /// only get better with the room; a form or a table of text gets worse, because the eye
+    /// loses its place on a line five thousand pixels long. Off unless a kind asks, so a
+    /// plugin's page looks the way its author last saw it.
+    /// </summary>
+    bool FillsWideScreens => false;
 }
 
 /// <summary>The keys of the kinds that ship in the box, for code that needs to name one.</summary>
@@ -29,4 +38,5 @@ public static class TabKinds
     public const string Embed = "embed";
     public const string Notes = "notes";
     public const string Status = "status";
+    public const string Custom = "custom";
 }

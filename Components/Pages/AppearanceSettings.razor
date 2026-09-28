@@ -104,6 +104,19 @@
                     <option value="roomy">Roomy — easier across a room</option>
                 </select>
 
+                <label class="form-label" for="wide">On wide screens</label>
+                <select id="wide" class="form-select mb-1" value="@_look.WideScreens"
+                        @onchange="e => SetAsync(Appearance.WideScreensKey, e.Value?.ToString(), Appearance.WideScreenModes)">
+                    @foreach (var (value, label, hint) in Appearance.WideScreenModes)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
+                <div class="form-text mb-3">
+                    @Hint(Appearance.WideScreenModes, _look.WideScreens)
+                    Dashboards only — settings pages and anything mostly text stay a readable width.
+                </div>
+
                 <label class="form-label" for="text">Text size</label>
                 <select id="text" class="form-select mb-1" value="@_look.TextScale"
                         @onchange="e => SetAsync(Appearance.TextScaleKey, e.Value?.ToString(), Appearance.TextScales)">
@@ -635,6 +648,7 @@
             [Appearance.DarkPaletteKey] = defaults.DarkPalette,
             [Appearance.TextScaleKey] = defaults.TextScale,
             [Appearance.FontKey] = defaults.Font,
+            [Appearance.WideScreensKey] = defaults.WideScreens,
         });
 
         Nav.NavigateTo(Nav.Uri, forceLoad: true);

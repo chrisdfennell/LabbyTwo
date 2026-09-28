@@ -63,6 +63,13 @@ public sealed record Widget
     /// <summary>Grid columns out of 12, so a row can mix a wide chart with narrow tiles.</summary>
     public int Width { get; init; } = 4;
 
+    /// <summary>
+    /// Height in row units on a custom page, where zero means "as tall as its content". A
+    /// grid tab ignores it: there every card in a row is as tall as the tallest, and that
+    /// is what a dashboard of tiles wants.
+    /// </summary>
+    public int Height { get; init; }
+
     public SettingsBag Settings { get; init; } = new();
 }
 

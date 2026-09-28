@@ -1,6 +1,13 @@
+@inject ConfigStore Config
+@inject Registry Registry
+
 @* Sits under a Markdown box and points at lines that will not render the way they look.
    Shown wherever Markdown is edited, so the notes page and a Markdown widget behave the
-   same. It suggests; the button applies. Nothing is rewritten as you type. *@
+   same. It suggests; the button applies. Nothing is rewritten as you type.
+
+   It is also where live values are discovered: a line saying they exist, a warning for a
+   shortcode with a misspelt kind, and a small form that writes one for you — because the
+   syntax is easy to use and impossible to guess. *@
 
 @if (_hints.Count > 0)
 {
@@ -29,15 +36,187 @@
     </div>
 }
 
+@if (_unknown.Count > 0)
+{
+    <div class="md-hint mt-2">
+        <div>
+            <div>
+                <code>@_unknown[0].Source</code>@(_unknown.Count > 1 ? $" and {_unknown.Count - 1} more" : "")
+                will show as a question mark: “@_unknown[0].Kind” is not a live value.
+            </div>
+            <div class="tile-meta mt-1">
+                Inline: @string.Join(", ", Shortcodes.InlineKinds). On a line of its own: @string.Join(", ", Shortcodes.BlockKinds).
+            </div>
+        </div>
+    </div>
+}
+
+<div class="md-insert mt-2">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="tile-meta">
+            Live values: <code>{{status: NAS}}</code>, <code>{{metric: NAS / cpu_percent}}</code>, <code>{{widget: card title}}</code>.
+        </span>
+        <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAsync" aria-expanded="@(_open ? "true" : "false")">
+            @(_open ? "Close" : "Insert live value…")
+        </button>
+    </div>
+
+    @if (_open)
+    {
+        <div class="md-insert-form mt-2">
+            @if (_connections is null)
+            {
+                <span class="tile-meta">Loading…</span>
+            }
+            else
+            {
+                <div class="row g-2 align-items-end">
+                    <div class="col-sm-4">
+                        <label class="form-label small mb-1" for="@Id("kind")">Show</label>
+                        <select id="@Id("kind")" class="form-select form-select-sm" @bind="_kind">
+                            <option value="status">Status (up / down)</option>
+                            <option value="metric">A metric’s value</option>
+                            <option value="forecast">When it fills up</option>
+                            <option value="uptime">Uptime, last 30 days</option>
+                            <option value="since">Time since it changed</option>
+                            <option value="gauge">A gauge card</option>
+                            <option value="widget">An existing card</option>
+                        </select>
+                    </div>
+
+                    @if (_kind == "widget")
+                    {
+                        <div class="col-sm-8">
+                            <label class="form-label small mb-1" for="@Id("widget")">Card</label>
+                            <select id="@Id("widget")" class="form-select form-select-sm" @bind="_widgetTitle">
+                                <option value="">Choose…</option>
+                                @foreach (var widget in _widgets ?? [])
+                                {
+                                    <option value="@widget">@widget</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("connection")">Connection</label>
+                            <select id="@Id("connection")" class="form-select form-select-sm" @bind="_connectionName">
+                                <option value="">Choose…</option>
+                                @foreach (var connection in _connections)
+                                {
+                                    <option value="@connection.Name">@connection.Name</option>
+                                }
+                            </select>
+                        </div>
+                        @if (_kind is "metric" or "gauge" or "forecast")
+                        {
+                            <div class="col-sm-4">
+                                <label class="form-label small mb-1" for="@Id("metric")">Metric</label>
+                                <input id="@Id("metric")" class="form-control form-control-sm" list="@Id("metrics")"
+                                       placeholder="@(_kind == "forecast" ? "soonest to fill" : "cpu_percent")" @bind="_metric" />
+                                <datalist id="@Id("metrics")">
+                                    @foreach (var metric in MetricChoices)
+                                    {
+                                        <option value="@metric.Key">@metric.Label</option>
+                                    }
+                                </datalist>
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="d-flex align-items-center gap-2 mt-2">
+                    <code class="text-truncate">@(Preview ?? "")</code>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto flex-none"
+                            disabled="@(Preview is null)" @onclick="InsertAsync">Insert at the end</button>
+                </div>
+            }
+        </div>
+    }
+</div>
+
 @code {
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
 
     private IReadOnlyList<MarkdownHints.Hint> _hints = [];
+    private IReadOnlyList<Shortcode> _unknown = [];
+
+    private readonly string _id = Guid.NewGuid().ToString("n")[..8];
+    private bool _open;
+    private IReadOnlyList<Connection>? _connections;
+    private IReadOnlyList<string>? _widgets;
+    private string _kind = "status";
+    private string _connectionName = "";
+    private string _metric = "";
+    private string _widgetTitle = "";
 
     // Recomputed when the text changes rather than in the markup, so a long note is not
     // re-scanned on every unrelated render of the form around it.
-    protected override void OnParametersSet() => _hints = MarkdownHints.For(Value);
+    protected override void OnParametersSet()
+    {
+        _hints = MarkdownHints.For(Value);
+        _unknown = Shortcodes.Unknown(Value);
+    }
+
+    private string Id(string part) => $"md-insert-{_id}-{part}";
+
+    private IEnumerable<MetricSpec> MetricChoices =>
+        _connections?.FirstOrDefault(c => c.Name == _connectionName) is { } connection
+            ? Registry.MetricsFor(connection).Where(m => _kind != "forecast" || m.Capacity is not null)
+            : [];
+
+    /// <summary>The shortcode the form describes, or null until it describes one.</summary>
+    private string? Preview => _kind switch
+    {
+        "widget" => _widgetTitle.Length > 0 ? Shortcodes.Write("widget", [_widgetTitle]) : null,
+        _ when _connectionName.Length == 0 => null,
+        "metric" => _metric.Trim().Length > 0 ? Shortcodes.Write("metric", [_connectionName, _metric.Trim()]) : null,
+        "forecast" => Shortcodes.Write("forecast", [_connectionName, _metric.Trim()]),
+        "gauge" => _metric.Trim().Length > 0
+            ? Shortcodes.Write("card", ["gauge"], [new("connection", _connectionName), new("metric", _metric.Trim())])
+            : null,
+        _ => Shortcodes.Write(_kind, [_connectionName]),
+    };
+
+    /// <summary>
+    /// The lists are read when the helper is opened, not when the editor is, so a form with
+    /// three Markdown fields that nobody inserts into costs nothing. Awaited, never waited on.
+    /// </summary>
+    private async Task ToggleAsync()
+    {
+        _open = !_open;
+        if (_open && _connections is null)
+        {
+            var connections = await Config.ConnectionsAsync();
+            var widgets = await Config.WidgetsAsync();
+            _connections = [.. connections.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)];
+            _widgets = [.. widgets.Select(w => w.Title.Trim()).Where(t => t.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)];
+        }
+    }
+
+    /// <summary>
+    /// Appended rather than put at the cursor: the cursor lives in the browser, and reaching
+    /// for it needs script this form otherwise does without. A card goes on a line of its
+    /// own with blank lines around it, since that is the only place one is drawn.
+    /// </summary>
+    private async Task InsertAsync()
+    {
+        if (Preview is not { } code)
+            return;
+        var text = (Value ?? "").TrimEnd();
+        // A value carries on the last sentence, unless that line is a heading, a list item,
+        // a quote or a table row, where it would quietly become part of that instead.
+        var last = text[(text.LastIndexOf('\n') + 1)..].TrimStart();
+        var structural = last.Length > 0
+            && (last[0] is '#' or '-' or '*' or '+' or '>' or '|' || System.Text.RegularExpressions.Regex.IsMatch(last, @"^\d+[.)]\s"));
+        var block = _kind is "widget" or "gauge";
+        var joined = text.Length == 0 ? code : text + (block || structural ? "\n\n" : " ") + code;
+        Value = joined;
+        OnParametersSet();
+        await ValueChanged.InvokeAsync(joined);
+    }
 
     private async Task ApplyAsync()
     {

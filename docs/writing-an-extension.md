@@ -330,6 +330,11 @@ public sealed class KanbanTabKind : ITabKind
 }
 ```
 
+A page is kept to a readable 1600px column unless the kind says otherwise. If yours is a
+board of cards or charts that only gets better with more room, add
+`public bool FillsWideScreens => true;` and it will spread across a wide monitor like the
+dashboard does; leave it out for anything that is mostly forms or paragraphs.
+
 ---
 
 ## An importer
