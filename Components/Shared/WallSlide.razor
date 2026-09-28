@@ -1,0 +1,56 @@
+@inject Registry Registry
+
+@* One tab on a wall. It stays mounted after it has been shown once and is hidden rather
+   than removed when the wall moves on, so coming back round to it costs nothing: the
+   cards are still subscribed, still up to date, and an embedded page is not loaded again.
+   Hidden with the attribute rather than a class so assistive technology skips it too. *@
+<section class="wall-slide" hidden="@(!Current)" aria-label="@Tab.Name">
+    @if (Registry.TabKind(Tab.Kind) is { } kind)
+    {
+        @* The same boundary TabPage puts round a tab: one kind that throws costs that
+           slide, not the wall. *@
+        <CardBoundary Name="@($"The “{Tab.Name}” tab")" Version="@($"{Tab.Kind}|{Tab.Settings.ToJson()}")">
+            <DynamicComponent Type="kind.Component" Parameters="_parameters" />
+        </CardBoundary>
+    }
+    else
+    {
+        <div class="empty-state">
+            <h1 class="h5">Unknown tab kind “@Tab.Kind”</h1>
+            <p class="mb-0">This tab was made by a newer version of LabbyTwo, or by a plugin that is no longer installed.</p>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    /// <summary>Whether this is the tab on screen.</summary>
+    [Parameter] public bool Current { get; set; }
+
+    private Dictionary<string, object> _parameters = [];
+    private Tab? _renderedTab;
+    private bool _renderedCurrent;
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(Tab, _renderedTab))
+            _parameters = new Dictionary<string, object> { ["Tab"] = Tab };
+    }
+
+    /// <summary>
+    /// The wall re-renders every time it steps, pauses or hears about a service, and a tab
+    /// is a record, which Blazor always treats as possibly changed. Left to itself every
+    /// mounted tab would redraw — and a grid tab reload its widgets — on every one of those.
+    /// A tab only has to redraw when it is a different tab or it has just been shown or
+    /// hidden; its own cards keep themselves current.
+    /// </summary>
+    protected override bool ShouldRender()
+    {
+        if (ReferenceEquals(Tab, _renderedTab) && Current == _renderedCurrent)
+            return false;
+        _renderedTab = Tab;
+        _renderedCurrent = Current;
+        return true;
+    }
+}

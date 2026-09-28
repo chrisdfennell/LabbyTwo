@@ -369,6 +369,10 @@ say "$sweeps sweeps seen"
 fetch_page /t/smoke "Smoke test"
 render_in_browser /t/smoke
 
+# And the same cards on the wall, which draws a tab through its own page and layout: a
+# wall that throws goes blank on a screen nobody is standing in front of.
+render_in_browser "/wall?tabs=smoke"
+
 # ---- The log ---------------------------------------------------------------------------
 #
 # A plugin that fails to load does not stop the app, on purpose — so nothing above would
