@@ -34,6 +34,15 @@ public sealed record Alert(AlertLevel Level, string Title, string Body)
     /// </summary>
     public bool Urgent { get; init; }
 
+    /// <summary>
+    /// The body again, formatted in Markdown, for a channel that renders it — a Discord
+    /// embed does; an SMS-shaped push does not, and would show the asterisks. Null for
+    /// the ordinary one-line alerts, where there is nothing to format. A channel that does
+    /// not know about this sends <see cref="Body"/>, which always says the same thing in
+    /// plain text, so a plugin built before this existed still sends something readable.
+    /// </summary>
+    public string? Markdown { get; init; }
+
     public string Emoji => Level switch
     {
         AlertLevel.Down => "🔴",

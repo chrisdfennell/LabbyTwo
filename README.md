@@ -294,6 +294,17 @@ is worth saying. Five things do:
 Held alerts are not queued for later; they are simply not sent. The Alerts page still shows
 the real state, so a rule that fired overnight is red in the morning.
 
+### A weekly summary
+
+Once a week, on the day and at the time you pick in **Settings → Weekly summary**, LabbyTwo
+sends a short note through the same alert channels: the week's uptime, each outage and how
+long it lasted, the least reliable and slowest services, disks that are filling and when
+they will be full, certificates and renewals coming up, speed test averages, and what
+changed. A section with nothing to say is left out, so a quiet week is one line. It is off
+until you turn it on, it waits out quiet hours rather than arriving at 3am, and if LabbyTwo
+was not running at the time it is sent once when it next starts — never twice. The page
+shows a preview and can send one on demand.
+
 Every connection is probed on a timer (30s by default). Whatever numbers a provider
 returns are recorded to SQLite, which is why **any** provider gets uptime tracking and
 charts without a line of chart-specific code. Providers also say how their numbers should

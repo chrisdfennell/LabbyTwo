@@ -56,7 +56,14 @@ public sealed class WebhookProvider(IHttpClientFactory httpFactory) : IAlertChan
                 username = "LabbyTwo",
                 embeds = new[]
                 {
-                    new { title = $"{alert.Emoji} {alert.Title}", description = alert.Body, color = alert.Color },
+                    new
+                    {
+                        title = Clip($"{alert.Emoji} {alert.Title}", 256),
+                        // Embeds render Markdown, and cap the description at 4096 characters;
+                        // past that Discord rejects the whole message rather than trimming it.
+                        description = Clip(alert.Markdown ?? alert.Body, 4096),
+                        color = alert.Color,
+                    },
                 },
             }),
             "slack" => Json(new
@@ -88,6 +95,10 @@ public sealed class WebhookProvider(IHttpClientFactory httpFactory) : IAlertChan
                 $"The webhook answered HTTP {(int)response.StatusCode}. {body[..Math.Min(body.Length, 200)]}".Trim());
         }
     }
+
+    /// <summary>Shortens text to a service's hard limit, marking the cut, rather than letting the service refuse the message.</summary>
+    internal static string Clip(string text, int max) =>
+        text.Length <= max ? text : text[..(max - 1)] + "…";
 
     private static StringContent Json(object payload) =>
         new(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
@@ -214,7 +225,9 @@ public sealed class PushoverProvider(IHttpClientFactory httpFactory) : IAlertCha
             ["token"] = channel.Settings.Get("token"),
             ["user"] = channel.Settings.Get("user"),
             ["title"] = $"LabbyTwo: {alert.Title}",
-            ["message"] = alert.Body,
+            // Pushover's limit is 1024 characters. A weekly summary on a busy week can pass
+            // that, and a cut message beats an HTTP 400 and nothing.
+            ["message"] = WebhookProvider.Clip(alert.Body, 1024),
             // Down is worth a noise; a recovery is not.
             ["priority"] = alert.Level == AlertLevel.Down ? "1" : "0",
         });
