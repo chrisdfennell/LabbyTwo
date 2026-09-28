@@ -689,13 +689,17 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 
 /* ---------- forms ---------- */
 
+/* background-color, never the background shorthand: the shorthand also resets
+   background-repeat, and Bootstrap draws the switch knob, the checkbox tick and the
+   select arrow as background images that rely on no-repeat. With it reset, a 2em switch
+   tiled its 1em knob into two dots and the select arrow repeated along the field. */
 .form-control, .form-select, .form-check-input {
-    background: var(--panel-2);
+    background-color: var(--panel-2);
     border-color: var(--edge);
     color: var(--text);
 }
 .form-control:focus, .form-select:focus {
-    background: var(--panel-2);
+    background-color: var(--panel-2);
     border-color: var(--accent);
     color: var(--text);
     box-shadow: 0 0 0 .2rem var(--accent-soft);
