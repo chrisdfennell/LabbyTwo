@@ -42,10 +42,13 @@ services:
     # can talk to that socket can start a privileged container, which is root on the host.
     #
     # The :ro below stops the socket *file* being modified. It does not make the Docker API
-    # read-only -- there is no such mode. LabbyTwo only ever issues GETs, but that is a
-    # property of this code, not a restriction the mount imposes on it.
+    # read-only -- there is no such mode. LabbyTwo reads, restarts when you press a restart
+    # button, and creates a container only for "Update now" without a Watchtower API -- but
+    # that is a property of this code, not a restriction the mount imposes on it.
     #
-    # Nothing else in LabbyTwo needs the socket, so leaving this out costs you one provider.
+    # Leaving this out costs you the Docker features and nothing else. The safer way to have
+    # them is a socket proxy -- see "safer Docker access" at the bottom of this file, and use
+    # that instead of this mount.
     #
     # volumes:
     #   - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -80,8 +83,73 @@ services:
 #     image: containrrr/watchtower
 #     restart: unless-stopped
 #     command: --cleanup --interval 3600 labbytwo-labbytwo-1
+#     environment:
+#       # Docker 29 refuses the API 1.25 Watchtower asks for by default, and it exits.
+#       DOCKER_API_VERSION: "1.41"
 #     volumes:
 #       - /var/run/docker.sock:/var/run/docker.sock
+
+# ---- safer Docker access: a socket proxy, plus Watchtower's HTTP API ------------------
+#
+# Instead of both the socket mount and the watchtower block above. LabbyTwo never sees the
+# socket: it reads and restarts containers through a proxy that refuses everything else,
+# and "Update now" asks a long-running Watchtower to check rather than creating a container.
+#
+# Use linuxserver/socket-proxy here, not tecnativa/docker-socket-proxy: tecnativa refuses
+# restarts unless POST=1, and POST=1 with CONTAINERS=1 also allows creating containers,
+# which is root on the host -- the proxy would then restrict nothing that matters.
+#
+# What each flag is for:
+#   CONTAINERS=1      the Docker card, the Containers card, working out which container
+#                     LabbyTwo is (Settings -> Updates, Restart LabbyTwo)
+#   IMAGES=1          whether LabbyTwo's image came from a registry, and its digest
+#   ALLOW_RESTARTS=1  the restart buttons (it also allows stop and kill; LabbyTwo only restarts)
+#   POST=0            everything else that writes stays shut, container creation included
+#
+# Then set the Docker connection's Endpoint, in LabbyTwo, to tcp://socket-proxy:2375.
+#
+# What this still allows, so it is a decision rather than a surprise: reading every
+# container's configuration, environment variables (and so most compose files' passwords)
+# included, and stopping or restarting any container. Never publish the proxy's port.
+#
+# Put WATCHTOWER_TOKEN=<something long and random> in .env beside docker-compose.yml.
+# --http-api-update on its own turns Watchtower's timer off; --http-api-periodic-polls keeps
+# it. Check the container name with: docker ps --format '{{.Names}}' | grep labby
+#
+# services:
+#   labbytwo:
+#     environment:
+#       DOCKER_HOST: tcp://socket-proxy:2375
+#       Labby__Watchtower__Url: http://watchtower:8080
+#       Labby__Watchtower__Token: ${WATCHTOWER_TOKEN:?set WATCHTOWER_TOKEN in .env}
+#     depends_on:
+#       - socket-proxy
+#
+#   socket-proxy:
+#     image: lscr.io/linuxserver/socket-proxy:latest
+#     restart: unless-stopped
+#     environment:
+#       CONTAINERS: 1
+#       IMAGES: 1
+#       ALLOW_RESTARTS: 1
+#       POST: 0
+#     volumes:
+#       - /var/run/docker.sock:/var/run/docker.sock:ro
+#     read_only: true
+#     tmpfs:
+#       - /run
+#     # No ports: on purpose. Only containers on this compose network can reach it.
+#
+#   watchtower:
+#     image: containrrr/watchtower
+#     restart: unless-stopped
+#     command: --cleanup --http-api-update --http-api-periodic-polls --interval 86400 labbytwo-labbytwo-1
+#     environment:
+#       WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_TOKEN:?set WATCHTOWER_TOKEN in .env}
+#       DOCKER_API_VERSION: "1.41"
+#     volumes:
+#       - /var/run/docker.sock:/var/run/docker.sock
+#     # No ports: either. LabbyTwo reaches it as http://watchtower:8080 over this network.
 
 # Every external network named above has to be declared here too. "external" means
 # Compose attaches to a network something else created, rather than making its own.

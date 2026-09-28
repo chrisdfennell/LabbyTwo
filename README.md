@@ -820,6 +820,9 @@ There is very little, on purpose. Everything specific to *your* lab lives in the
 | Full-resolution history, days | `LABBY_RETENTION_DAYS` | `7` |
 | Hourly summary history, days | `LABBY_HOURLY_RETENTION_DAYS` | `365` |
 | Plugin folder | `Labby__PluginPath` | `data/plugins` |
+| Docker endpoint, when there is no Docker connection | `DOCKER_HOST` | `/var/run/docker.sock` |
+| Watchtower HTTP API for **Update now** | `Labby__Watchtower__Url` | empty — start a one-shot Watchtower instead |
+| Its token | `Labby__Watchtower__Token` | empty |
 | Timezone | `TZ` | UTC |
 
 **How history is kept.** Every probe records one reading per metric — every 30 seconds by
@@ -925,8 +928,9 @@ must resolve from your phone and laptop, not from the container.
 
 ### The Docker socket
 
-The Docker provider needs `/var/run/docker.sock` mounted, which is worth a deliberate
-decision rather than a copy-paste:
+The Docker provider, the Containers card, **Restart LabbyTwo** and one of the two ways
+**Update now** works all need the Docker API. The quick way to give it is to mount the
+socket, which is worth a deliberate decision rather than a copy-paste:
 
 ```yaml
     volumes:
@@ -935,9 +939,10 @@ decision rather than a copy-paste:
 
 Anything that can talk to that socket can start a privileged container, which is root on
 the host. The `:ro` stops the socket *file* being modified; it does **not** make the
-Docker API read-only, because there is no such mode. LabbyTwo only ever issues GETs, but
-that is a property of this code rather than a restriction the mount imposes on it. Leaving
-it out costs you one provider.
+Docker API read-only, because there is no such mode. LabbyTwo reads, restarts when you press
+↻, and creates a container only when you press **Update now** without a Watchtower API set
+up — but that is a property of this code rather than a restriction the mount imposes on it.
+Leaving it out costs you the Docker features and nothing else.
 
 Adding a `volumes:` key in the override merges with the base file rather than replacing
 it, so the data volume survives — worth confirming once after any override change:
@@ -945,6 +950,59 @@ it, so the data volume survives — worth confirming once after any override cha
 ```bash
 docker compose config | grep -A 6 "^    volumes:"
 ```
+
+#### Through a socket proxy instead
+
+A socket proxy is a small container that holds the socket and forwards only the API calls
+its environment flags allow; everything else gets HTTP 403. LabbyTwo then talks to it over
+TCP and never sees the socket. Two are well known and share their flag names:
+[linuxserver/socket-proxy](https://github.com/linuxserver/docker-socket-proxy) and
+[tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy). They
+differ in one place that matters here, and it decides which to use:
+
+- **linuxserver/socket-proxy** lets `ALLOW_RESTARTS` through with `POST=0`.
+- **tecnativa/docker-socket-proxy** refuses every non-GET request until `POST=1` — restarts
+  included — and `POST=1` beside `CONTAINERS=1` also lets `POST /containers/create`
+  through. Creating a container with the host's `/` bind-mounted is root on the host, so on
+  tecnativa, turning on restarts turns the proxy into no protection at all.
+
+Use linuxserver's if you want the restart buttons; either is fine read-only.
+
+What each feature asks Docker for, and what the proxy has to allow:
+
+| Feature | Docker API calls | Flags on the proxy |
+|---|---|---|
+| Docker card: counts and container list; Docker labels import | `GET /containers/json?all=1` | `CONTAINERS=1` |
+| Knowing which container is LabbyTwo (Settings → Updates, Restart LabbyTwo) | `GET /containers/{hostname}/json`, falling back to `GET /containers/json` | `CONTAINERS=1` |
+| Whether the running image came from a registry, and its digest | `GET /images/{image}/json` | `IMAGES=1` |
+| ↻ on a container, **Restart LabbyTwo** | `POST /containers/{id}/restart` | `ALLOW_RESTARTS=1` — and on tecnativa also `POST=1`, see above |
+| **Update now**, through a Watchtower's HTTP API | none — LabbyTwo calls Watchtower, not Docker | none |
+| **Update now**, one-shot Watchtower | `POST /images/create`, `POST /containers/create`, `POST /containers/{id}/start`, and then everything Watchtower does to recreate LabbyTwo | `CONTAINERS=1`, `IMAGES=1`, `POST=1` at least — the same power as the raw socket, so don't |
+| Terminal plugin (`docker exec`) | `POST /containers/{id}/exec`, `POST /exec/{id}/start` | `CONTAINERS=1`, `EXEC=1`, `POST=1` — root-equivalent too |
+
+When the proxy refuses something, LabbyTwo says which flag to set rather than "HTTP 403".
+`ALLOW_RESTARTS` covers stop and kill as well as restart; LabbyTwo only ever restarts.
+
+Point LabbyTwo at it by setting the Docker connection's **Endpoint** to
+`tcp://socket-proxy:2375`. Settings → Updates and **Restart LabbyTwo** use that connection's
+endpoint; with no Docker connection they use `DOCKER_HOST`, then the socket path. A ready
+compose block — proxy, Watchtower with its HTTP API, and LabbyTwo's side of both — is in
+`docker-compose.override.yml.example`.
+
+**What this protects, and what it does not.** With linuxserver's proxy set to
+`CONTAINERS=1 IMAGES=1 ALLOW_RESTARTS=1 POST=0`, something that takes over LabbyTwo cannot
+create a container, exec into one, pull an image or touch a volume — the routes to root on
+the host through the API are closed. It **can** still:
+
+- read every container's full configuration, **environment variables included** — which is
+  where most compose files keep their database passwords and API keys;
+- stop, kill and restart any container on the host, which is an outage if not a breach.
+
+And the proxy itself holds the real socket with no authentication of its own: anything on
+the Docker network it listens on gets exactly the flags you set. Never publish its port
+(no `ports:`), keep it on the network LabbyTwo shares and nothing else, and remember the
+flags are path filters in HAProxy, not a security boundary Docker enforces. It narrows
+what a compromised LabbyTwo can do. It does not make giving LabbyTwo Docker access free.
 
 ## Updating
 
@@ -1056,6 +1114,9 @@ services:
     restart: unless-stopped
     # Name what it watches. With no names it watches everything on the host.
     command: --cleanup --interval 3600 labbytwo-labbytwo-1
+    environment:
+      # See below: Docker 29 refuses the API version Watchtower asks for by default.
+      DOCKER_API_VERSION: "1.41"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 ```
@@ -1087,6 +1148,10 @@ Things worth knowing before you leave it running:
 - **Do not run two.** If you already have a host-wide Watchtower, it will pick LabbyTwo up
   on its own once the image is a registry one; adding a second scoped to LabbyTwo means two
   schedulers racing on the same container.
+- **On Docker 29 or newer it needs `DOCKER_API_VERSION`.** `containrrr/watchtower` 1.7.1
+  asks for API 1.25 unless told otherwise, and Docker 29 refuses that: the log says
+  "client version 1.25 is too old" and Watchtower exits. `1.41` is what LabbyTwo itself uses
+  and works on anything from Docker 20.10 up.
 - **It needs credentials for a private image**, via `REPO_USER` and `REPO_PASS` or a
   mounted `config.json`. Without them it fails quietly every cycle.
 - **Watchtower holds the Docker socket, and that is the point.** The thing with root on
@@ -1095,16 +1160,50 @@ Things worth knowing before you leave it running:
 
 ### The update button
 
-If the Docker socket is mounted into LabbyTwo, **Settings → Updates** grows an **Update
-now** button. It does exactly what Watchtower does, at a moment you choose: it starts a
-throwaway `watchtower --run-once --cleanup <this container>` and lets that pull the new
-image and recreate LabbyTwo. The page goes away for a few seconds and comes back on the new
+**Settings → Updates** can grow an **Update now** button, which does what Watchtower does
+at a moment you choose. The page goes away for a few seconds and comes back on the new
 version. The database is untouched — it is a volume, and the container is the only thing
-replaced.
+replaced. There are two ways it can work, and Settings says which one is active.
 
-It appears only when all three are true, and Settings says which one is missing:
+**Ask a Watchtower that is already running (recommended).** Run Watchtower with its HTTP
+API switched on and give LabbyTwo the address and token:
 
-- the socket is mounted,
+```yaml
+services:
+  labbytwo:
+    environment:
+      Labby__Watchtower__Url: http://watchtower:8080
+      Labby__Watchtower__Token: ${WATCHTOWER_TOKEN}
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    command: --cleanup --http-api-update --http-api-periodic-polls --interval 86400 labbytwo-labbytwo-1
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_TOKEN}
+      DOCKER_API_VERSION: "1.41"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+```
+
+Put `WATCHTOWER_TOKEN=<something long and random>` in `.env`. The button then sends
+`POST /v1/update` with that token, and Watchtower checks the containers it watches and
+recreates any with a newer image. LabbyTwo needs no Docker access at all for this — the
+socket stays with Watchtower, and the token can do nothing but ask for an update of what
+Watchtower already watches. If Watchtower answers while LabbyTwo is still running, it found
+nothing newer (or is not watching LabbyTwo), and the page says so.
+
+Two things about Watchtower's flags: `--http-api-update` on its own **turns off Watchtower's
+timer**, which is why `--http-api-periodic-polls` is there; and naming the container keeps
+the button from updating everything else on the host too. Don't publish port 8080 — only
+LabbyTwo needs to reach it, over the compose network.
+
+**Start a one-shot Watchtower through the Docker API.** With no Watchtower URL set and
+Docker reachable, the button starts a throwaway `watchtower --run-once --cleanup <this
+container>` and lets that pull the new image and recreate LabbyTwo. For that it appears only
+when all three are true, and Settings says which one is missing:
+
+- Docker is reachable — the socket mounted, or a Docker connection or `DOCKER_HOST`
+  pointing somewhere,
 - LabbyTwo can identify its own container — it asks Docker about its own hostname, and
   failing that finds the container whose id starts with it, which is the same match Docker
   does for a short id and covers the containers Compose and Watchtower create,
@@ -1118,7 +1217,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-**Restart LabbyTwo** sits beside it and needs only the second of those three. Restarting
+With a socket, the helper gets the same socket bind-mounted. With a `tcp://` endpoint it
+gets `DOCKER_HOST` set to that address and joins LabbyTwo's network so the name resolves —
+but through a socket proxy this needs `CONTAINERS=1 IMAGES=1 POST=1`, which lets anything
+create a container and so buys nothing over the raw socket. Settings says so. Use the
+Watchtower API instead.
+
+**Restart LabbyTwo** sits beside it and needs only Docker access and the second of those
+three — through a proxy, `CONTAINERS=1` and `ALLOW_RESTARTS=1`. Restarting
 is useful even where Watchtower does the updating — it is the second half of installing a
 plugin, since a new DLL is read only while LabbyTwo is starting. Every container in the
 Containers card gets a **↻** for the same reason. Restart and nothing else: every outcome
@@ -1130,9 +1236,10 @@ privileged container, which is root on the host — and `:ro` does not prevent i
 protects the socket *file* rather than the API behind it. That means buttons on a page
 which, by default, has no login — and since the restart controls, anyone who can reach the
 dashboard can restart anything on the box. If you enable this, set `LABBY_AUTH_PASSWORD` too;
-Settings warns you when you have not. Watchtower on a timer gets you the same updates
-without the dashboard ever holding the keys, and is the better choice if you do not
-specifically want the button.
+Settings warns you when you have not. A socket proxy narrows it (see
+[Through a socket proxy instead](#through-a-socket-proxy-instead)), the Watchtower API takes
+creating containers off LabbyTwo's hands entirely, and Watchtower on a timer gets you the
+same updates without the dashboard holding anything at all.
 
 ## When you delete the wrong thing
 

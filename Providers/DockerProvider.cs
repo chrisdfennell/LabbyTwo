@@ -15,13 +15,14 @@ public sealed class DockerProvider : IConnectionProvider
     public string DisplayName => "Docker";
     public string Icon => "🐳";
     public string Category => "Infrastructure";
-    public string Description => "Container counts and a live list from the Docker Engine API. Needs the socket mounted into LabbyTwo's container.";
+    public string Description => "Container counts and a live list from the Docker Engine API. Needs the socket mounted into LabbyTwo's container, or a socket proxy it can reach.";
 
     public IReadOnlyList<FieldSpec> Fields =>
     [
         new("endpoint", "Endpoint", FieldKind.Text, "/var/run/docker.sock", Default: "/var/run/docker.sock", Required: true,
-            Help: "A unix socket path, a Windows named pipe (npipe://./pipe/docker_engine), or a TCP address (tcp://192.168.1.50:2375). " +
-                  "In Docker, mount the socket: -v /var/run/docker.sock:/var/run/docker.sock"),
+            Help: "A unix socket path, a Windows named pipe (npipe://./pipe/docker_engine), or a TCP address (tcp://socket-proxy:2375). " +
+                  "In Docker, either mount the socket (-v /var/run/docker.sock:/var/run/docker.sock) or, safer, run a socket " +
+                  "proxy with CONTAINERS=1 (and ALLOW_RESTARTS=1 for the restart buttons) and point this at it."),
         new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10") { Advanced = true },
     ];
 
@@ -39,6 +40,10 @@ public sealed class DockerProvider : IConnectionProvider
     {
         var endpoint = connection.Settings.Get("endpoint", "/var/run/docker.sock");
         var message = ex.GetBaseException().Message;
+
+        // Already says which proxy flag to set, which is the whole fix.
+        if (ex.GetBaseException() is DockerProxyDeniedException)
+            return message;
 
         // A path endpoint that is not there at all: either not mounted, or the wrong path.
         if (endpoint.StartsWith('/') && !File.Exists(endpoint) && !Directory.Exists(endpoint))
@@ -138,7 +143,9 @@ public sealed class DockerProvider : IConnectionProvider
     /// Restart rather than stop and start, and deliberately the only thing offered: every
     /// outcome of a restart is recoverable on its own, and a container this stopped would
     /// stay stopped until somebody found a terminal. Given the socket is root on the host,
-    /// the smallest verb that does the job is the right one.
+    /// the smallest verb that does the job is the right one. It is also the one verb a socket
+    /// proxy can grant on its own: linuxserver/socket-proxy's ALLOW_RESTARTS lets restart,
+    /// stop and kill through while POST=0 keeps container creation shut.
     ///
     /// Addressed by id where there is one — two stacks can each own a container called
     /// "app", and a name that matches twice is the kind of ambiguity you find out about by

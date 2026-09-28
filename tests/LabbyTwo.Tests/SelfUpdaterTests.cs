@@ -33,20 +33,24 @@ public sealed class SelfUpdaterTests : IDisposable
     /// <summary>A Docker Engine that answers just enough, over TCP so no socket is needed.</summary>
     private sealed class FakeDocker : IDisposable
     {
-        private readonly HttpListener _listener = new();
+        private readonly HttpListener _listener;
 
         public int Port { get; }
         public string ImageName { get; set; } = "fennch/labbytwo:latest";
         public string[] RepoDigests { get; set; } = ["fennch/labbytwo@sha256:deadbeef"];
         public string[]? Dns { get; set; }
+        public string NetworkMode { get; set; } = "labbytwo_default";
+
+        /// <summary>Calls to refuse the way a socket proxy does: HTTP 403 and HAProxy's HTML page.</summary>
+        public Func<string, string, bool> Forbid { get; set; } = (_, _) => false;
+
         public List<string> Paths { get; } = [];
         public string? CreateBody { get; private set; }
 
         public FakeDocker()
         {
-            Port = 20000 + Random.Shared.Next(10000);
-            _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
-            _listener.Start();
+            _listener = LoopbackListener.Start(out var port);
+            Port = port;
             _ = Task.Run(Loop);
         }
 
@@ -70,13 +74,25 @@ public sealed class SelfUpdaterTests : IDisposable
 
                 string body = "{}";
 
+                if (Forbid(context.Request.HttpMethod, path))
+                {
+                    var page = Encoding.UTF8.GetBytes(
+                        "<html><body><h1>403 Forbidden</h1>\nRequest forbidden by administrative rules.\n</body></html>\n");
+                    context.Response.StatusCode = 403;
+                    context.Response.ContentType = "text/html";
+                    context.Response.ContentLength64 = page.Length;
+                    await context.Response.OutputStream.WriteAsync(page);
+                    context.Response.Close();
+                    continue;
+                }
+
                 if (path.Contains("/containers/") && path.EndsWith("/json"))
                 {
                     body = JsonSerializer.Serialize(new
                     {
                         Name = "/labbytwo-labbytwo-1",
                         Config = new { Image = ImageName },
-                        HostConfig = new { Dns },
+                        HostConfig = new { Dns, NetworkMode },
                     });
                 }
                 else if (path.Contains("/images/") && path.EndsWith("/json"))
@@ -115,6 +131,7 @@ public sealed class SelfUpdaterTests : IDisposable
     private readonly string _directory;
     private readonly ServiceProvider _services;
     private readonly FakeDocker _docker = new();
+    private readonly LabbyOptions _options;
 
     public SelfUpdaterTests()
     {
@@ -126,7 +143,9 @@ public sealed class SelfUpdaterTests : IDisposable
         services.AddHttpClient();
         services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(_directory, "keys")));
         services.AddSingleton<IHostEnvironment>(new Env(_directory));
-        services.AddSingleton(Options.Create(new LabbyOptions { DatabasePath = Path.Combine(_directory, "t.db") }));
+        // Kept so a test can switch on the Watchtower API before the updater reads it.
+        _options = new LabbyOptions { DatabasePath = Path.Combine(_directory, "t.db") };
+        services.AddSingleton(Options.Create(_options));
         services.AddSingleton<IConnectionProvider>(new DockerProvider());
         services.AddSingleton<IEnumerable<IWidgetType>>([]);
         services.AddSingleton<IEnumerable<ITabKind>>([]);
@@ -226,10 +245,13 @@ public sealed class SelfUpdaterTests : IDisposable
         // every container on the host, so a bug here updates the whole NAS.
         Assert.Contains("labbytwo-labbytwo-1", command);
 
-        // Without the socket it cannot do anything at all.
-        var binds = root.GetProperty("HostConfig").GetProperty("Binds")
-            .EnumerateArray().Select(b => b.GetString()).ToArray();
-        Assert.Contains(binds, bind => bind!.EndsWith(":/var/run/docker.sock"));
+        // Without Docker it cannot do anything at all. The fake is reached over TCP, as a
+        // socket proxy would be, so Docker is handed over as DOCKER_HOST on the same network
+        // rather than as a bind mount of an address that is not a file.
+        var env = root.GetProperty("Env").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains($"DOCKER_HOST=tcp://127.0.0.1:{_docker.Port}", env);
+        Assert.Equal("labbytwo_default", root.GetProperty("HostConfig").GetProperty("NetworkMode").GetString());
+        Assert.False(root.GetProperty("HostConfig").TryGetProperty("Binds", out _));
 
         // And it should clean itself up rather than leaving a dead container behind.
         Assert.True(root.GetProperty("HostConfig").GetProperty("AutoRemove").GetBoolean());
@@ -268,6 +290,219 @@ public sealed class SelfUpdaterTests : IDisposable
         Assert.True(pull >= 0, "Watchtower was never pulled.");
         Assert.True(pull < create, "The container was created before its image was pulled.");
     }
+
+    [Fact]
+    public void A_socket_is_handed_to_the_helper_as_a_bind_mount()
+    {
+        var self = new SelfUpdater.Self("labbytwo-labbytwo-1", ImageRef.Parse("fennch/labbytwo:latest"), "sha256:x",
+            Network: "labbytwo_default");
+
+        foreach (var (endpoint, path) in new[]
+                 {
+                     ("/var/run/docker.sock", "/var/run/docker.sock"),
+                     ("unix:///run/user/1000/docker.sock", "/run/user/1000/docker.sock"),
+                 })
+        {
+            using var request = JsonDocument.Parse(SelfUpdater.OneShotRequest(endpoint, self));
+            var host = request.RootElement.GetProperty("HostConfig");
+
+            var binds = host.GetProperty("Binds").EnumerateArray().Select(b => b.GetString()!).ToArray();
+            Assert.Equal([$"{path}:/var/run/docker.sock"], binds);
+
+            // The socket brings its own reach; joining a network is only for finding a proxy.
+            Assert.False(host.TryGetProperty("NetworkMode", out _));
+
+            // The socket is where Docker is; DOCKER_HOST would only point somewhere else.
+            var env = request.RootElement.GetProperty("Env").EnumerateArray().Select(e => e.GetString()!).ToArray();
+            Assert.DoesNotContain(env, e => e.StartsWith("DOCKER_HOST="));
+
+            // Watchtower's client defaults to API 1.25, which Docker 29 refuses outright.
+            Assert.Contains($"DOCKER_API_VERSION={DockerSocket.ApiVersionNumber}", env);
+        }
+    }
+
+    [Fact]
+    public async Task Says_which_proxy_flag_is_missing_rather_than_blaming_the_image()
+    {
+        // A proxy with CONTAINERS=1 but not IMAGES=1. The image inspect used to be read as
+        // "no digest", which says the image was built here — true of nothing on this box.
+        _docker.Forbid = (_, path) => path.Contains("/images/");
+        await ConnectAsync();
+
+        var status = await Get<SelfUpdater>().StatusAsync();
+
+        Assert.False(status.Ready);
+        Assert.Contains("IMAGES=1", status.Reason);
+        Assert.DoesNotContain("built here", status.Reason);
+    }
+
+    [Fact]
+    public async Task Says_which_proxy_flag_is_missing_when_it_cannot_see_containers()
+    {
+        _docker.Forbid = (_, path) => path.Contains("/containers");
+        await ConnectAsync();
+
+        var status = await Get<SelfUpdater>().StatusAsync();
+
+        Assert.False(status.Ready);
+        Assert.Contains("CONTAINERS=1", status.Reason);
+        Assert.DoesNotContain("could not work out", status.Reason);
+    }
+
+    [Fact]
+    public async Task Status_says_the_docker_api_is_how_it_would_update_when_no_watchtower_is_configured()
+    {
+        await ConnectAsync();
+
+        var status = await Get<SelfUpdater>().StatusAsync();
+
+        Assert.Equal(SelfUpdater.UpdateMode.DockerApi, status.Mode);
+
+        // Over TCP it is probably a proxy, and the flags this needs make the proxy pointless.
+        // Worth saying before the click.
+        Assert.Contains("POST=1", status.Reason);
+    }
+
+    [Fact]
+    public async Task Status_says_watchtower_when_its_api_is_configured_even_without_docker()
+    {
+        // No Docker connection at all: with a Watchtower to ask, LabbyTwo does not need one.
+        _options.Watchtower.Url = "http://watchtower:8080";
+
+        var status = await Get<SelfUpdater>().StatusAsync();
+
+        if (File.Exists(DockerSocket.DefaultEndpoint) || Environment.GetEnvironmentVariable("DOCKER_HOST") is { Length: > 0 })
+            return;
+
+        Assert.True(status.Ready);
+        Assert.Equal(SelfUpdater.UpdateMode.WatchtowerApi, status.Mode);
+        Assert.Null(status.Self);
+    }
+
+    [Fact]
+    public async Task Status_still_identifies_the_container_in_watchtower_mode()
+    {
+        _options.Watchtower.Url = "http://watchtower:8080";
+        await ConnectAsync();
+
+        var status = await Get<SelfUpdater>().StatusAsync();
+
+        Assert.True(status.Ready);
+        Assert.Equal(SelfUpdater.UpdateMode.WatchtowerApi, status.Mode);
+        Assert.Equal("labbytwo-labbytwo-1", status.Self?.Container);
+
+        // The proxy caveat is about creating containers, which this mode never does.
+        Assert.Null(status.Reason);
+    }
+
+    /// <summary>A Watchtower HTTP API that records what it was asked and answers as told.</summary>
+    private sealed class FakeWatchtower : IDisposable
+    {
+        private readonly HttpListener _listener;
+
+        public int Port { get; }
+        public HttpStatusCode Answer { get; set; } = HttpStatusCode.OK;
+        public List<(string Method, string Path, string? Authorization)> Requests { get; } = [];
+
+        public FakeWatchtower()
+        {
+            _listener = LoopbackListener.Start(out var port);
+            Port = port;
+            _ = Task.Run(Loop);
+        }
+
+        private async Task Loop()
+        {
+            while (_listener.IsListening)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await _listener.GetContextAsync();
+                }
+                catch (Exception)
+                {
+                    return;
+                }
+
+                lock (Requests)
+                    Requests.Add((context.Request.HttpMethod, context.Request.Url?.AbsolutePath ?? "",
+                        context.Request.Headers["Authorization"]));
+
+                context.Response.StatusCode = (int)Answer;
+                context.Response.ContentLength64 = 0;
+                context.Response.Close();
+            }
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                _listener.Stop();
+                _listener.Close();
+            }
+            catch (Exception)
+            {
+                // Nothing useful to do while tearing down a test double.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Asks_watchtower_over_its_api_instead_of_creating_a_container()
+    {
+        using var watchtower = new FakeWatchtower();
+        _options.Watchtower.Url = $"http://127.0.0.1:{watchtower.Port}";
+        _options.Watchtower.Token = "s3cret";
+        await ConnectAsync();
+
+        var answer = await Get<SelfUpdater>().StartUpdateAsync();
+
+        var request = Assert.Single(watchtower.Requests);
+        Assert.Equal("POST", request.Method);
+        Assert.Equal("/v1/update", request.Path);
+        Assert.Equal("Bearer s3cret", request.Authorization);
+
+        // The whole point: nothing was created or pulled through Docker.
+        Assert.DoesNotContain(_docker.Paths, p => p.StartsWith("POST "));
+
+        // Watchtower answering while this process is still alive means it replaced nothing,
+        // and the page should say so rather than sit on "Starting…" for ever.
+        Assert.Contains("found nothing newer", answer);
+    }
+
+    [Fact]
+    public async Task Says_the_token_is_wrong_when_watchtower_refuses_it()
+    {
+        using var watchtower = new FakeWatchtower { Answer = HttpStatusCode.Unauthorized };
+        _options.Watchtower.Url = $"http://127.0.0.1:{watchtower.Port}/v1/update";
+        _options.Watchtower.Token = "wrong";
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => Get<SelfUpdater>().StartUpdateAsync());
+
+        Assert.Contains("WATCHTOWER_HTTP_API_TOKEN", failure.Message);
+        Assert.Equal("/v1/update", Assert.Single(watchtower.Requests).Path);
+    }
+
+    [Fact]
+    public async Task Says_the_api_is_off_when_watchtower_has_no_update_endpoint()
+    {
+        using var watchtower = new FakeWatchtower { Answer = HttpStatusCode.NotFound };
+        _options.Watchtower.Url = $"http://127.0.0.1:{watchtower.Port}";
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => Get<SelfUpdater>().StartUpdateAsync());
+
+        Assert.Contains("--http-api-update", failure.Message);
+    }
+
+    [Theory]
+    [InlineData("http://watchtower:8080", "http://watchtower:8080/v1/update")]
+    [InlineData("http://watchtower:8080/", "http://watchtower:8080/v1/update")]
+    [InlineData("http://watchtower:8080/v1/update", "http://watchtower:8080/v1/update")]
+    [InlineData("watchtower:8080", "http://watchtower:8080/v1/update")]
+    public void Takes_the_watchtower_address_with_or_without_the_path(string configured, string expected) =>
+        Assert.Equal(expected, SelfUpdater.WatchtowerUpdateUrl(configured));
 
     public void Dispose()
     {
