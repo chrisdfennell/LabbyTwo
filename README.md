@@ -605,6 +605,36 @@ units — resetting the appearance is not asking to be renamed.
 It is stored in the database, not the browser, so every device that opens the dashboard
 sees the same thing and a backup carries it.
 
+### Wall mode
+
+`/wall` is the dashboard for a tablet or a TV nobody sits in front of: no sidebar, one tab
+after another, and nothing reloads between them — the cards on each tab stay live, and an
+embedded page is not fetched again every time it comes round. Open it from **📺 Wall mode**
+at the bottom of the sidebar, the command palette, or **Settings → Appearance**, which also
+sets which tabs it shows and for how long. Walls that are already open pick a change up
+straight away.
+
+Touching the screen, clicking or scrolling pauses it and brings up previous, next and exit
+buttons; once it has been left alone for a while (a minute by default) it carries on. The
+arrow keys step and Escape goes back to the ordinary dashboard. The pointer hides itself
+when the mouse is still, and the screen is asked not to sleep through the browser's Wake
+Lock API, which browsers only offer over https or on localhost — elsewhere the device's own
+sleep setting decides.
+
+Every setting can be overridden in the address, so each screen can bookmark its own:
+
+| Parameter | Means | Default |
+| --- | --- | --- |
+| `tabs=home,media` | These tabs, in this order. Disabled or missing ones are skipped. | every enabled tab |
+| `seconds=30` | How long each tab stays up (3 at least). | 60 |
+| `resume=120` | Seconds left alone before a paused wall carries on; `0` never pauses. | 60 |
+| `overlay=0` | Hide the clock and service summary in the corner (`clock=0` works too). | shown |
+| `nav=1` | Keep the sidebar. | hidden |
+
+`/t/<tab>?wall=1` puts a single tab up. The tab on screen is kept in the address as `at=`,
+so when the server restarts and the page reloads itself it comes back to the same tab. With
+a password set, the wall signs in like any other page.
+
 ---
 
 ## Adding an integration

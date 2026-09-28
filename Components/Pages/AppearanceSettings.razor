@@ -3,6 +3,7 @@
 @inject AppSettingsStore AppSettings
 @inject NavigationManager Nav
 @inject FontStore Fonts
+@inject ConfigStore Config
 
 <PageTitle>Appearance · LabbyTwo</PageTitle>
 
@@ -297,6 +298,84 @@
     </div>
 </div>
 
+@* Here rather than on the settings page because it is about how the dashboard is shown,
+   and like everything else on this page it applies to every device that opens it — each
+   of which can still override any of it in the address it bookmarks. *@
+<div class="widget mt-3" id="wall-mode">
+    <div class="widget-head">
+        <h2 class="widget-title">📺 Wall mode</h2>
+        <a class="btn btn-sm btn-primary" href="wall">Open wall mode</a>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta mb-3">
+            Full screen, no sidebar, one tab after another — for a tablet or a TV on the wall.
+            Bookmark <code>/wall</code> on the device. Touching the screen pauses it, with
+            buttons to step through by hand; the arrow keys step and Escape leaves. The pointer
+            hides itself, and the screen is kept awake where the browser allows it, which
+            needs https or localhost.
+        </p>
+
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label">Tabs to show</label>
+                @if (_tabs.Count == 0)
+                {
+                    <div class="form-text">There are no enabled tabs yet.</div>
+                }
+                @foreach (var tab in _tabs)
+                {
+                    var slug = tab.Slug;
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="@($"wall-tab-{slug}")"
+                               checked="@_wall.Tabs.Contains(slug, StringComparer.OrdinalIgnoreCase)"
+                               @onchange="e => ToggleWallTabAsync(slug, e.Value is true)" />
+                        <label class="form-check-label" for="@($"wall-tab-{slug}")">
+                            @(string.IsNullOrWhiteSpace(tab.Icon) ? "" : tab.Icon + " ")@tab.Name
+                        </label>
+                    </div>
+                }
+                <div class="form-text">
+                    @(_wall.Tabs.Count == 0
+                        ? "None ticked means every enabled tab, including ones you add later."
+                        : "Shown in the order of the sidebar. Disabled tabs are skipped.")
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label" for="wall-seconds">Seconds on each tab</label>
+                <input id="wall-seconds" type="number" class="form-control mb-3" style="max-width: 10rem"
+                       min="@WallOptions.MinSeconds" max="@WallOptions.MaxSeconds" value="@_wall.Seconds"
+                       @onchange="e => SetWallNumberAsync(WallOptions.SecondsKey, e.Value?.ToString(), WallOptions.ClampSeconds)" />
+
+                <label class="form-label" for="wall-resume">After a touch, carry on once left alone for (seconds)</label>
+                <input id="wall-resume" type="number" class="form-control mb-1" style="max-width: 10rem"
+                       min="0" max="@WallOptions.MaxResumeSeconds" value="@_wall.ResumeSeconds"
+                       @onchange="e => SetWallNumberAsync(WallOptions.ResumeKey, e.Value?.ToString(), WallOptions.ClampResume)" />
+                <div class="form-text mb-3">0 means a touch never pauses it.</div>
+
+                <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" role="switch" id="wall-overlay"
+                           checked="@_wall.Overlay" @onchange="e => SetWallFlagAsync(WallOptions.OverlayKey, e.Value is true)" />
+                    <label class="form-check-label" for="wall-overlay">Clock and service status in a corner</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="wall-nav"
+                           checked="@_wall.Nav" @onchange="e => SetWallFlagAsync(WallOptions.NavKey, e.Value is true)" />
+                    <label class="form-check-label" for="wall-nav">Keep the sidebar</label>
+                </div>
+            </div>
+        </div>
+
+        <hr class="my-3" />
+        <div class="tile-meta">
+            Walls already open pick these up straight away. To give one screen its own rotation
+            whatever is set here, bookmark the whole address:
+            <a href="@_wall.ToUrl()"><code>/@_wall.ToUrl()</code></a>.
+            Any part of it can be left out, and <code>/t/<em>tab</em>?wall=1</code> puts a single tab up.
+        </div>
+    </div>
+</div>
+
 @if (_confirmReset)
 {
     <ConfirmDialog Title="Reset the appearance?"
@@ -333,10 +412,15 @@
         ("light", "Light", "Always light"),
     ];
 
+    private WallOptions _wall = WallOptions.Default;
+    private IReadOnlyList<Tab> _tabs = [];
+
     protected override async Task OnInitializedAsync()
     {
         var settings = await AppSettings.AllAsync();
         _look = Appearance.From(settings);
+        _wall = WallOptions.From(settings);
+        _tabs = [.. (await Config.TabsAsync()).Where(t => t.Enabled)];
         _units = Units.Preferences.From(settings);
         _uploaded = Fonts.Current();
     }
@@ -494,6 +578,42 @@
     private async Task SetBrandAsync(string? value) =>
         await SaveAsync(Appearance.BrandKey,
             value?.Trim() is { Length: > 0 } name ? name : Appearance.Default.BrandName);
+
+    /// <summary>
+    /// Wall settings are saved without the reload the rest of this page does: nothing about
+    /// them is drawn into the document head, and the walls that are open listen for the
+    /// change themselves.
+    /// </summary>
+    private async Task SaveWallAsync(string key, string value)
+    {
+        await AppSettings.SaveAsync(key, value);
+        _wall = WallOptions.From(await AppSettings.AllAsync());
+    }
+
+    /// <summary>
+    /// Kept in sidebar order whatever order the boxes were ticked in — the order somebody
+    /// clicks checkboxes is not a decision about the order they want to see tabs.
+    /// </summary>
+    private Task ToggleWallTabAsync(string slug, bool on)
+    {
+        var chosen = new HashSet<string>(_wall.Tabs, StringComparer.OrdinalIgnoreCase);
+        if (on)
+            chosen.Add(slug);
+        else
+            chosen.Remove(slug);
+
+        var ordered = _tabs.Where(t => chosen.Contains(t.Slug)).Select(t => t.Slug);
+        return SaveWallAsync(WallOptions.TabsKey, string.Join(',', ordered));
+    }
+
+    private async Task SetWallNumberAsync(string key, string? value, Func<int, int> clamp)
+    {
+        if (!int.TryParse(value, out var number))
+            return;
+        await SaveWallAsync(key, clamp(number).ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private Task SetWallFlagAsync(string key, bool on) => SaveWallAsync(key, on ? "true" : "false");
 
     /// <summary>
     /// The look only. The dashboard's name and the unit system are settings that live on this

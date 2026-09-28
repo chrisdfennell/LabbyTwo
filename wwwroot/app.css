@@ -1563,3 +1563,127 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 @media (prefers-reduced-motion: reduce) {
     #components-reconnect-modal .reconnect-dot { animation: none; }
 }
+
+/* ---------- wall mode ----------
+   /wall, for a tablet or a TV that nobody sits in front of. The page is the cards and
+   nothing else: no sidebar unless asked for, no buttons for editing a layout nobody can
+   reach, and the few things a wall does draw — a clock, a progress line, the controls a
+   touch brings up — sit at the edges in the same tokens as everything else, so they follow
+   the theme and the dark palette without rules of their own. */
+
+.wall-bare {
+    min-height: 100vh;
+    padding: calc(1.25rem * var(--density)) calc(1.5rem * var(--density)) 3rem;
+}
+
+/* The buttons beside a tab's title are for changing it, which is not what a wall is for.
+   The title stays: it is how somebody glancing up knows which tab they are looking at.
+   Important because the button group is usually Bootstrap's d-flex, which is. */
+.wall-stage .page-head > :not(:first-child) { display: none !important; }
+
+.wall-slide[hidden] { display: none; }
+
+/* A tab coming into view fades in rather than cutting. It is the only movement on a wall,
+   and it restarts by itself because an element returning from display:none starts its
+   animation again. */
+.wall-slide { animation: wall-in .45s ease-out; }
+
+@keyframes wall-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+
+.wall-progress {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    height: 3px;
+    width: 100%;
+    background: var(--accent);
+    opacity: .45;
+    transform-origin: left;
+    animation-name: wall-progress;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    z-index: 1040;
+    pointer-events: none;
+}
+
+@keyframes wall-progress {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+}
+
+.wall-overlay {
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    z-index: 1050;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .3rem .8rem;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    color: var(--muted);
+    font-size: .85rem;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 2px 10px var(--shadow);
+}
+.wall-overlay-item { display: inline-flex; align-items: center; gap: .35rem; white-space: nowrap; }
+.wall-health { color: var(--muted); }
+.wall-health:hover { color: var(--text); text-decoration: none; }
+.wall-health.is-down { color: var(--down); }
+.wall-clock { color: var(--text); font-weight: 600; font-size: 1rem; }
+.wall-clock:empty { display: none; }
+
+.wall-controls {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    z-index: 1060;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .35rem;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--muted);
+    box-shadow: 0 4px 16px var(--shadow);
+    font-size: .85rem;
+}
+.wall-control {
+    min-width: 2.75rem;
+    height: 2.75rem;
+    padding: 0 .9rem;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 1.25rem;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.wall-control:hover { border-color: var(--accent); text-decoration: none; color: var(--text); }
+.wall-exit { font-size: .85rem; }
+.wall-control-note { padding: 0 .4rem; white-space: nowrap; }
+
+@media (max-width: 575.98px) {
+    .wall-control-note { display: none; }
+}
+
+/* The pointer disappears once the mouse has been still for a few seconds — a wall with an
+   arrow parked in the middle of a chart looks broken. wall.js sets the class. */
+html.wall-cursor-hidden,
+html.wall-cursor-hidden * { cursor: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+    .wall-slide { animation: none; }
+    /* A bar that grows is movement too. The counter in the overlay says where the turn is. */
+    .wall-progress { display: none; }
+}

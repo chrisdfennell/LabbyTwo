@@ -4,6 +4,7 @@
 @inject ConfigStore Config
 @inject Registry Registry
 @inject NavigationManager Nav
+@using Microsoft.AspNetCore.WebUtilities
 
 <PageTitle>@(_tab?.Name ?? "LabbyTwo")</PageTitle>
 
@@ -37,13 +38,31 @@ else
 @code {
     [Parameter] public string Slug { get; set; } = "";
 
+    /// <summary>
+    /// ?wall=1 puts this one tab on a wall screen. Handled by sending the browser to the wall
+    /// page rather than by hiding the chrome here, so there is one wall and not two that
+    /// drift apart.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "wall")] public string? Wall { get; set; }
+
     private Tab? _tab;
     private ITabKind? _kind;
     private Dictionary<string, object> _parameters = [];
 
     protected override void OnInitialized() => Config.Changed += OnChanged;
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync()
+    {
+        if (WallOptions.IsOn(Wall))
+        {
+            var query = QueryHelpers.ParseQuery(Nav.ToAbsoluteUri(Nav.Uri).Query)
+                .ToDictionary(pair => pair.Key, pair => pair.Value.LastOrDefault() ?? "");
+            Nav.NavigateTo(WallOptions.UrlForTab(Slug, query), replace: true);
+            return;
+        }
+
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {

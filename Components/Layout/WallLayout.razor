@@ -1,0 +1,15 @@
+@inherits LayoutComponentBase
+
+@* For a screen on a wall: nothing round the page at all. Not BareLayout, which centres its
+   content for a login box, and not MainLayout, whose sidebar, command palette and undo toast
+   are furniture for somebody sitting in front of it. The wall page draws the sidebar itself
+   when it is asked to keep it.
+
+   The reconnect notice is not here because it does not need to be: it lives in App.razor,
+   outside every layout, so a wall shows it like any other page. *@
+@Body
+
+<div id="blazor-error-ui" class="alert alert-danger m-0 rounded-0 position-fixed bottom-0 start-0 end-0" style="display:none; z-index:1080">
+    An error has occurred. <a href="" class="alert-link">Reload</a>
+    <a class="float-end" href="" data-dismiss>✕</a>
+</div>

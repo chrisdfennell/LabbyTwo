@@ -1,0 +1,342 @@
+@page "/wall"
+@layout WallLayout
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using Microsoft.AspNetCore.WebUtilities
+@inject ConfigStore Config
+@inject AppSettingsStore AppSettings
+@inject HealthMonitor Health
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>@(Current is { } tab ? $"{tab.Name} · wall" : "Wall")</PageTitle>
+
+<div class="wall @(_paused ? "is-paused" : "")">
+    @if (_options.Nav)
+    {
+        <div class="app-shell">
+            <NavMenu />
+            <main class="app-main wall-stage">@Stage</main>
+        </div>
+    }
+    else
+    {
+        <main class="wall-stage wall-bare">@Stage</main>
+    }
+
+    @if (_rotation.Count > 1 && !_paused)
+    {
+        @* How long until the next tab, drawn by CSS alone so the server is not asked to
+           redraw a bar every second. Keyed on the turn so each new tab starts it again. *@
+        <div class="wall-progress" @key="_turn" style="animation-duration: @(_options.Seconds)s" aria-hidden="true"></div>
+    }
+
+    @if (_paused)
+    {
+        @* Only while somebody is using it, which on a touchscreen is the only way they could
+           ever reach these. *@
+        <div class="wall-controls" role="toolbar" aria-label="Wall rotation">
+            <button type="button" class="wall-control" aria-label="Previous tab" @onclick="() => StepAsync(-1)">‹</button>
+            <span class="wall-control-note">
+                Paused · carries on after @Words(_options.ResumeSeconds) untouched
+            </span>
+            <button type="button" class="wall-control" aria-label="Next tab" @onclick="() => StepAsync(1)">›</button>
+            <a class="wall-control wall-exit" href="@(Current is { } here ? $"t/{here.Slug}" : "")">Exit</a>
+        </div>
+    }
+
+    @if (_options.Overlay)
+    {
+        <div class="wall-overlay" aria-live="off">
+            @if (_rotation.Count > 1)
+            {
+                <span class="wall-overlay-item wall-position">@(_index + 1) / @_rotation.Count</span>
+            }
+            <a class="wall-overlay-item wall-health @(_downCount > 0 ? "is-down" : "")" href="settings/connections"
+               title="@(_downCount > 0 ? "Some services are down" : "Every monitored service is up")">
+                <span class="status-dot @(_downCount > 0 ? "status-down" : "status-up")"></span>
+                @(_downCount > 0 ? $"{_downCount} down" : "All up")
+            </a>
+            @* Filled in and kept current by wall.js, in the device's own time zone — the
+               server's may well be UTC in a container. Blazor renders it empty and never has
+               anything to change inside it, so its diff leaves the script's text alone. *@
+            <time class="wall-overlay-item wall-clock" data-wall-clock></time>
+        </div>
+    }
+</div>
+
+@code {
+    private WallOptions _options = WallOptions.Default;
+    private IReadOnlyDictionary<string, string> _query = new Dictionary<string, string>();
+    private IReadOnlyList<Tab> _rotation = [];
+    private readonly HashSet<string> _mounted = [];
+    private int _index = -1;
+    private int _turn;
+    private int _downCount;
+    private bool _paused;
+
+    private WallTimer _timer = new(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60), DateTimeOffset.UtcNow);
+    private readonly CancellationTokenSource _stop = new();
+    private DotNetObjectReference<Wall>? _self;
+    private bool _started;
+
+    private Tab? Current => _index >= 0 && _index < _rotation.Count ? _rotation[_index] : null;
+
+    private RenderFragment Stage => __builder =>
+    {
+        if (_rotation.Count == 0)
+        {
+            <div class="empty-state">
+                <h1 class="h5">Nothing to put on the wall</h1>
+                <p class="mb-3">There are no enabled tabs yet.</p>
+                <a class="btn btn-outline-secondary btn-sm" href="settings/tabs">Manage tabs</a>
+            </div>
+            return;
+        }
+
+        foreach (var tab in _rotation)
+        {
+            if (_mounted.Contains(tab.Id))
+            {
+                <WallSlide Tab="tab" Current="@(tab.Id == Current?.Id)" @key="tab.Id" />
+            }
+        }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Read once. Afterwards the page keeps "at" up to date in the address bar itself,
+        // and nothing else in the query changes while the wall is up.
+        _query = QueryHelpers.ParseQuery(Nav.ToAbsoluteUri(Nav.Uri).Query)
+            .ToDictionary(pair => pair.Key, pair => pair.Value.LastOrDefault() ?? "", StringComparer.OrdinalIgnoreCase);
+
+        _options = WallOptions.From(await AppSettings.AllAsync()).WithQuery(_query);
+        _rotation = WallRotation.Resolve(await Config.TabsAsync(), _options.Tabs);
+        _index = _rotation.Count == 0 ? -1 : WallRotation.Start(_rotation, _options.At);
+        if (Current is { } tab)
+            _mounted.Add(tab.Id);
+
+        _downCount = CountDown();
+        _timer = NewTimer();
+
+        Config.Changed += OnConfigChanged;
+        AppSettings.Changed += OnSettingsChanged;
+        Health.Updated += OnHealthUpdated;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _self = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("labbyWall.start", _self, Current?.Slug);
+
+        // Started here rather than in OnInitialized, which also runs for the prerender:
+        // that copy of the page is thrown away as soon as it is sent, and a loop started
+        // from it would tick for nobody until the process ended.
+        _started = true;
+        _timer = NewTimer();
+        _ = RunAsync(_stop.Token);
+    }
+
+    /// <summary>
+    /// The rotation's heartbeat. Half a second is plenty to land a step on time, and each
+    /// tick is a comparison unless something is actually due.
+    /// </summary>
+    private async Task RunAsync(CancellationToken ct)
+    {
+        using var ticker = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        try
+        {
+            while (await ticker.WaitForNextTickAsync(ct))
+                await InvokeAsync(TickAsync);
+        }
+        catch (OperationCanceledException)
+        {
+            // The page closed.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The circuit went while a tick was queued.
+        }
+    }
+
+    private async Task TickAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var paused = _timer.IsPaused(now);
+
+        if (paused != _paused)
+        {
+            _paused = paused;
+            // A fresh bar for the fresh turn the tab on screen gets once the pause is over.
+            _turn++;
+            StateHasChanged();
+        }
+
+        if (_timer.Due(now))
+            await MoveAsync(1, now);
+    }
+
+    /// <summary>Somebody touched, clicked, scrolled or typed. Called from wall.js, at most once a second.</summary>
+    [JSInvokable]
+    public Task InteractedAsync() => InvokeAsync(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        _timer.Interacted(now);
+        if (_paused != _timer.IsPaused(now))
+        {
+            _paused = _timer.IsPaused(now);
+            StateHasChanged();
+        }
+    });
+
+    /// <summary>An arrow key, or one of the buttons that appear while paused.</summary>
+    [JSInvokable]
+    public Task StepAsync(int delta) => InvokeAsync(async () =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        // Stepping by hand is using the screen, so it pauses like any other touch — the
+        // person pressing the arrow wants to look at what they stepped to.
+        _timer.Interacted(now);
+        _paused = _timer.IsPaused(now);
+        await MoveAsync(Math.Sign(delta), now);
+    });
+
+    /// <summary>Escape: back to the ordinary dashboard, on the tab that was showing.</summary>
+    [JSInvokable]
+    public Task LeaveAsync() => InvokeAsync(() =>
+        Nav.NavigateTo(Current is { } tab ? $"t/{tab.Slug}" : ""));
+
+    private async Task MoveAsync(int delta, DateTimeOffset now)
+    {
+        var next = WallRotation.Step(_rotation.Count, _index, delta);
+        var moved = next != _index;
+        _index = next;
+        _timer.Stepped(now);
+        _turn++;
+
+        if (Current is { } tab)
+            _mounted.Add(tab.Id);
+
+        StateHasChanged();
+
+        if (moved && Current is { } shown)
+            await RememberAsync(shown.Slug);
+    }
+
+    /// <summary>
+    /// Puts the tab on screen in the address bar, so the reload reconnect.js does after a
+    /// server restart comes back to the same place rather than the start of the rotation.
+    ///
+    /// Done with history.replaceState rather than NavigationManager. With no interactive
+    /// router, a NavigateTo is an enhanced navigation: a request to the server, a full
+    /// prerender of the wall and every tab on it, and a DOM merge — every step, to change
+    /// one query parameter nothing on the server reads. The circuit, this component and
+    /// every card on it survive either way; this way there is simply nothing to survive.
+    /// </summary>
+    private async Task RememberAsync(string slug)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("labbyWall.setAt", slug);
+        }
+        catch (JSDisconnectedException)
+        {
+            // Mid-reconnect. The next step writes it again.
+        }
+    }
+
+    private WallTimer NewTimer() => new(
+        TimeSpan.FromSeconds(_options.Seconds),
+        TimeSpan.FromSeconds(_options.ResumeSeconds),
+        DateTimeOffset.UtcNow);
+
+    private int CountDown() => Health.Snapshot.Count(s => s.IsUp == false);
+
+    private void OnConfigChanged() => _ = InvokeAsync(async () =>
+    {
+        var slug = Current?.Slug;
+        _rotation = WallRotation.Resolve(await Config.TabsAsync(), _options.Tabs);
+        _index = WallRotation.Reposition(_rotation, slug, _index);
+
+        // Slides for tabs that have left the rotation are let go rather than kept hidden
+        // for ever.
+        _mounted.IntersectWith(_rotation.Select(t => t.Id));
+        if (Current is { } tab)
+        {
+            _mounted.Add(tab.Id);
+            if (tab.Slug != slug)
+                await RememberAsync(tab.Slug);
+        }
+
+        StateHasChanged();
+    });
+
+    /// <summary>
+    /// A wall with no query string follows the saved defaults live, so changing how long each
+    /// tab stays up from a phone changes it on the wall without anybody touching the wall.
+    /// </summary>
+    private void OnSettingsChanged() => _ = InvokeAsync(async () =>
+    {
+        var options = WallOptions.From(await AppSettings.AllAsync()).WithQuery(_query) with { At = _options.At };
+        // Compared field by field in effect: the tab list is a list, and a record compares
+        // lists by reference, so every save would otherwise look like a change and restart
+        // the turn on screen.
+        var tabsChanged = !options.Tabs.SequenceEqual(_options.Tabs, StringComparer.OrdinalIgnoreCase);
+        if (!tabsChanged && options with { Tabs = _options.Tabs } == _options)
+            return;
+
+        _options = options;
+        if (_started)
+            _timer = NewTimer();
+        _turn++;
+
+        if (tabsChanged)
+            OnConfigChanged();
+        else
+            StateHasChanged();
+    });
+
+    private void OnHealthUpdated() => _ = InvokeAsync(() =>
+    {
+        var count = CountDown();
+        if (count == _downCount)
+            return;
+        _downCount = count;
+        if (_options.Overlay)
+            StateHasChanged();
+    });
+
+    private static string Words(int seconds) => seconds switch
+    {
+        < 60 => $"{seconds} seconds",
+        60 => "a minute",
+        _ when seconds % 60 == 0 => $"{seconds / 60} minutes",
+        _ => $"{seconds} seconds",
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        Config.Changed -= OnConfigChanged;
+        AppSettings.Changed -= OnSettingsChanged;
+        Health.Updated -= OnHealthUpdated;
+
+        _stop.Cancel();
+        _stop.Dispose();
+
+        if (_self is not null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("labbyWall.stop");
+            }
+            catch (JSDisconnectedException)
+            {
+                // The browser is already gone, and its listeners with it.
+            }
+            _self.Dispose();
+        }
+    }
+}
