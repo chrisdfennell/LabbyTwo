@@ -409,16 +409,29 @@
         _clock = new Timer(_ => _ = InvokeAsync(Refresh), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // After the first render, not in OnInitializedAsync, and never during prerender
+        // (OnAfterRender only runs once the page is live). The page is sent the moment it
+        // can be and the database panel fills in when its answer arrives. Awaiting it held
+        // the whole response behind the database, which is exactly wrong for the page you
+        // open when LabbyTwo is struggling: a slow disk made it time out instead of saying so.
+        if (firstRender)
+            _ = LoadDatabaseAsync();
+    }
+
+    private async Task LoadDatabaseAsync()
     {
         try
         {
-            // Both run on the thread pool inside the service, so a slow disk delays this
-            // panel, not the circuit.
             _names = await Health.NamesAsync(_gone.Token);
             _db = await Health.DatabaseAsync(_gone.Token);
+            await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
         {
         }
     }
