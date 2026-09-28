@@ -36,6 +36,7 @@ public static class TestHost
         services.AddSingleton<AlertRuleStore>();
         services.AddSingleton<HistoryStore>();
         services.AddSingleton<ConfigStore>();
+        services.AddSingleton<TemplateStore>();
 
         return services.BuildServiceProvider();
     }

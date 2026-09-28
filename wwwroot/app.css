@@ -764,6 +764,15 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .card-picker button:disabled { opacity: .55; }
 .card-picker .picker-title { font-weight: 600; display: flex; gap: .5rem; align-items: center; }
 .card-picker .picker-desc { color: var(--muted); font-size: .8rem; margin-top: .25rem; }
+.card-picker .picker-meta { display: block; color: var(--muted); font-size: .72rem; margin-top: .35rem; opacity: .8; }
+.picker-section {
+    color: var(--muted);
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: .5rem;
+}
 
 .empty-state {
     border: 1px dashed var(--edge);

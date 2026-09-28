@@ -6,6 +6,8 @@
 @inject Registry Registry
 @inject NavigationManager Nav
 @inject ShareTransfer Share
+@inject TabTemplates Templates
+@inject TemplateStore TemplateStore
 
 <PageTitle>Tabs · LabbyTwo</PageTitle>
 
@@ -92,8 +94,77 @@ else
                                    href="@($"api/share/tab?id={tab.Id}")">Export</a>
                                 <button class="btn btn-sm btn-outline-secondary" title="Make another one like this"
                                         disabled="@_busy" @onclick="() => DuplicateAsync(tab)">Duplicate</button>
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        title="Keep a copy of this tab to start new tabs from"
+                                        @onclick="() => AskSaveTemplate(tab)">Save as template</button>
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(tab)">Edit</button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = tab">✕</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@* Templates live beside the tabs they come from rather than on a page of their own: saving
+   one starts from a row above, and using one starts from + Add tab. *@
+<div class="d-flex align-items-center justify-content-between mt-4 mb-2 gap-2 flex-wrap">
+    <h2 class="h6 mb-0">📑 Templates</h2>
+    <label class="btn btn-sm btn-outline-secondary mb-0" title="Add a template somebody sent you">
+        Import a template…
+        <InputFile class="d-none" accept=".json" OnChange="ImportTemplateAsync" />
+    </label>
+</div>
+
+@if (_templateError is { Length: > 0 } templateError)
+{
+    <div class="alert alert-danger py-2">@templateError</div>
+}
+
+@if (_templates.Count == 0)
+{
+    <p class="tile-meta">
+        None yet. <strong>Save as template</strong> on any tab keeps a copy of it — its settings, its cards and
+        their layout — and it appears under <strong>+ Add tab</strong> to start new tabs from.
+    </p>
+}
+else
+{
+    <div class="panel">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Template</th>
+                    <th>Holds</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var template in _templates)
+                {
+                    <tr>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <span>@(string.IsNullOrWhiteSpace(template.Icon) ? "📑" : template.Icon)</span>
+                                <span>@template.Name</span>
+                            </div>
+                            @if (template.Description is { Length: > 0 } description)
+                            {
+                                <div class="tile-meta">@description</div>
+                            }
+                        </td>
+                        <td class="tile-meta">@Holds(template)</td>
+                        <td class="text-end">
+                            <div class="d-flex gap-1 justify-content-end">
+                                <button class="btn btn-sm btn-outline-primary" disabled="@_busy"
+                                        @onclick="() => StartFromTemplateAsync(template)">New tab</button>
+                                <a class="btn btn-sm btn-outline-secondary" title="Save this template to a file to share it"
+                                   href="@($"api/share/template?id={template.Id}")">Export</a>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => AskEditTemplate(template)">Edit</button>
+                                <button class="btn btn-sm btn-outline-danger" title="Delete this template"
+                                        @onclick="() => _confirmDeleteTemplate = template">✕</button>
                             </div>
                         </td>
                     </tr>
@@ -106,6 +177,26 @@ else
 @if (_picking)
 {
     <Modal Title="What kind of tab?" OnClose="() => _picking = false">
+        @* Your own first: somebody who saved a template did it to reach for it here, and
+           the built-in kinds are the same list every time. *@
+        @if (_templates.Count > 0)
+        {
+            <div class="picker-section">Your templates</div>
+            <div class="card-picker mb-3">
+                @foreach (var template in _templates)
+                {
+                    <button type="button" disabled="@_busy" @onclick="() => StartFromTemplateAsync(template)">
+                        <span class="picker-title">@(string.IsNullOrWhiteSpace(template.Icon) ? "📑" : template.Icon) @template.Name</span>
+                        <span class="picker-desc">@(template.Description is { Length: > 0 } d ? d : Holds(template))</span>
+                        @if (template.Description.Length > 0)
+                        {
+                            <span class="picker-meta">@Holds(template)</span>
+                        }
+                    </button>
+                }
+            </div>
+            <div class="picker-section">Start empty</div>
+        }
         <div class="card-picker">
             @foreach (var kind in Registry.TabKinds)
             {
@@ -149,6 +240,127 @@ else
     </Modal>
 }
 
+@if (_templateTab is not null || _templateEditing is not null)
+{
+    <Modal Title="@(_templateEditing is null ? $"Save “{_templateTab!.Name}” as a template" : "Edit template")"
+           Size="" OnClose="CancelTemplate">
+        <ChildContent>
+            @if (_templateEditing is null)
+            {
+                <p class="tile-meta">
+                    Keeps a copy of this tab as it is now — its settings, every card and their layout. Connections
+                    are kept by name and kind, never their passwords, and matched again when you start a tab from it.
+                </p>
+            }
+            <div class="row g-3 mb-3">
+                <div class="col-8">
+                    <label class="form-label" for="template-name">Name</label>
+                    <input id="template-name" class="form-control" @bind="_templateName" @bind:event="oninput" />
+                </div>
+                <div class="col-4">
+                    <label class="form-label" for="template-icon">Icon</label>
+                    <EmojiPicker Value="@_templateIcon" ValueChanged="value => _templateIcon = value" />
+                </div>
+            </div>
+            <label class="form-label" for="template-description">Description</label>
+            <textarea id="template-description" class="form-control" rows="2"
+                      placeholder="What it is for, so the picker can say"
+                      @bind="_templateDescription" @bind:event="oninput"></textarea>
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="CancelTemplate">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveTemplateAsync"
+                    disabled="@(_busy || string.IsNullOrWhiteSpace(_templateName))">
+                @(_templateEditing is null ? "Save template" : "Save")
+            </button>
+        </Footer>
+    </Modal>
+}
+
+@if (_prepared is { } prepared)
+{
+    <Modal Title="@($"New tab from “{prepared.Template.Name}”")" OnClose="() => _prepared = null">
+        <ChildContent>
+            <div class="row g-3 mb-3">
+                <div class="col-8">
+                    <label class="form-label" for="from-template-name">Name</label>
+                    <input id="from-template-name" class="form-control" @bind="_name" @bind:event="oninput" />
+                </div>
+                <div class="col-4">
+                    <label class="form-label" for="from-template-icon">Icon</label>
+                    <EmojiPicker Value="@_icon" ValueChanged="value => _icon = value" />
+                </div>
+            </div>
+
+            @if (prepared.Warnings.Count > 0)
+            {
+                <div class="alert alert-warning py-2">
+                    <ul class="mb-0 small ps-3">
+                        @foreach (var warning in prepared.Warnings)
+                        {
+                            <li>@warning</li>
+                        }
+                    </ul>
+                </div>
+            }
+
+            @{ var asking = prepared.Bindings.Where(b => b.Match.How != ShareTransfer.MatchKind.Exact).ToList(); }
+            @if (asking.Count > 0)
+            {
+                <p class="tile-meta mb-2">
+                    Cards in this template watched connections on the dashboard it was made from. Say what they
+                    should watch here.
+                </p>
+                @foreach (var binding in asking)
+                {
+                    var id = $"bind-{prepared.Bindings.IndexOf(binding)}";
+                    <div class="template-binding mb-3">
+                        <label class="form-label mb-1" for="@id">@Question(binding)</label>
+                        @if (binding.Match.Candidates.Count > 0)
+                        {
+                            <select id="@id" class="form-select form-select-sm"
+                                    value="@_choices.GetValueOrDefault(binding.Reference, "")"
+                                    @onchange="e => _choices[binding.Reference] = e.Value?.ToString() ?? string.Empty">
+                                @foreach (var candidate in binding.Match.Candidates)
+                                {
+                                    <option value="@candidate.Id">@candidate.Name</option>
+                                }
+                                <option value="">Leave unbound</option>
+                            </select>
+                            <div class="form-text">@Hint(binding)</div>
+                        }
+                        else
+                        {
+                            <div class="form-text">@Hint(binding)</div>
+                        }
+                    </div>
+                }
+            }
+
+            @{ var matched = prepared.Bindings.Where(b => b.Match.How == ShareTransfer.MatchKind.Exact).ToList(); }
+            @if (matched.Count > 0)
+            {
+                <p class="tile-meta mb-0">
+                    Matched by name: @string.Join(", ", matched.Select(b => b.Match.Found!.Name)).
+                </p>
+            }
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _prepared = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="CreateFromTemplateAsync"
+                    disabled="@(_busy || string.IsNullOrWhiteSpace(_name))">Create tab</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_confirmDeleteTemplate is not null)
+{
+    <ConfirmDialog Title="Delete this template?"
+                   Message="@($"“{_confirmDeleteTemplate.Name}” will be removed. Tabs already made from it stay as they are.")"
+                   OnCancel="() => _confirmDeleteTemplate = null"
+                   OnConfirm="DeleteTemplateAsync" />
+}
+
 @if (_confirmDelete is not null)
 {
     <ConfirmDialog Title="Delete this tab?"
@@ -179,6 +391,18 @@ else
     private ConfigStore.TabOrder? _confirmSort;
     private string? _notice;
 
+    private IReadOnlyList<TabTemplate> _templates = [];
+    private Dictionary<string, string> _holds = [];
+    private Tab? _templateTab;
+    private TabTemplate? _templateEditing;
+    private TabTemplate? _confirmDeleteTemplate;
+    private string _templateName = "";
+    private string _templateIcon = "";
+    private string _templateDescription = "";
+    private string? _templateError;
+    private TabTemplates.Preparation? _prepared;
+    private Dictionary<ShareTransfer.ConnectionRef, string> _choices = [];
+
     private string _name = "";
     private string _icon = "";
     private bool _enabled = true;
@@ -187,6 +411,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Config.Changed += OnChanged;
+        TemplateStore.Changed += OnChanged;
         await LoadAsync();
     }
 
@@ -194,6 +419,205 @@ else
     {
         _tabs = await Config.TabsAsync();
         _widgets = await Config.WidgetsAsync();
+        _templates = await TemplateStore.AllAsync();
+        _holds = _templates.ToDictionary(t => t.Id, Describe);
+    }
+
+    // ---- templates ---------------------------------------------------------------------
+
+    /// <summary>"Dashboard · 6 cards", worked out once per load rather than per render.</summary>
+    private string Describe(TabTemplate template)
+    {
+        try
+        {
+            var contents = TabTemplates.Contents(template);
+            var kind = Registry.TabKind(contents.Tab!.Kind)?.DisplayName ?? contents.Tab.Kind;
+            var cards = contents.Widgets.Count;
+            return cards == 0 ? kind : $"{kind} · {cards} card{(cards == 1 ? "" : "s")}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    private string Holds(TabTemplate template) => _holds.GetValueOrDefault(template.Id, "");
+
+    private void AskSaveTemplate(Tab tab)
+    {
+        _templateError = null;
+        _templateEditing = null;
+        _templateTab = tab;
+        _templateName = tab.Name;
+        _templateIcon = tab.Icon;
+        _templateDescription = "";
+    }
+
+    private void AskEditTemplate(TabTemplate template)
+    {
+        _templateError = null;
+        _templateTab = null;
+        _templateEditing = template;
+        _templateName = template.Name;
+        _templateIcon = template.Icon;
+        _templateDescription = template.Description;
+    }
+
+    private void CancelTemplate()
+    {
+        _templateTab = null;
+        _templateEditing = null;
+    }
+
+    private async Task SaveTemplateAsync()
+    {
+        _busy = true;
+        try
+        {
+            if (_templateEditing is { } editing)
+            {
+                await Templates.RenameAsync(editing.Id, _templateName, _templateIcon, _templateDescription);
+            }
+            else if (_templateTab is { } tab)
+            {
+                var saved = await Templates.SaveFromTabAsync(tab.Id, _templateName, _templateIcon, _templateDescription);
+                _notice = $"Saved “{saved.Name}” as a template. It is under + Add tab now.";
+            }
+            CancelTemplate();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _templateError = ex.GetBaseException().Message;
+            CancelTemplate();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteTemplateAsync()
+    {
+        if (_confirmDeleteTemplate is { } template)
+            await Templates.DeleteAsync(template.Id);
+        _confirmDeleteTemplate = null;
+    }
+
+    private async Task ImportTemplateAsync(InputFileChangeEventArgs e)
+    {
+        _templateError = null;
+        try
+        {
+            // A template is a few kilobytes; the cap only guards against a mistaken pick.
+            await using var stream = e.File.OpenReadStream(2 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var added = await Templates.ImportAsync(await reader.ReadToEndAsync());
+            _notice = $"Added the “{added.Name}” template.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _templateError = ex.GetBaseException().Message;
+        }
+    }
+
+    /// <summary>
+    /// Straight to the new tab when every connection matched by name — there is nothing to
+    /// ask. Anything less certain stops at a short step that shows the guess and lets it be
+    /// changed, because a card quietly watching the wrong NAS is worse than one that asks.
+    /// </summary>
+    private async Task StartFromTemplateAsync(TabTemplate template)
+    {
+        _picking = false;
+        _templateError = null;
+        _busy = true;
+        try
+        {
+            var prepared = await Templates.PrepareAsync(template.Id);
+            _name = template.Name;
+            _icon = template.Icon;
+
+            if (!prepared.NeedsReview)
+            {
+                await CreateAsync(prepared, []);
+                return;
+            }
+
+            _choices = prepared.Bindings
+                .Where(b => b.Match.How != ShareTransfer.MatchKind.Exact)
+                .ToDictionary(b => b.Reference, b => b.Match.Found?.Id ?? "");
+            _prepared = prepared;
+        }
+        catch (Exception ex)
+        {
+            _templateError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateFromTemplateAsync()
+    {
+        if (_prepared is not { } prepared)
+            return;
+
+        _busy = true;
+        try
+        {
+            await CreateAsync(prepared, _choices);
+        }
+        catch (Exception ex)
+        {
+            _templateError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+            _prepared = null;
+        }
+    }
+
+    private async Task CreateAsync(TabTemplates.Preparation prepared, Dictionary<ShareTransfer.ConnectionRef, string> choices)
+    {
+        var result = await Templates.CreateTabAsync(prepared.Template.Id, _name, _icon, choices);
+        if (result.TabSlug is { Length: > 0 } slug)
+            Nav.NavigateTo($"t/{slug}");
+    }
+
+    private string ProviderName(ShareTransfer.ConnectionRef reference) =>
+        Registry.Provider(reference.Provider)?.DisplayName ?? reference.Provider;
+
+    /// <summary>"The “NAS” card needs a QNAP connection", in whatever number it comes in.</summary>
+    private string Question(ShareTransfer.Binding binding)
+    {
+        var who = binding.UsedBy.Count switch
+        {
+            1 => binding.UsedBy[0],
+            2 => $"{binding.UsedBy[0]} and {binding.UsedBy[1]}",
+            var n => $"{binding.UsedBy[0]} and {n - 1} more",
+        };
+        var verb = binding.UsedBy.Count == 1 ? "needs" : "need";
+        return $"{char.ToUpperInvariant(who[0])}{who[1..]} {verb} a {ProviderName(binding.Reference)} connection";
+    }
+
+    private string Hint(ShareTransfer.Binding binding)
+    {
+        var reference = binding.Reference;
+        var provider = ProviderName(reference);
+        return binding.Match.How switch
+        {
+            ShareTransfer.MatchKind.OnlyOne =>
+                $"Use {binding.Match.Found!.Name}? It is the only {provider} connection here; the template's was called “{reference.Name}”.",
+            ShareTransfer.MatchKind.Several =>
+                $"None is called “{reference.Name}”, as the template's was, so pick one — or leave it unbound and point it at one later.",
+            _ when Registry.Provider(reference.Provider) is null =>
+                $"The “{reference.Provider}” provider is not installed here, so it will be added unbound and say so on the card.",
+            _ =>
+                $"You have no {provider} connection, so it will be added unbound and say so on the card until you point it at one.",
+        };
     }
 
     private void AskSort(ConfigStore.TabOrder order)
@@ -307,5 +731,9 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Config.Changed -= OnChanged;
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        TemplateStore.Changed -= OnChanged;
+    }
 }

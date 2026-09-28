@@ -327,6 +327,21 @@ public sealed class Db
             last_sent_at INTEGER,
             last_error   TEXT NOT NULL DEFAULT '')
         """,
+
+        // 14 — tabs saved as templates to start new tabs from. Content is a shared-tab file
+        // as text, so what a template can hold grows with that format rather than with this
+        // table. Self-contained on purpose — one CREATE ... IF NOT EXISTS that reads no other
+        // table — so it can sit before or after any other branch's migration when the two
+        // meet, and running it twice is harmless.
+        """
+        CREATE TABLE IF NOT EXISTS tab_templates (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            icon        TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            content     TEXT NOT NULL DEFAULT '{}',
+            created_at  INTEGER NOT NULL)
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
