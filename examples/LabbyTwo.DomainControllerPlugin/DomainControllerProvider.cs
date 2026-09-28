@@ -113,9 +113,12 @@ public sealed class DomainControllerProvider : IConnectionProvider
         {
             // All four at once. They are independent questions and asking them in sequence
             // would make a slow probe out of four fast ones.
-            var reachable = await Task.WhenAll(
+            var answers = await Task.WhenAll(
                 Services.Select(async service => (service.Key, service.Label,
-                    Open: await OpenAsync(host, service.Port, timeout, ct))));
+                    State: await OpenAsync(host, service.Port, timeout, ct))));
+            var reachable = answers
+                .Select(answer => (answer.Key, answer.Label, Open: answer.State == PortState.Open))
+                .ToArray();
 
             var metrics = new Dictionary<string, double>();
             foreach (var (key, _, open) in reachable)
@@ -133,8 +136,7 @@ public sealed class DomainControllerProvider : IConnectionProvider
             {
                 stopwatch.Stop();
                 return ProbeResult.Down(stopwatch.Elapsed,
-                    $"Nothing answered on 389, 636, 88 or 445. Either {host} is not a domain controller, "
-                    + "or it is not reachable from here.");
+                    ExplainSilence(host, [.. answers.Select(answer => answer.State)], timeout));
             }
 
             var notes = new List<string>();
@@ -208,7 +210,10 @@ public sealed class DomainControllerProvider : IConnectionProvider
             ? "in step"
             : $"{Math.Abs(offset):0.#}s {(offset > 0 ? "ahead" : "behind")}";
 
-    private static async Task<bool> OpenAsync(string host, int port, int timeoutMs, CancellationToken ct)
+    /// <summary>How a port answered. Only Open counts, but the others say where to look.</summary>
+    internal enum PortState { Open, Refused, TimedOut, Unreachable, Failed }
+
+    private static async Task<PortState> OpenAsync(string host, int port, int timeoutMs, CancellationToken ct)
     {
         try
         {
@@ -217,11 +222,58 @@ public sealed class DomainControllerProvider : IConnectionProvider
             window.CancelAfter(timeoutMs);
 
             await client.ConnectAsync(host, port, window.Token);
-            return client.Connected;
+            return client.Connected ? PortState.Open : PortState.Failed;
         }
-        catch (Exception)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return false;   // refused, filtered or timed out all mean the same thing here
+            return PortState.TimedOut;
         }
+        catch (SocketException ex)
+        {
+            return ex.SocketErrorCode switch
+            {
+                SocketError.ConnectionRefused => PortState.Refused,
+                SocketError.TimedOut => PortState.TimedOut,
+                SocketError.HostUnreachable or SocketError.NetworkUnreachable
+                    or SocketError.HostDown => PortState.Unreachable,
+                _ => PortState.Failed,
+            };
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return PortState.Failed;
+        }
+    }
+
+    /// <summary>
+    /// Why none of the four answered, in terms of what to go and check. "Not a DC, or not
+    /// reachable" covered three problems with three different fixes: a refusal comes from a
+    /// machine that is there and simply is not a domain controller, a timeout is something
+    /// dropping the packets (on a DC that is almost always its own Windows Firewall), and
+    /// "no route" is this container's network, not the DC at all.
+    /// </summary>
+    internal static string ExplainSilence(string host, IReadOnlyList<PortState> states, int timeoutMs)
+    {
+        if (states.All(state => state == PortState.Refused))
+            return $"{host} is up but refused 389, 636, 88 and 445, so it is not running Active Directory. "
+                   + "Check that this is the domain controller's address.";
+
+        if (states.Any(state => state == PortState.Unreachable))
+            return $"No route to {host} from this container, so the check never left LabbyTwo's network. "
+                   + "Check the address, and that the container can reach that subnet: a Docker network "
+                   + "using the same range as the LAN will swallow it.";
+
+        if (states.All(state => state == PortState.TimedOut))
+            return $"Nothing came back from {host} on 389, 636, 88 or 445 within {timeoutMs / 1000.0:0.#}s, "
+                   + "not even a refusal, so something there is dropping the connections. First check this "
+                   + "is the domain controller's address: ipconfig on the DC lists it, and another device "
+                   + "on that address looks exactly like this. If it is, the DC's Windows Firewall is the "
+                   + "usual cause (Get-NetConnectionProfile on the DC should say DomainAuthenticated).";
+
+        var refused = states.Count(state => state == PortState.Refused);
+        var silent = states.Count(state => state == PortState.TimedOut);
+        return $"Nothing answered on 389, 636, 88 or 445 at {host}: {refused} refused and {silent} timed out. "
+               + "A refusal means the machine is there without that service; a timeout means a firewall "
+               + "is dropping it.";
     }
 }
