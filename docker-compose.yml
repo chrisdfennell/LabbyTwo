@@ -74,6 +74,8 @@ services:
       # else in LabbyTwo works without it.
       # On a QNAP or Synology the socket may live elsewhere — mount the real path onto
       # /var/run/docker.sock and the provider's default still works.
+      # Safer than this mount: a socket proxy that allows only what LabbyTwo uses — see
+      # "safer Docker access" in docker-compose.override.yml.example.
       # - /var/run/docker.sock:/var/run/docker.sock:ro
 
 volumes:

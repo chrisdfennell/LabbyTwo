@@ -48,6 +48,26 @@ public sealed class LabbyOptions
     /// <summary><see cref="HourlyRetentionDays"/>, never shorter than <see cref="RawRetention"/>.</summary>
     public TimeSpan HourlyRetention => TimeSpan.FromDays(Math.Max(HourlyRetentionDays, Math.Max(1, RetentionDays)));
 
+    /// <summary>
+    /// A long-running Watchtower's HTTP API, for "Update now" to trigger instead of
+    /// creating a Watchtower container itself. Set in the environment
+    /// (<c>Labby__Watchtower__Url</c>, <c>Labby__Watchtower__Token</c>) rather than in the
+    /// database, because the token is a credential for something that holds the Docker
+    /// socket and a config export should not carry it.
+    /// </summary>
+    public WatchtowerSettings Watchtower { get; set; } = new();
+
+    public sealed class WatchtowerSettings
+    {
+        /// <summary>Where the API is, like <c>http://watchtower:8080</c>; the path is added.</summary>
+        public string Url { get; set; } = "";
+
+        /// <summary>Watchtower's <c>WATCHTOWER_HTTP_API_TOKEN</c>, sent as a bearer token.</summary>
+        public string Token { get; set; } = "";
+
+        public bool Enabled => !string.IsNullOrWhiteSpace(Url);
+    }
+
     public sealed class AuthSettings
     {
         public string Username { get; set; } = "labby";

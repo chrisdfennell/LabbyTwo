@@ -32,7 +32,9 @@ public sealed class DockerLabelsEndpoints : IEndpointExtension
         try
         {
             var json = await DockerSocket.GetAsync(
-                string.IsNullOrWhiteSpace(endpoint) ? DockerSocket.DefaultEndpoint : endpoint,
+                // DOCKER_HOST first, so an install that reaches Docker through a socket proxy
+                // needs no ?endpoint= on the link.
+                string.IsNullOrWhiteSpace(endpoint) ? DockerSocket.EnvironmentEndpoint : endpoint,
                 TimeSpan.FromSeconds(Math.Clamp(timeout, 1, 120)),
                 // all=1 so a container that is stopped still shows up. Something you turned
                 // off for the afternoon should not vanish from the dashboard you are in the
@@ -46,6 +48,11 @@ public sealed class DockerLabelsEndpoints : IEndpointExtension
             context.Response.Headers.ContentDisposition = "attachment; filename=containers.json";
             return Results.Content(json, "application/json");
         }
+        catch (DockerProxyDeniedException denied)
+        {
+            // Docker is reachable; a proxy said no, and its message names the flag.
+            return Results.Content(denied.Message, "text/plain", statusCode: 502);
+        }
         catch (Exception ex)
         {
             // The message a person can act on. Nine times in ten this is the socket not
@@ -54,7 +61,9 @@ public sealed class DockerLabelsEndpoints : IEndpointExtension
                 $"Could not read the Docker socket: {ex.GetBaseException().Message}\n\n"
                 + "LabbyTwo needs the socket mounted to see containers. In docker-compose.override.yml:\n"
                 + "    volumes:\n"
-                + "      - /var/run/docker.sock:/var/run/docker.sock:ro\n",
+                + "      - /var/run/docker.sock:/var/run/docker.sock:ro\n\n"
+                + "Or run a socket proxy with CONTAINERS=1 and set DOCKER_HOST=tcp://socket-proxy:2375 on LabbyTwo "
+                + "(or add ?endpoint=tcp://socket-proxy:2375 to this link).\n",
                 "text/plain",
                 statusCode: 502);
         }
