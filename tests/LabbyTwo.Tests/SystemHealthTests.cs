@@ -292,6 +292,25 @@ public sealed class SystemHealthTests : IDisposable
         Assert.Contains("no working DNS", finding.Text);
     }
 
+    [Fact]
+    public void A_login_lockout_in_the_last_day_is_reported_with_its_address()
+    {
+        var recent = new LoginThrottle.Status(12, 30, 1, null, Now - TimeSpan.FromMinutes(5), "203.0.113.9");
+        var finding = Assert.Single(SystemHealth.Assess(
+            Live(Healthy(Now)) with { Logins = recent }, null, TimeSpan.FromSeconds(30)));
+        Assert.Equal("Sign-in", finding.Area);
+        Assert.Contains("203.0.113.9", finding.Text);
+        Assert.Contains("12 failed", finding.Text);
+
+        // Yesterday's is old news, and failures that never earned a lockout are just typos.
+        Assert.Empty(SystemHealth.Assess(
+            Live(Healthy(Now)) with { Logins = recent with { LastLockAt = Now - TimeSpan.FromDays(2) } },
+            null, TimeSpan.FromSeconds(30)));
+        Assert.Empty(SystemHealth.Assess(
+            Live(Healthy(Now)) with { Logins = new LoginThrottle.Status(3, 0, 0, null, null, null) },
+            null, TimeSpan.FromSeconds(30)));
+    }
+
     // ---- DNS ---------------------------------------------------------------------------
 
     [Fact]

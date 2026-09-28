@@ -815,6 +815,8 @@ There is very little, on purpose. Everything specific to *your* lab lives in the
 |---|---|---|
 | Login username | `LABBY_AUTH_USERNAME` | `labby` |
 | Login password | `LABBY_AUTH_PASSWORD` | empty — **login disabled** |
+| Trusted reverse proxies | `LABBY_TRUSTED_PROXIES` | empty — only loopback |
+| Client address header | `LABBY_CLIENT_IP_HEADER` | `X-Forwarded-For` |
 | Probe interval, seconds | `LABBY_PROBE_SECONDS` | `30` |
 | Failures before "down" | `LABBY_FAILURES_BEFORE_DOWN` | `2` |
 | Full-resolution history, days | `LABBY_RETENTION_DAYS` | `7` |
@@ -839,8 +841,42 @@ which are kept separately and are not affected by either setting.
 
 Login is off until you set a password. That's fine on a trusted LAN and not fine anywhere
 else — LabbyTwo can hold credentials for your NAS, so don't port-forward it. Put it behind
-a reverse proxy with a certificate if you want it reachable from outside; it already
-honours `X-Forwarded-Proto` and `X-Forwarded-For`.
+a reverse proxy with a certificate if you want it reachable from outside.
+
+**Wrong passwords are slowed down.** Each client address gets five free attempts; after
+that every failure locks it out for twice as long as the last — 1 second, 2, 4, … up to
+15 minutes — and the login page says how long to wait. Signing in successfully clears the
+count for that address, and an address that stays quiet for an hour starts afresh. Across
+all addresses together, more than 50 failures in 10 minutes pauses every sign-in for a
+minute after each further failure, which holds even a botnet to about one guess a minute.
+While that is happening you cannot sign in either, but a browser already signed in stays
+signed in. Lockouts are logged as warnings with the address, and the health page reports
+the last day's. The counts are kept in memory, so a restart forgets them.
+
+**Behind a reverse proxy.** The throttle counts against the client's address, and behind a
+proxy the address LabbyTwo sees is the proxy's. `X-Forwarded-For` would say who is really
+connecting, but anyone can send that header, so LabbyTwo believes it only from the proxies
+you name in `LABBY_TRUSTED_PROXIES` — addresses or CIDR ranges, separated by commas — and
+from loopback. The same goes for `X-Forwarded-Proto`. Left empty, every visitor through
+the proxy shares one address, and one of them guessing locks out all of them, you included.
+
+For **Cloudflare Tunnel**, trust the `cloudflared` container and read Cloudflare's own
+header, which it sets itself rather than appending to what the visitor sent:
+
+```env
+# cloudflared's address on the Docker network it shares with LabbyTwo
+# (docker network inspect <network>), or that network's whole range
+LABBY_TRUSTED_PROXIES=172.18.0.0/16
+LABBY_CLIENT_IP_HEADER=CF-Connecting-IP
+```
+
+Name as little as you can. Anything in that list can choose the address its requests are
+counted against, so a range that also covers devices on your LAN lets them do the same —
+the overall limit still applies, but the per-address one no longer does. A fixed subnet
+for the network `cloudflared` and LabbyTwo share, or `cloudflared` on the same host with a
+fixed address, keeps it to the tunnel. For Caddy, nginx or Traefik leave the header as
+`X-Forwarded-For` and trust the proxy's address. An entry that is not an address or a
+range is ignored with a warning in the log.
 
 `GET /healthz` answers `200 ok` without authentication, and the image has a matching
 `HEALTHCHECK`.

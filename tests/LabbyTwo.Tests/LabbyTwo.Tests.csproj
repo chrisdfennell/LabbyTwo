@@ -9,6 +9,10 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <!-- The real app in memory, for tests that have to go through its whole pipeline:
+         the login throttle is only as good as the form, antiforgery and forwarded-header
+         wiring in front of it. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.5" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="MQTTnet.Server" Version="5.2.0.1603" />
     <PackageReference Include="xunit" Version="2.9.3" />
