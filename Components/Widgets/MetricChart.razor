@@ -1,6 +1,8 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
 @using System.Globalization
@@ -8,6 +10,13 @@
 @if (Context.Connection is null)
 {
     <p class="tile-meta mb-0">Not bound to a connection.</p>
+}
+else if (!_load.Ready)
+{
+    @* Drawn at once and replaced when the history arrives, rather than the page waiting
+       for it. Not "nothing recorded": that is a claim about the database, which has not
+       answered yet. *@
+    <div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
 }
 else if (_primary.Count < 2)
 {
@@ -74,6 +83,7 @@ else
 
     [Parameter] public int Height { get; set; } = 150;
 
+    private BackgroundLoad _load = default!;
     private IReadOnlyList<HistoryStore.Sample> _primary = [];
     private IReadOnlyList<string> _available = [];
     private string _primaryPath = "";
@@ -98,31 +108,66 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
         _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    private sealed record Loaded(
+        IReadOnlyList<HistoryStore.Sample> Primary,
+        IReadOnlyList<HistoryStore.Sample> Compare,
+        IReadOnlyList<string> Available);
+
+    /// <summary>
+    /// Starts the history load without waiting for it; see BackgroundLoad. Everything the
+    /// query needs is copied out of the parameters first, because the fetch runs on the
+    /// thread pool while the parameters belong to the render thread.
+    /// </summary>
+    private void Load(bool refresh)
     {
-        if (Context.Connection is null)
+        if (Context.Connection is not { } connection)
             return;
 
-        var window = TimeSpan.FromHours(Hours);
-        _primary = await History.SamplesAsync(Context.Connection.Id, Metric, window);
+        var id = connection.Id;
+        var metric = Metric;
+        var compareMetric = CompareMetric;
+        var hours = Hours;
+        var window = TimeSpan.FromHours(hours);
+
+        async Task<Loaded> Fetch(CancellationToken ct)
+        {
+            var primary = await Series.SamplesAsync(id, metric, window, ct);
+            if (primary.Count < 2)
+                return new Loaded(primary, [], await Offload.Run(c => History.MetricsAsync(id, c), ct));
+
+            var compare = compareMetric is { Length: > 0 }
+                ? await Series.SamplesAsync(id, compareMetric, window, ct)
+                : [];
+            return new Loaded(primary, compare, []);
+        }
+
+        var key = (id, metric, compareMetric, hours);
+        if (refresh)
+            _load.Refresh(key, Fetch, Apply);
+        else
+            _load.Load(key, Fetch, Apply);
+    }
+
+    private void Apply(Loaded loaded)
+    {
+        _primary = loaded.Primary;
         _comparePath = "";
 
         if (_primary.Count < 2)
         {
             _hover = null;
-            _available = await History.MetricsAsync(Context.Connection.Id);
+            _available = loaded.Available;
             return;
         }
 
-        var compare = CompareMetric is { Length: > 0 } second
-            ? await History.SamplesAsync(Context.Connection.Id, second, window)
-            : [];
+        var compare = loaded.Compare;
 
         // Both series are drawn against one scale, so the extremes must come from both —
         // otherwise the second line runs off the top of the box.
@@ -171,11 +216,12 @@ else
         }));
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
-    {
-        await LoadAsync();
-        StateHasChanged();
-    });
+    // Back onto the dispatcher only to read the parameters; the load itself goes off it.
+    private void OnUpdated() => _ = InvokeAsync(() => Load(refresh: true));
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _load?.Dispose();
+    }
 }

@@ -1,7 +1,8 @@
 @implements IDisposable
 @inject ConfigStore Config
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject SharedSeries SeriesReads
+@inject Offload Offload
 @inject Registry Registry
 
 @* The same metric from several connections on one axis. The chart card draws one
@@ -9,7 +10,11 @@
    do the three NASes compare, is one of the four hosts hotter than the rest — which
    previously meant three cards and doing the comparison by eye. *@
 
-@if (_series.Count == 0)
+@if (!_load.Ready)
+{
+    <div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
+}
+else if (_series.Count == 0)
 {
     <p class="tile-meta mb-0">
         Nothing has recorded @Metric yet@(Provider.Length > 0 ? $" for {Provider}" : "").
@@ -49,6 +54,7 @@ else
     private sealed record Series(string Name, string Path, double Last, string Colour);
 
     private string? _hover;
+    private BackgroundLoad _load = default!;
 
     private List<Series> _series = [];
     private double _low, _high;
@@ -73,12 +79,19 @@ else
         "#f06292", "#aed581", "#9575cd", "#4db6ac", "#ffd54f", "#90a4ae",
     ];
 
-    protected override void OnInitialized() => Health.Updated += OnUpdated;
-
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
-
-    private async Task LoadAsync()
+    protected override void OnInitialized()
     {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnUpdated;
+    }
+
+    // The connection list is memory, not history, so it is fine to wait for; the series are
+    // not, and are started without waiting (see BackgroundLoad).
+    protected override async Task OnParametersSetAsync() => await LoadAsync(refresh: false);
+
+    private async Task LoadAsync(bool refresh)
+    {
+        var metric = Metric;
         var window = TimeSpan.FromHours(Hours);
 
         var connections = (await Config.ConnectionsAsync())
@@ -87,14 +100,26 @@ else
             .Where(c => Match.Length == 0 || c.Name.Contains(Match, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var loaded = new List<(Connection Connection, IReadOnlyList<HistoryStore.Sample> Samples)>();
-        foreach (var connection in connections)
+        async Task<List<(Connection Connection, IReadOnlyList<HistoryStore.Sample> Samples)>> Fetch(CancellationToken ct)
         {
-            var samples = await History.SamplesAsync(connection.Id, Metric, window);
-            if (samples.Count >= 2)
-                loaded.Add((connection, samples));
+            // All at once rather than one after another: they are separate queries, the
+            // offload gate already bounds how many run together, and the card is only as
+            // quick as the whole set.
+            var reads = connections.Select(c => SeriesReads.SamplesAsync(c.Id, metric, window, ct)).ToList();
+            var results = await Task.WhenAll(reads);
+            return [.. connections.Zip(results).Where(pair => pair.Second.Count >= 2)];
         }
 
+        // Names in the key as well as ids: a renamed connection is a different legend.
+        var key = $"{metric}|{Hours}|{Limit}|{string.Join(",", connections.Select(c => $"{c.Id}:{c.Name}"))}";
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, Apply);
+        else
+            _ = _load.Load(key, Fetch, Apply);
+    }
+
+    private void Apply(List<(Connection Connection, IReadOnlyList<HistoryStore.Sample> Samples)> loaded)
+    {
         if (loaded.Count == 0)
         {
             _series = [];
@@ -160,11 +185,11 @@ else
         }));
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
-    {
-        await LoadAsync();
-        StateHasChanged();
-    });
+    private void OnUpdated() => _ = InvokeAsync(() => LoadAsync(refresh: true));
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _load?.Dispose();
+    }
 }

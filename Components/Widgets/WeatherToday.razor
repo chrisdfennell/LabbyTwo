@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 @inject LatestReadings Latest
 @using System.Globalization
 
@@ -33,9 +34,15 @@ else
             <span>↑ @FormatTemp(high)</span>
         </div>
     }
-    else
+    else if (_history.Ready)
     {
         <div class="tile-meta">Not enough history yet for a high and low.</div>
+    }
+    else
+    {
+        @* The reading above is from memory; the range is from history, which is still
+           on its way. A placeholder the height of the track, not a false "no history". *@
+        <div class="widget-skeleton" aria-hidden="true"><span></span></div>
     }
 
     <div class="row g-2 mt-2">
@@ -59,7 +66,11 @@ else
 @code {
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
+    private BackgroundLoad _history = default!;
     private double? _current, _low, _high, _rain, _trend;
+
+    /// <summary>The newest sample history gave, for when neither the probe nor memory has one.</summary>
+    private double? _lastRecorded;
     private int _hours;
 
     private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
@@ -76,13 +87,14 @@ else
 
     protected override void OnInitialized()
     {
+        _history = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    private void Load(bool refresh)
     {
         if (Context.Connection is null)
             return;
@@ -103,9 +115,23 @@ else
             _rain ??= recorded.TryGetValue("rain_in", out var lastRain) ? lastRain : null;
         }
 
-        var samples = await History.SamplesAsync(
-            Context.Connection.Id, "temp_outdoor_c", TimeSpan.FromHours(_hours));
+        _current ??= _lastRecorded;
 
+        // The high, low and trend need history; started here and not waited for, so the
+        // reading above draws at once. See BackgroundLoad.
+        var id = Context.Connection.Id;
+        var hours = _hours;
+        Task<IReadOnlyList<HistoryStore.Sample>> Fetch(CancellationToken ct) =>
+            Series.SamplesAsync(id, "temp_outdoor_c", TimeSpan.FromHours(hours), ct);
+
+        if (refresh)
+            _history.Refresh((id, hours), Fetch, Apply);
+        else
+            _history.Load((id, hours), Fetch, Apply);
+    }
+
+    private void Apply(IReadOnlyList<HistoryStore.Sample> samples)
+    {
         if (samples.Count == 0)
         {
             _low = _high = _trend = null;
@@ -114,7 +140,8 @@ else
 
         _low = samples.Min(s => s.Min);
         _high = samples.Max(s => s.Max);
-        _current ??= samples[^1].Value;
+        _lastRecorded = samples[^1].Value;
+        _current ??= _lastRecorded;
 
         // Compared against the oldest reading still inside the last hour, so the arrow
         // means "since an hour ago" rather than "since the previous probe". With nothing
@@ -127,9 +154,9 @@ else
             : null;
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load(refresh: true);
         StateHasChanged();
     });
 
@@ -143,5 +170,6 @@ else
     {
         Health.Updated -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
+        _history?.Dispose();
     }
 }

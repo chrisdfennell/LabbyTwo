@@ -1,6 +1,7 @@
 @inject AppSettingsStore AppSettings
 @inject AlertService Alerts
 @inject WeeklySummaryJob Summary
+@inject Offload Offload
 
 @* The weekly summary. Its own component rather than more of Settings.razor, which is long
    enough already; it lives on the Settings page because that is where somebody looks for
@@ -201,7 +202,10 @@
         _message = "";
         try
         {
-            _preview = await Summary.PreviewAsync();
+            // Offloaded: gathering the week is several history queries, and awaited here
+            // directly they would run on the render thread — the "working" state would never
+            // even draw.
+            _preview = await Offload.Run(Summary.PreviewAsync);
         }
         catch (Exception ex)
         {
@@ -220,7 +224,8 @@
         _message = "";
         try
         {
-            _preview = await Summary.PreviewAsync();
+            // Off the render thread, as in PreviewAsync.
+            _preview = await Offload.Run(Summary.PreviewAsync);
             var (sent, attempted, errors) = await Summary.SendAsync(_preview, _schedule.Channels, CancellationToken.None);
             _message = errors.Count == 0
                 ? $"Sent through {sent} channel{(sent == 1 ? "" : "s")}."

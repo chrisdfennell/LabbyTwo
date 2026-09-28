@@ -5,6 +5,7 @@
 @inject ConfigStore Config
 @inject Registry Registry
 @inject HistoryStore History
+@inject Offload Offload
 @inject MetricAlertService Evaluator
 @inject AlertService Alerts
 @inject AppSettingsStore AppSettings
@@ -443,6 +444,7 @@ else
     private IReadOnlyList<AlertRule> _rules = [];
     private IReadOnlyList<Connection> _connections = [];
     private IReadOnlyList<SelectOption> _metricOptions = [];
+    private BackgroundLoad _recordedMetrics = default!;
     private IReadOnlyList<Connection> _channels = [];
     private int _channelCount;
     private AlertPolicy _policy = AlertPolicy.Default;
@@ -468,6 +470,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _recordedMetrics = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Rules.Changed += OnChanged;
         Evaluator.Updated += OnChanged;
         await LoadAsync();
@@ -510,7 +513,7 @@ else
         _policy = AlertPolicy.From(await AppSettings.AllAsync());
         _units = Units.Preferences.From(await AppSettings.AllAsync());
         LoadSuggestions();
-        await LoadMetricsAsync(_draft?.ConnectionId);
+        LoadMetrics(_draft?.ConnectionId);
     }
 
     /// <summary>
@@ -559,12 +562,41 @@ else
     /// Suggestions come from the whole install when the rule is not pinned to one
     /// connection, because that is exactly the case where the user cannot know which
     /// names are available.
+    ///
+    /// Two halves. What the providers declare is known without asking anything, and is
+    /// offered straight away. What history has recorded is a query per connection — every
+    /// connection, for a rule not pinned to one — so it runs off the render thread and is
+    /// added when it lands (see BackgroundLoad); the form is usable in the meantime. It
+    /// used to be awaited here, which on a busy install kept the page from opening, and
+    /// ran again on every evaluator pass.
     /// </summary>
-    private async Task LoadMetricsAsync(string? connectionId)
+    private void LoadMetrics(string? connectionId)
+    {
+        var connections = (connectionId is null ? _connections : _connections.Where(c => c.Id == connectionId)).ToList();
+
+        _metricOptions = MetricOptions(connections, new Dictionary<string, IReadOnlyList<string>>());
+
+        async Task<Dictionary<string, IReadOnlyList<string>>> Fetch(CancellationToken ct) =>
+            await Offload.Run(async c =>
+            {
+                var recorded = new Dictionary<string, IReadOnlyList<string>>();
+                foreach (var connection in connections)
+                    recorded[connection.Id] = await History.MetricsAsync(connection.Id, c);
+                return recorded;
+            }, ct);
+
+        // Keyed on the connections as well as the choice, so adding one reloads, while the
+        // evaluator's regular passes — which reload everything else here — do not.
+        var key = $"{connectionId}|{string.Join(",", connections.Select(c => c.Id))}";
+        _ = _recordedMetrics.Load(key, Fetch, recorded => _metricOptions = MetricOptions(connections, recorded));
+    }
+
+    private IReadOnlyList<SelectOption> MetricOptions(
+        IReadOnlyList<Connection> connections, IReadOnlyDictionary<string, IReadOnlyList<string>> recorded)
     {
         var declared = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var connection in connectionId is null ? _connections : _connections.Where(c => c.Id == connectionId))
+        foreach (var connection in connections)
         {
             var keys = new List<string>();
             foreach (var metric in Registry.MetricsFor(connection))
@@ -572,7 +604,7 @@ else
                 declared.TryAdd(metric.Key, metric.Label);
                 keys.Add(metric.Key);
             }
-            foreach (var key in await History.MetricsAsync(connection.Id))
+            foreach (var key in recorded.GetValueOrDefault(connection.Id) ?? [])
             {
                 // Through the registry rather than the bare fallback, so a volume recorded
                 // before this page's provider has probed is still labelled after its metric.
@@ -591,14 +623,14 @@ else
             }
         }
 
-        _metricOptions = [.. declared.OrderBy(pair => pair.Key).Select(pair => new SelectOption(pair.Key, pair.Value))];
+        return [.. declared.OrderBy(pair => pair.Key).Select(pair => new SelectOption(pair.Key, pair.Value))];
     }
 
     private async Task OnConnectionChangedAsync(string? id)
     {
         var connectionId = string.IsNullOrEmpty(id) ? null : id;
         _draft = _draft! with { ConnectionId = connectionId };
-        await LoadMetricsAsync(connectionId);
+        LoadMetrics(connectionId);
         await RefreshPreviewAsync();
     }
 
@@ -914,5 +946,6 @@ else
     {
         Rules.Changed -= OnChanged;
         Evaluator.Updated -= OnChanged;
+        _recordedMetrics?.Dispose();
     }
 }

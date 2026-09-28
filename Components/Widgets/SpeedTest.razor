@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
-@inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 @inject LatestReadings Latest
 @using System.Globalization
 
@@ -109,6 +110,7 @@ else
 @code {
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
+    private BackgroundLoad _trend = default!;
     private double? _down, _up, _ping, _jitter;
     private DateTimeOffset? _takenAt;
     private bool _scheduled;
@@ -155,13 +157,14 @@ else
 
     protected override void OnInitialized()
     {
+        _trend = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    private void Load(bool refresh)
     {
         if (Context.Connection is null)
             return;
@@ -183,23 +186,47 @@ else
 
         _takenAt = Health.State(Context.Connection.Id)?.At;
 
-        await LoadTrendAsync();
+        LoadTrend(refresh);
     }
 
-    private async Task LoadTrendAsync()
+    /// <summary>
+    /// The chart comes from history, which on a big database can take a while; the numbers
+    /// above it come from memory and are drawn at once. So the trend is started here and
+    /// not waited for — see BackgroundLoad — and appears under them when it lands.
+    /// </summary>
+    private void LoadTrend(bool refresh)
+    {
+        // Nothing cleared when the trend is off: the markup already hides it, and keeping
+        // it means switching it back on shows the last one while it reloads.
+        if (!ShowTrend || Context.Connection is null)
+            return;
+
+        var id = Context.Connection.Id;
+        var hours = Hours;
+        var window = TimeSpan.FromHours(hours);
+
+        async Task<(IReadOnlyList<HistoryStore.Sample> Down, IReadOnlyList<HistoryStore.Sample> Up)> Fetch(CancellationToken ct)
+        {
+            var down = await Series.SamplesAsync(id, "download_mbps", window, ct);
+            if (down.Count < 2)
+                return (down, []);
+            return (down, await Series.SamplesAsync(id, "upload_mbps", window, ct));
+        }
+
+        if (refresh)
+            _trend.Refresh((id, hours), Fetch, ApplyTrend);
+        else
+            _trend.Load((id, hours), Fetch, ApplyTrend);
+    }
+
+    private void ApplyTrend((IReadOnlyList<HistoryStore.Sample> Down, IReadOnlyList<HistoryStore.Sample> Up) loaded)
     {
         _downPath = _upPath = "";
         _hover = null;
 
-        if (!ShowTrend || Context.Connection is null)
-            return;
-
-        var window = TimeSpan.FromHours(Hours);
-        var down = await History.SamplesAsync(Context.Connection.Id, "download_mbps", window);
+        var (down, up) = loaded;
         if (down.Count < 2)
             return;
-
-        var up = await History.SamplesAsync(Context.Connection.Id, "upload_mbps", window);
 
         // Zero-based and shared, so the two lines can be read against each other. The top
         // of the box is the highest reading either series produced, with a little air above
@@ -239,9 +266,9 @@ else
 
     private static string Format(double? value) => value is { } v ? v.ToString(v >= 100 ? "0" : "0.0") : "—";
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void OnUpdated() => _ = InvokeAsync(() =>
     {
-        await LoadAsync();
+        Load(refresh: true);
         StateHasChanged();
     });
 
@@ -255,5 +282,6 @@ else
     {
         Health.Updated -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
+        _trend?.Dispose();
     }
 }

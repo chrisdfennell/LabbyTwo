@@ -1,6 +1,8 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject HistoryStore History
+@inject SharedSeries Series
+@inject Offload Offload
 
 @if (Context.Connection is null)
 {
@@ -53,6 +55,7 @@ else
     private HealthMonitor.ProbeState? _state;
     private HistoryStore.Uptime? _uptime;
     private IReadOnlyList<double> _series = [];
+    private BackgroundLoad _history = default!;
 
     /// <summary>The ends of the hour the sparkline covers, so hovering it can name a time.</summary>
     private DateTimeOffset? _from, _to;
@@ -85,38 +88,63 @@ else
         _ => "status-unknown",
     };
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
+        _history = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
-        await LoadAsync();
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override void OnParametersSet() => Load(refresh: false);
 
-    private async Task LoadAsync()
+    private sealed record Loaded(IReadOnlyList<HistoryStore.Sample> Samples, HistoryStore.Uptime? Uptime);
+
+    /// <summary>
+    /// The dot and the message are the live probe, drawn at once. The sparkline and the
+    /// uptime figure are history, started here and not waited for (see BackgroundLoad).
+    /// </summary>
+    private void Load(bool refresh)
     {
         if (Context.Connection is null)
             return;
         _state = Health.State(Context.Connection.Id);
 
-        if (ShowSparkline)
-        {
-            var metric = _state?.Metrics.ContainsKey("rtt_ms") == true ? "rtt_ms" : "latency_ms";
-            var samples = await History.SamplesAsync(Context.Connection.Id, metric, TimeSpan.FromHours(1));
-            _series = [.. samples.Select(s => s.Value)];
-            _from = samples.Count > 0 ? samples[0].At : null;
-            _to = samples.Count > 0 ? samples[^1].At : null;
-        }
+        var id = Context.Connection.Id;
+        var metric = ShowSparkline
+            ? _state?.Metrics.ContainsKey("rtt_ms") == true ? "rtt_ms" : "latency_ms"
+            : null;
+        var uptime = ShowUptime;
+        if (metric is null && !uptime)
+            return;
 
-        if (ShowUptime)
-            _uptime = await History.UptimeAsync(Context.Connection.Id, TimeSpan.FromHours(24));
+        async Task<Loaded> Fetch(CancellationToken ct) => new(
+            metric is null ? [] : await Series.SamplesAsync(id, metric, TimeSpan.FromHours(1), ct),
+            uptime ? await Offload.Run(c => History.UptimeAsync(id, TimeSpan.FromHours(24), c), ct) : null);
+
+        var key = (id, metric, uptime);
+        if (refresh)
+            _history.Refresh(key, Fetch, Apply);
+        else
+            _history.Load(key, Fetch, Apply);
     }
 
-    private void OnUpdated() => _ = InvokeAsync(async () =>
+    private void Apply(Loaded loaded)
     {
-        await LoadAsync();
+        var samples = loaded.Samples;
+        _series = [.. samples.Select(s => s.Value)];
+        _from = samples.Count > 0 ? samples[0].At : null;
+        _to = samples.Count > 0 ? samples[^1].At : null;
+        _uptime = loaded.Uptime;
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Load(refresh: true);
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        _history?.Dispose();
+    }
 }
