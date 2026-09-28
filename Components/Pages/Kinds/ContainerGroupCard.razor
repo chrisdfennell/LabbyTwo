@@ -1,0 +1,214 @@
+@* One Compose project, or the containers in none, as a card. Drawing only: everything it
+   shows arrives as a parameter and every button is a callback, so the tab that owns the
+   polling and the dialogs decides what happens and this can be rendered — and tested —
+   without a Docker host behind it. *@
+
+<section class="widget ct-group" aria-label="@Group.Title">
+    <div class="ct-group-head">
+        <button type="button" class="ct-toggle" aria-expanded="@(!Collapsed)" @onclick="() => OnToggle.InvokeAsync()">
+            <span class="ct-caret" aria-hidden="true">@(Collapsed ? "▸" : "▾")</span>
+            <span class="ct-group-title">@(Group.Project is null ? "📦" : "🧩") @Group.Title</span>
+            <span class="tile-meta">@Group.Running of @Group.Containers.Count running</span>
+        </button>
+
+        @if (AllowActions && Group.Project is not null)
+        {
+            @* Project-wide buttons only for a real project: "restart everything not in a
+               project" is not a thing anybody means. *@
+            <div class="ct-bulk">
+                @foreach (var action in BulkActions)
+                {
+                    var why = Capabilities.Why(action);
+                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                            disabled="@(Busy is not null || why is not null)"
+                            title="@(why ?? $"{DockerContainers.Verb(action)} every container in {Group.Title}")"
+                            @onclick="() => OnBulk.InvokeAsync((Group, action))">
+                        @DockerContainers.Verb(action) all
+                    </button>
+                }
+            </div>
+        }
+    </div>
+
+    @if (!Collapsed)
+    {
+        <div class="ct-rows" role="list">
+            @foreach (var row in Group.Containers)
+            {
+                var self = IsSelf(row);
+                var listed = IsListed(row);
+                var stats = Stats.TryGetValue(row.Id, out var s) ? s : null;
+                <div class="ct-row" role="listitem" @key="row.Id" data-container="@row.Name">
+                    <span class="status-dot @Dot(row)" title="@row.State"></span>
+
+                    <div class="ct-name">
+                        <div class="ct-title">
+                            <span class="text-truncate" title="@row.Name">@row.Name</span>
+                            @if (row.Health != ContainerHealth.None)
+                            {
+                                <span class="ct-badge ct-health-@row.Health.ToString().ToLowerInvariant()"
+                                      title="The container's HEALTHCHECK says so">@HealthText(row.Health)</span>
+                            }
+                            @if (self)
+                            {
+                                <span class="ct-badge ct-self" title="The container LabbyTwo is running in">LabbyTwo</span>
+                            }
+                            else if (listed)
+                            {
+                                <span class="ct-badge ct-protected" title="On this tab's protected list">🔒 protected</span>
+                            }
+                            @if (Stale.TryGetValue(row.Id, out var tag))
+                            {
+                                <span class="ct-badge ct-update"
+                                      title="A newer @tag has been pulled, but this container still runs the old image. Recreate it (docker compose up -d) to use the new one.">⬆ newer image</span>
+                            }
+                        </div>
+                        <div class="tile-meta text-truncate" title="@row.Image">
+                            @ImageText(row) · @StatusText(row)
+                        </div>
+                    </div>
+
+                    <div class="ct-ports tile-meta" title="@string.Join(", ", row.Ports.Select(p => p.ToString()))">
+                        @if (row.Ports.Any(p => p.PublicPort is not null))
+                        {
+                            @string.Join(" ", row.Ports.Where(p => p.PublicPort is not null).Take(3).Select(p => p.ToString()))
+                            @if (row.Ports.Count(p => p.PublicPort is not null) > 3)
+                            {
+                                <text> +@(row.Ports.Count(p => p.PublicPort is not null) - 3)</text>
+                            }
+                        }
+                    </div>
+
+                    <div class="ct-stats tile-meta">
+                        @if (ShowStats && row.IsRunning)
+                        {
+                            @if (stats is null)
+                            {
+                                <span class="ct-stat-pending">…</span>
+                            }
+                            else
+                            {
+                                <span title="CPU — 100% is one core">@(stats.CpuPercent is { } cpu ? $"{cpu:0.0}%" : "–")</span>
+                                <span title="Memory used of its limit">@DockerContainers.Bytes(stats.MemoryUsed)@(stats.MemoryLimit > 0 ? " / " + DockerContainers.Bytes(stats.MemoryLimit) : "")</span>
+                                <span title="Network received and sent since it started">↓@DockerContainers.Bytes(stats.RxBytes) ↑@DockerContainers.Bytes(stats.TxBytes)</span>
+                            }
+                        }
+                    </div>
+
+                    <div class="ct-actions">
+                        @if (AllowActions)
+                        {
+                            @foreach (var action in RowActions(row))
+                            {
+                                var why = Capabilities.Why(action);
+                                <button type="button"
+                                        class="btn btn-sm @(action == ContainerAction.Remove ? "btn-outline-danger" : "btn-outline-secondary")"
+                                        disabled="@(Busy is not null || why is not null)"
+                                        title="@(why ?? $"{DockerContainers.Verb(action)} {row.Name}")"
+                                        aria-label="@($"{DockerContainers.Verb(action)} {row.Name}")"
+                                        data-action="@action.ToString().ToLowerInvariant()"
+                                        @onclick="() => OnAction.InvokeAsync((row, action))">
+                                    @(Busy == row.Id ? "…" : Glyph(action))
+                                </button>
+                            }
+                        }
+                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                disabled="@(Capabilities.Why(DockerCapabilities.Logs) is not null)"
+                                title="@(Capabilities.Why(DockerCapabilities.Logs) ?? $"Logs for {row.Name}")"
+                                aria-label="@($"Logs for {row.Name}")" data-action="logs"
+                                @onclick="() => OnLogs.InvokeAsync(row)">📜</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                disabled="@(Capabilities.Why(DockerCapabilities.Inspect) is not null)"
+                                title="@(Capabilities.Why(DockerCapabilities.Inspect) ?? $"Inspect {row.Name}")"
+                                aria-label="@($"Inspect {row.Name}")" data-action="inspect"
+                                @onclick="() => OnInspect.InvokeAsync(row)">🔍</button>
+                        @if (row.IsRunning && ShellLink(row) is { } shell)
+                        {
+                            <a class="btn btn-sm btn-outline-secondary" href="@shell" title="Open a shell in @row.Name"
+                               aria-label="@($"Shell in {row.Name}")" data-action="shell">&gt;_</a>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public ContainerGroup Group { get; set; } = default!;
+    [Parameter] public bool Collapsed { get; set; }
+    [Parameter] public EventCallback OnToggle { get; set; }
+
+    [Parameter] public IReadOnlyDictionary<string, ContainerStats> Stats { get; set; } = new Dictionary<string, ContainerStats>();
+    [Parameter] public IReadOnlyDictionary<string, string> Stale { get; set; } = new Dictionary<string, string>();
+    [Parameter] public DockerCapabilities Capabilities { get; set; } = DockerCapabilities.All;
+    [Parameter] public bool AllowActions { get; set; } = true;
+    [Parameter] public bool ShowStats { get; set; } = true;
+
+    /// <summary>The container an action is running on, if any. Every button waits while one is.</summary>
+    [Parameter] public string? Busy { get; set; }
+
+    [Parameter] public Func<ContainerRow, bool> IsSelf { get; set; } = _ => false;
+    [Parameter] public Func<ContainerRow, bool> IsListed { get; set; } = _ => false;
+
+    /// <summary>Where the Terminal plugin would open a shell in this container, or null without one.</summary>
+    [Parameter] public Func<ContainerRow, string?> ShellLink { get; set; } = _ => null;
+
+    [Parameter] public EventCallback<(ContainerRow Row, ContainerAction Action)> OnAction { get; set; }
+    [Parameter] public EventCallback<(ContainerGroup Group, ContainerAction Action)> OnBulk { get; set; }
+    [Parameter] public EventCallback<ContainerRow> OnLogs { get; set; }
+    [Parameter] public EventCallback<ContainerRow> OnInspect { get; set; }
+
+    private static readonly ContainerAction[] BulkActions =
+        [ContainerAction.Start, ContainerAction.Restart, ContainerAction.Stop];
+
+    private static readonly ContainerAction[] Order =
+    [
+        ContainerAction.Start, ContainerAction.Unpause, ContainerAction.Restart,
+        ContainerAction.Pause, ContainerAction.Stop, ContainerAction.Remove,
+    ];
+
+    /// <summary>Only the buttons that mean something now — no Start on a running container.</summary>
+    private static IEnumerable<ContainerAction> RowActions(ContainerRow row) =>
+        Order.Where(action => DockerContainers.Applies(action, row));
+
+    private static string Glyph(ContainerAction action) => action switch
+    {
+        ContainerAction.Start => "▶",
+        ContainerAction.Stop => "■",
+        ContainerAction.Restart => "↻",
+        ContainerAction.Pause => "⏸",
+        ContainerAction.Unpause => "⏯",
+        ContainerAction.Remove => "🗑",
+        _ => "?",
+    };
+
+    private static string Dot(ContainerRow row) =>
+        row.Health == ContainerHealth.Unhealthy ? "status-down"
+        : row.IsRestarting || row.IsPaused || row.Health == ContainerHealth.Starting ? "status-flapping"
+        : row.IsRunning ? "status-up"
+        : row.ExitCode is { } code && code != 0 ? "status-down"
+        : "status-unknown";
+
+    private static string HealthText(ContainerHealth health) => health switch
+    {
+        ContainerHealth.Healthy => "healthy",
+        ContainerHealth.Unhealthy => "unhealthy",
+        ContainerHealth.Starting => "health: starting",
+        _ => "",
+    };
+
+    /// <summary>
+    /// Docker lists a container by its image id once the tag it was created from has moved
+    /// on. The update hint has already looked up which tag that was, and the tag is what
+    /// anybody would recognise.
+    /// </summary>
+    private string ImageText(ContainerRow row) =>
+        !row.ImageIsId ? row.Image
+        : Stale.TryGetValue(row.Id, out var tag) ? tag
+        : row.Image.StartsWith("sha256:", StringComparison.Ordinal) ? row.Image[7..Math.Min(19, row.Image.Length)]
+        : row.Image[..Math.Min(12, row.Image.Length)];
+
+    private static string StatusText(ContainerRow row) =>
+        row.Uptime.Length > 0 ? row.Uptime : row.State;
+}

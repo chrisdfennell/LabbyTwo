@@ -58,6 +58,87 @@ public static class DockerSocket
         return await ReadAsync(response, "POST", path, ct);
     }
 
+    /// <summary>
+    /// Any verb, for the container actions. Docker answers 304 to starting a container that
+    /// is already running or stopping one that already stopped; that is the state asked for,
+    /// so it is returned as success rather than turned into "Docker answered HTTP 304".
+    /// </summary>
+    public static async Task<string> SendAsync(
+        string endpoint, TimeSpan timeout, HttpMethod method, string path, string? json, CancellationToken ct)
+    {
+        using var http = Client(endpoint, timeout);
+        using var request = new HttpRequestMessage(method, ApiVersion + path);
+        if (json is not null || method == HttpMethod.Post)
+            request.Content = new StringContent(json ?? "{}", Encoding.UTF8, "application/json");
+        using var response = await http.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.NotModified)
+            return "";
+        return await ReadAsync(response, method.Method, path, ct);
+    }
+
+    /// <summary>
+    /// A response that does not end — <c>/logs?follow=1</c> — handed back as a stream the
+    /// caller reads until it cancels. The timeout covers connecting and the headers only;
+    /// a log that is quiet for an hour is still a working log. Refusals and errors are
+    /// thrown the same way as every other call, so a proxy that forbids logs names its flag.
+    /// </summary>
+    public static async Task<Stream> OpenStreamAsync(
+        string endpoint, TimeSpan timeout, string path, CancellationToken ct)
+    {
+        var http = Client(endpoint, timeout);
+        http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+        HttpResponseMessage? response = null;
+        try
+        {
+            using var headers = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            headers.CancelAfter(timeout);
+            response = await http.GetAsync(ApiVersion + path, HttpCompletionOption.ResponseHeadersRead, headers.Token);
+            if (!response.IsSuccessStatusCode)
+            {
+                await ReadAsync(response, "GET", path, ct);
+            }
+
+            var stream = await response.Content.ReadAsStreamAsync(ct);
+            return new OwningStream(stream, response, http);
+        }
+        catch
+        {
+            response?.Dispose();
+            http.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>The body of a streamed response, which takes its response and client with it when disposed.</summary>
+    private sealed class OwningStream(Stream inner, IDisposable response, IDisposable client) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(buffer, cancellationToken);
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            inner.ReadAsync(buffer, offset, count, cancellationToken);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+                response.Dispose();
+                client.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+    }
+
     private static async Task<string> ReadAsync(
         HttpResponseMessage response, string method, string path, CancellationToken ct)
     {
@@ -266,6 +347,14 @@ public sealed class DockerProxyDeniedException(string method, string path)
         var isGet = method.Equals("GET", StringComparison.OrdinalIgnoreCase) ||
                     method.Equals("HEAD", StringComparison.OrdinalIgnoreCase);
 
+        // Checked against linuxserver/socket-proxy's own haproxy.cfg: it has a flag per verb
+        // (ALLOW_STOP, ALLOW_PAUSE, ALLOW_UNPAUSE, ALLOW_LOGS) that works with POST=0, and
+        // ALLOW_RESTARTS covers stop and kill as well as restart.
+        if (section == "containers" && !isGet && action == "stop")
+            return new Rule("stopping a container",
+                "ALLOW_STOP=1 or ALLOW_RESTARTS=1 (tecnativa/docker-socket-proxy also needs POST=1, which lets " +
+                "creating containers through as well; linuxserver/socket-proxy does not)");
+
         if (section == "containers" && !isGet && action is "restart" or "stop" or "kill")
             return new Rule("restarting a container",
                 "ALLOW_RESTARTS=1 (tecnativa/docker-socket-proxy also needs POST=1, which lets creating containers " +
@@ -273,6 +362,29 @@ public sealed class DockerProxyDeniedException(string method, string path)
 
         if (section == "containers" && !isGet && action == "start")
             return new Rule("starting a container", "ALLOW_START=1 (tecnativa/docker-socket-proxy also needs POST=1)");
+
+        // tecnativa has no flag of its own for these, so there they fall to the general rule —
+        // CONTAINERS=1 with POST=1, which is also what lets a container be created. Said out
+        // loud, because turning that on for a pause button is not a small decision.
+        if (section == "containers" && !isGet && action is "pause" or "unpause")
+            return new Rule(action == "pause" ? "pausing a container" : "unpausing a container",
+                (action == "pause" ? "ALLOW_PAUSE=1" : "ALLOW_UNPAUSE=1") +
+                " (tecnativa/docker-socket-proxy has no such flag and needs CONTAINERS=1 and POST=1, which also " +
+                "lets containers be created)");
+
+        // Neither proxy has a flag for removing: a DELETE is let through by POST=1, which with
+        // CONTAINERS=1 also allows creating containers — the same power as the raw socket.
+        if (section == "containers" && method.Equals("DELETE", StringComparison.OrdinalIgnoreCase))
+            return new Rule("removing a container",
+                "CONTAINERS=1 and POST=1 (POST=1 covers DELETE, and also lets containers be created — the same " +
+                "power as the raw socket)");
+
+        if (section == "containers" && isGet && action == "logs")
+            return new Rule("reading a container's logs",
+                "ALLOW_LOGS=1 beside CONTAINERS=1 (tecnativa/docker-socket-proxy needs only CONTAINERS=1)");
+
+        if (section == "containers" && isGet && action == "stats")
+            return new Rule("reading a container's CPU and memory", "CONTAINERS=1");
 
         if (section == "exec" || action == "exec")
             return new Rule("running a command in a container", "CONTAINERS=1, EXEC=1 and POST=1");
@@ -294,6 +406,17 @@ public sealed class DockerProxyDeniedException(string method, string path)
         return isGet
             ? new Rule($"reading /{section}", flag)
             : new Rule($"a {method.ToUpperInvariant()} to /{section}", $"{flag} and POST=1");
+    }
+
+    /// <summary>
+    /// The same advice without the request line, for a refusal found by asking in advance
+    /// rather than by pressing a button — the path asked about then names a container that
+    /// does not exist, which is not something to show anybody.
+    /// </summary>
+    public static string Advise(string method, string path)
+    {
+        var rule = RuleFor(method, path);
+        return $"The socket proxy refuses {rule.What}. Enable {rule.Flags} on the proxy container, then recreate it.";
     }
 
     private static string Explain(string method, string path)

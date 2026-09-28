@@ -1,0 +1,47 @@
+/* A terminal-shaped box. Monospace and pre-wrapped so a stack trace keeps its indentation
+   and a long line wraps instead of widening the dialog. */
+
+.ct-logs-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+}
+
+.ct-logs-search { flex: 1 1 12rem; max-width: 22rem; }
+
+.ct-logs-body {
+    margin-top: .5rem;
+    height: min(60vh, 40rem);
+    overflow: auto;
+    background: var(--ink);
+    border: 1px solid var(--edge);
+    border-radius: .375rem;
+    padding: .35rem .5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem;
+    line-height: 1.35;
+}
+
+.ct-log-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ct-log-time {
+    color: var(--muted);
+    margin-right: .6rem;
+    user-select: none;
+}
+
+.ct-log-err .ct-log-text { color: var(--down); }
+
+.ct-logs-note { padding: .25rem 0 .5rem; }
+
+/* Drawn by a render fragment built in code, which the scoping attribute does not reach. */
+.ct-logs-body ::deep mark {
+    background: color-mix(in srgb, var(--warn) 45%, transparent);
+    color: inherit;
+    padding: 0;
+    border-radius: 2px;
+}

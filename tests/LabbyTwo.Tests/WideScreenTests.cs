@@ -85,6 +85,7 @@ public sealed class WideScreenTests : IDisposable
     [InlineData(TabKinds.Status, true)]
     [InlineData(TabKinds.Embed, true)]
     [InlineData(TabKinds.Custom, true)]
+    [InlineData("containers", true)]
     [InlineData(TabKinds.Notes, false)]
     [InlineData("git", false)]
     public void OnlyDashboardKindsFillAWideScreen(string kind, bool fills)

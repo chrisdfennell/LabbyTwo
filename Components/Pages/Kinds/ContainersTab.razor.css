@@ -1,0 +1,28 @@
+/* The Containers tab's own layout. Scoped to the component so it cannot leak into a page
+   this tab is drawn inside, and colours come from the app's tokens so every palette and
+   the light theme work without a line here knowing about them. */
+
+.ct-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+    margin-bottom: .75rem;
+}
+
+.ct-toolbar input[type="search"] { flex: 1 1 14rem; min-width: 10rem; }
+.ct-toolbar select { flex: 0 0 auto; width: auto; }
+
+.ct-result {
+    font-size: .85rem;
+    margin-bottom: .5rem;
+}
+
+.ct-help summary, .ct-denied summary { cursor: pointer; }
+.ct-help p, .ct-denied ul { margin-top: .35rem; }
+
+.ct-plan {
+    max-height: 18rem;
+    overflow: auto;
+    padding-left: 1.1rem;
+}
