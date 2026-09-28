@@ -327,6 +327,13 @@ public sealed class Db
             last_sent_at INTEGER,
             last_error   TEXT NOT NULL DEFAULT '')
         """,
+
+        // 14 — how tall a block on a custom page is, in row units. A column beside width
+        // rather than a key in settings, because settings belong to the card and a card's
+        // own fields are free to use any name — including "height", which the embedded
+        // page kind already does. Zero, the default, is "as tall as its content", which is
+        // what every existing card already was.
+        "ALTER TABLE widgets ADD COLUMN height INTEGER NOT NULL DEFAULT 0",
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

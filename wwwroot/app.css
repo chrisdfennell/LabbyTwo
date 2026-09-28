@@ -598,6 +598,120 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     .widget-grid > .widget { grid-column: span 12; }
 }
 
+/* ---------- custom pages ----------
+
+   A custom page is the dashboard grid with a height added. Width is the same twelve
+   columns and the same breakpoints, because the page carries .widget-grid too.
+
+   Height is counted in row units, but the rows themselves are sized by their content
+   rather than fixed at the unit. Fixed rows would crop every block left at "fit the
+   content" — a heading, a card, a whole weather page — to one unit, or make them measure
+   themselves in script; content-sized rows let those be as tall as they are, while a
+   block given a height takes exactly that many units and spans that many rows, so the
+   blocks beside it stack down its side. That is the free layout: a tall section on the
+   left, three cards piled on its right, without a layout engine of our own. */
+
+.custom-grid {
+    --block-row: 5rem;
+    grid-auto-rows: auto;
+}
+
+.custom-grid > .has-rows {
+    grid-row: span var(--rows);
+    height: calc(var(--rows) * var(--block-row) + (var(--rows) - 1) * var(--gap));
+    /* Its own height, not the row's: the rows it spans can come out taller than it is
+       when a neighbour grows, and stretching would undo the height somebody chose. */
+    align-self: start;
+}
+
+/* Whatever does not fit scrolls inside the block, not out over the next one. */
+.custom-grid > .has-rows > .widget-body {
+    min-height: 0;
+    overflow: auto;
+}
+
+/* Headings, dividers and sections have no card round them — see PageBlocks.IsBare. The
+   doubled class outweighs the surface rules above, which would otherwise put a raised or
+   flat card behind a heading. */
+.widget-grid.custom-grid > .widget.is-bare {
+    background: transparent;
+    border: 1px solid transparent;
+    box-shadow: none;
+    padding: 0;
+}
+
+/* In edit mode a bare block needs an edge, or there is nothing to see to grab. */
+.widget-grid.custom-grid.is-editing > .widget.is-bare {
+    border: 1px dashed var(--edge);
+    padding: calc(var(--pad) / 2);
+}
+.widget-grid.custom-grid > .widget.is-bare.is-dragging { border-color: var(--accent-line); }
+
+.page-heading-block { padding-top: .5rem; }
+.page-heading-block h2,
+.page-heading-block h3,
+.page-heading-block h4 { margin: 0; font-weight: 600; }
+.page-heading-block h2 { font-size: 1.35rem; }
+.page-heading-block h3 { font-size: 1.1rem; }
+.page-heading-block h4 {
+    font-size: .8rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+}
+.page-heading-block .subtitle { color: var(--muted); font-size: .875rem; margin: .15rem 0 0; }
+
+/* A hairline, and with a label the line breaks round it. */
+.page-divider-block {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    min-height: 1.25rem;
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+}
+.page-divider-block::before,
+.page-divider-block.has-label::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--edge);
+}
+.page-divider-block.has-label::before { flex: 0 0 1.5rem; }
+
+/* A section is a page inside a page, so its title steps down a size to sit under the
+   page's own rather than compete with it. */
+.page-section-block .page-head { margin-bottom: .75rem; }
+.page-section-block .page-head h1 { font-size: 1.15rem; }
+
+.section-placeholder {
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+    border: 1px dashed var(--edge);
+    border-radius: var(--radius);
+    padding: var(--pad);
+    color: var(--muted);
+    font-size: .875rem;
+}
+.section-placeholder strong { color: var(--text); font-weight: 600; }
+
+/* The size steppers stay together when the edit bar wraps, with the size between them. */
+.block-size { display: inline-flex; align-items: center; gap: .25rem; }
+.block-size-label { min-width: 5.5rem; text-align: center; white-space: nowrap; }
+
+/* A phone is one column, and a fixed height there is a small window onto a block that
+   could simply be as tall as it needs — the page scrolls anyway. So every block fits its
+   content, and nothing scrolls inside anything. */
+@media (max-width: 768px) {
+    .custom-grid > .has-rows {
+        grid-row: auto;
+        height: auto;
+    }
+    .custom-grid > .has-rows > .widget-body { overflow: visible; }
+}
+
 /* ---------- status ---------- */
 
 .status-dot {

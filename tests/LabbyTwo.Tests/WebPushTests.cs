@@ -397,7 +397,7 @@ public sealed class WebPushTests : IDisposable
         await using var check = await upgraded.OpenAsync();
         var read = check.CreateCommand();
         read.CommandText = "SELECT (SELECT name FROM connections WHERE id = 'nas') || ':' || (SELECT user_version FROM pragma_user_version)";
-        Assert.Equal("NAS:13", (string)(await read.ExecuteScalarAsync())!);
+        Assert.Equal("NAS:14", (string)(await read.ExecuteScalarAsync())!);
         Microsoft.Data.Sqlite.SqliteConnection.ClearPool(check);
     }
 

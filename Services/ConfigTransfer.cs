@@ -57,8 +57,11 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
     public sealed record TabDto(string Id, string Slug, string Name, string Icon, string Kind,
         int Sort, bool Enabled, Dictionary<string, string> Settings);
 
+    // Height last and defaulting to zero for the same reason: a file from before custom
+    // pages has none, and zero is "as tall as its content", which every card then was.
     public sealed record WidgetDto(string Id, string TabId, string Type, string Title,
-        string? ConnectionId, int Sort, int Width, Dictionary<string, string> Settings);
+        string? ConnectionId, int Sort, int Width, Dictionary<string, string> Settings,
+        int Height = 0);
 
     // Kind and UnusualBy, like ChannelId, come last and default to null: a file from before
     // unusual rules has neither, and every rule in it was a threshold. A threshold rule is
@@ -94,7 +97,7 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
             Widgets =
             [
                 .. widgets.Select(w => new WidgetDto(w.Id, w.TabId, w.Type, w.Title, w.ConnectionId,
-                    w.Sort, w.Width, new Dictionary<string, string>(w.Settings)))
+                    w.Sort, w.Width, new Dictionary<string, string>(w.Settings), w.Height))
             ],
             Rules =
             [
@@ -251,6 +254,7 @@ public sealed class ConfigTransfer(ConfigStore config, AlertRuleStore rules, Reg
                 ConnectionId = dto.ConnectionId,
                 Sort = dto.Sort,
                 Width = dto.Width,
+                Height = PageBlocks.ClampRows(dto.Height),
                 Settings = new SettingsBag(dto.Settings),
             }, ct);
             imported++;

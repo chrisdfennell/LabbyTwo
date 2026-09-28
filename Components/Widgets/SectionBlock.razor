@@ -1,0 +1,81 @@
+@inject Registry Registry
+
+@* Another kind of page, drawn in place on a custom page. The kind's own component, given a
+   tab made from this block (see PageBlocks.SectionTab), so a section is exactly the page
+   it stands for and there is no second copy of any page to drift from the first. *@
+<div class="page-section-block">
+    @switch (_state)
+    {
+        case PageBlocks.SectionState.Ready:
+            @* Its own boundary, inside the card's, so the name in the notice says which
+               page broke rather than just "Section". *@
+            <CardBoundary Name="@($"The “{_tab!.Name}” section")" Version="@_fingerprint">
+                <DynamicComponent Type="_kind!.Component" Parameters="_parameters" />
+            </CardBoundary>
+            break;
+
+        case PageBlocks.SectionState.Missing:
+            <div class="section-placeholder" role="status">
+                <strong>The “@_key” page this section showed is not installed.</strong>
+                <span>It came from a plugin that has been removed, or from a newer LabbyTwo. Put the
+                    plugin back and it reappears as it was, or edit this section to show something else.</span>
+            </div>
+            break;
+
+        case PageBlocks.SectionState.NotEmbeddable:
+            <div class="section-placeholder" role="status">
+                <strong>A @(_key == TabKinds.Custom ? "custom page" : "dashboard") cannot be a section.</strong>
+                <span>@(_key == TabKinds.Custom
+                    ? "A page inside a page inside a page never ends. Add its blocks to this page instead."
+                    : "This page already holds cards — add them here directly.")</span>
+            </div>
+            break;
+
+        default:
+            <div class="section-placeholder" role="status">
+                <strong>This section shows nothing yet.</strong>
+                <span>Edit it to choose which page to put here.</span>
+            </div>
+            break;
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private PageBlocks.SectionState _state;
+    private ITabKind? _kind;
+    private Tab? _tab;
+    private string _key = "";
+    private string? _fingerprint;
+    private bool _changed;
+    private Dictionary<string, object> _parameters = [];
+
+    protected override void OnParametersSet()
+    {
+        var widget = Context.Widget;
+        var fingerprint = $"{widget.Id}|{widget.Title}|{widget.Settings.ToJson()}";
+        if (fingerprint == _fingerprint)
+            return;
+
+        // Built once per change of the block, not on every render: the page around it
+        // reloads its blocks whenever anything in the config changes, and a new tab
+        // record every time would have the weather page re-read everything it shows.
+        _fingerprint = fingerprint;
+        _changed = true;
+        _key = PageBlocks.SectionKind(widget.Settings);
+        (_state, _kind) = PageBlocks.Resolve(Registry, widget);
+        _tab = _kind is null ? null : PageBlocks.SectionTab(widget, _kind);
+        _parameters = _tab is null ? [] : new Dictionary<string, object> { ["Tab"] = _tab };
+    }
+
+    /// <summary>
+    /// Only when the block itself changed. Every other render reaches here because the
+    /// page re-rendered, and handing the kind a fresh parameter set for that makes it
+    /// reload — which, for a page as heavy as the weather, is the whole point of not.
+    /// The page it shows keeps itself current, as it does on its own tab.
+    /// </summary>
+    protected override bool ShouldRender() => _changed;
+
+    protected override void OnAfterRender(bool firstRender) => _changed = false;
+}

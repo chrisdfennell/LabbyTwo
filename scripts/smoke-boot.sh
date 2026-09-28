@@ -220,6 +220,24 @@ now="$(date +%s)"
   for type in $(declared_types IWidgetType); do
     widget "$type" "" "" "{}"
   done
+
+  # A custom page with one of each kind of block: a heading, two whole pages drawn as
+  # sections, two cards of different heights and a divider. The sections are the part
+  # worth the browser's time — another tab kind's page inside this one, drawn in the same
+  # circuit — and the fixed heights are what make the grid place blocks beside each other.
+  echo "INSERT INTO tabs (id, slug, name, kind, sort) VALUES ('smoke-custom', 'page', 'Custom page', 'custom', 2);"
+  blocks=0
+  block() { # type, title, width, height, settings json
+    echo "INSERT INTO widgets (id, tab_id, type, title, connection_id, sort, width, height, settings)
+            VALUES ('b-$blocks', 'smoke-custom', '$1', '$2', NULL, $blocks, $3, $4, '$5');"
+    blocks=$((blocks + 1))
+  }
+  block page-heading "" 12 0 '{"text":"Downstairs","level":"2"}'
+  block page-section "" 8 6 '{"section.kind":"status"}'
+  block clock "" 4 2 "{}"
+  block markdown "Notes" 4 4 '{"content":"Smoke test"}'
+  block page-divider "" 12 0 '{"label":"Written down"}'
+  block page-section "House notes" 12 0 '{"section.kind":"notes"}'
   echo "COMMIT;"
 } > "$work/seed.sql"
 
@@ -237,6 +255,7 @@ wait_healthy
 fetch_page / "Smoke test"
 fetch_page /t/smoke "Smoke test"
 fetch_page /t/status "Everything"
+fetch_page /t/page "Downstairs"
 fetch_page /settings/connections/map "depmap-edge"
 
 grep -q "Restored the last known status of" "$log" \
@@ -258,10 +277,12 @@ say "$sweeps sweeps seen"
 # Once more, now the monitor has written real history under the seeded rows.
 fetch_page /t/smoke "Smoke test"
 render_in_browser /t/smoke
+render_in_browser /t/page
 
 # And the same cards on the wall, which draws a tab through its own page and layout: a
 # wall that throws goes blank on a screen nobody is standing in front of.
 render_in_browser "/wall?tabs=smoke"
+render_in_browser "/wall?tabs=page"
 
 # ---- The log ---------------------------------------------------------------------------
 #

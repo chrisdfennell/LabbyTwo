@@ -238,6 +238,11 @@ else
             var count = _widgets.Count(w => w.TabId == tab.Id);
             return count == 1 ? "1 widget" : $"{count} widgets";
         }
+        if (tab.Kind == TabKinds.Custom)
+        {
+            var count = _widgets.Count(w => w.TabId == tab.Id);
+            return count == 1 ? "1 block" : $"{count} blocks";
+        }
         return "";
     }
 

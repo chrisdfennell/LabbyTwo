@@ -57,11 +57,14 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
         Dictionary<string, string> Settings,
         Dictionary<string, ConnectionRef> Connections);
 
+    // Height comes last and defaults to zero, so a file from before custom pages still
+    // reads, and every card in it is as tall as its content, which is what it was.
     public sealed record SharedWidget(
         string Type, string Title, int Sort, int Width,
         Dictionary<string, string> Settings,
         Dictionary<string, ConnectionRef> Connections,
-        ConnectionRef? BoundTo);
+        ConnectionRef? BoundTo,
+        int Height = 0);
 
     /// <summary>
     /// A connection named by what it is rather than by an id that means nothing anywhere
@@ -117,12 +120,14 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
 
     private SharedWidget Describe(Widget widget, IReadOnlyList<Connection> connections)
     {
-        var type = registry.WidgetType(widget.Type);
-        var (settings, refs) = Split(widget.Settings, type?.Fields ?? [], connections);
+        // A section's settings are the page it shows, weather connections and all, so its
+        // fields are that page's rather than the section type's own empty list.
+        var fields = PageBlocks.FieldsFor(registry, widget.Type, widget.Settings);
+        var (settings, refs) = Split(widget.Settings, fields, connections);
 
         return new SharedWidget(
             widget.Type, widget.Title, widget.Sort, widget.Width, settings, refs,
-            Reference(widget.ConnectionId, connections));
+            Reference(widget.ConnectionId, connections), widget.Height);
     }
 
     /// <summary>
@@ -361,9 +366,16 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
             // A lone card needs somewhere to live. The first dashboard tab is the only
             // sensible answer, and saying so beats refusing the import.
             var tabs = await config.TabsAsync(ct);
+
+            // A section, heading or divider is a piece of a custom page, so it goes to one
+            // when there is one. A dashboard can draw it, but it is not what it was made for.
+            var page = share.Widgets.Any(w => PageBlocks.IsBlock(w.Type))
+                ? tabs.FirstOrDefault(t => t.Kind == Core.TabKinds.Custom)
+                : null;
+
             var home = ontoTab is { Length: > 0 }
                 ? tabs.FirstOrDefault(t => t.Id == ontoTab)
-                : tabs.FirstOrDefault(t => t.Kind == Core.TabKinds.Grid);
+                : page ?? tabs.FirstOrDefault(t => t.Kind == Core.TabKinds.Grid);
 
             home ??= tabs.FirstOrDefault(t => t.Kind == Core.TabKinds.Grid)
                 ?? throw new InvalidOperationException(
@@ -391,6 +403,7 @@ public sealed class ShareTransfer(ConfigStore config, Registry registry, AppSett
                 ConnectionId = widget.BoundTo is { } bound ? Match(connections, bound).Found?.Id : null,
                 Sort = sort++,
                 Width = widget.Width,
+                Height = PageBlocks.ClampRows(widget.Height),
                 Settings = Rebuild(widget.Settings, widget.Connections, connections),
             }, ct);
             written++;
