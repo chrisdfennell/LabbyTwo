@@ -730,6 +730,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
         height: auto;
     }
     .custom-grid > .has-rows > .widget-body { overflow: visible; }
+}
 
 /* Wide screens: more columns rather than wider cards.
 
