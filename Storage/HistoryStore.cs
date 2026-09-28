@@ -659,6 +659,119 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     }
 
     /// <summary>
+    /// One connection's transitions over a window, with the one before it that says what
+    /// state the window opened in.
+    /// </summary>
+    /// <param name="Truncated">True when the window held more than the limit and only the oldest were read.</param>
+    public sealed record StatusWindow(StatusEvent? Prior, IReadOnlyList<StatusEvent> Events, bool Truncated);
+
+    /// <summary>
+    /// The transitions inside [<paramref name="from"/>, <paramref name="to"/>) for one
+    /// connection, oldest first, plus the newest one before the window.
+    ///
+    /// Two range reads on (connection_id, ts), never anything wider: the weekly summary
+    /// asks this of every connection, and status_events is kept for ever, so a query that
+    /// was not bounded by the window would read a connection's whole history once a week
+    /// for the rest of its life. The limit bounds even a service that flapped every probe
+    /// for a week.
+    /// </summary>
+    public async Task<StatusWindow> StatusBetweenAsync(
+        string connectionId, DateTimeOffset from, DateTimeOffset to, int limit, CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+
+        var priorCmd = connection.CreateCommand();
+        priorCmd.CommandText = """
+            SELECT connection_id, ts, is_up, message FROM status_events
+            WHERE connection_id = $c AND ts < $from
+            ORDER BY ts DESC, rowid DESC LIMIT 1
+            """;
+        priorCmd.Parameters.AddWithValue("$c", connectionId);
+        priorCmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+
+        StatusEvent? prior = null;
+        await using (var reader = await priorCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+                prior = ReadEvent(reader);
+        }
+
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT connection_id, ts, is_up, message FROM status_events
+            WHERE connection_id = $c AND ts >= $from AND ts < $to
+            ORDER BY ts, rowid LIMIT $limit
+            """;
+        cmd.Parameters.AddWithValue("$c", connectionId);
+        cmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$limit", limit + 1);
+
+        var events = new List<StatusEvent>();
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                events.Add(ReadEvent(reader));
+        }
+
+        var truncated = events.Count > limit;
+        if (truncated)
+            events.RemoveAt(events.Count - 1);
+        return new StatusWindow(prior, events, truncated);
+    }
+
+    private static StatusEvent ReadEvent(SqliteDataReader reader) => new(
+        reader.GetString(0),
+        DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(1)).ToLocalTime(),
+        reader.GetInt64(2) != 0,
+        reader.GetString(3));
+
+    /// <summary>The average, extremes and number of readings of one series over a window.</summary>
+    public sealed record Aggregate(double Average, double Min, double Max, long Count);
+
+    /// <summary>
+    /// One series summarised over [<paramref name="from"/>, <paramref name="to"/>), or null
+    /// when nothing was recorded in it.
+    ///
+    /// Done in SQL, from both tables: the raw rows still inside the raw retention, and the
+    /// hourly summaries for anything older — weighted by how many readings each hour held,
+    /// so an hour with one probe does not count as much as one with a hundred and twenty.
+    /// Both are range reads on their (connection_id, metric, time) keys, so a week of a
+    /// thirty-second probe is one index range and one row of answer, never a week of rows
+    /// brought into memory the way <see cref="SamplesAsync"/> would for a chart.
+    ///
+    /// A summary counts when its hour starts inside the window. The one partial hour at the
+    /// start is left out rather than guessed at; over a week that is noise.
+    /// </summary>
+    public async Task<Aggregate?> AggregateAsync(
+        string connectionId, string metric, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT SUM(total), MIN(low), MAX(high), SUM(n) FROM (
+                SELECT SUM(value) AS total, MIN(value) AS low, MAX(value) AS high, COUNT(*) AS n
+                FROM samples
+                WHERE connection_id = $c AND metric = $m AND ts >= $from AND ts < $to
+                UNION ALL
+                SELECT SUM(avg * count), MIN(min), MAX(max), SUM(count)
+                FROM samples_hourly
+                WHERE connection_id = $c AND metric = $m AND hour_ts >= $from AND hour_ts < $to)
+            """;
+        cmd.Parameters.AddWithValue("$c", connectionId);
+        cmd.Parameters.AddWithValue("$m", metric);
+        cmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct) || reader.IsDBNull(3) || reader.GetInt64(3) == 0)
+            return null;
+
+        var count = reader.GetInt64(3);
+        return new Aggregate(reader.GetDouble(0) / count, reader.GetDouble(1), reader.GetDouble(2), count);
+    }
+
+    /// <summary>
     /// Drops hourly summaries past their retention. Status events are kept — they are tiny
     /// and are the audit trail.
     ///

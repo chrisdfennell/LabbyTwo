@@ -146,6 +146,10 @@ builder.Services.AddSingleton<ActionRunner>();
 // rather than discovered: it answers a page's question, it is not itself an extension.
 builder.Services.AddSingleton<MediaStack>();
 
+// What the weekly summary says. The job that sends it is an IBackgroundJob and is
+// discovered; this is the part it and the Settings preview share.
+builder.Services.AddSingleton<WeeklySummaryGatherer>();
+
 builder.Services.AddSingleton<HealthMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthMonitor>());
 builder.Services.AddSingleton<AlertService>();

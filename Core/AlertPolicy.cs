@@ -35,12 +35,19 @@ public sealed record AlertPolicy(TimeOnly QuietFrom, TimeOnly QuietTo, string Qu
     /// Whether a moment is inside the window. Handles the normal case — 23:00 to 07:00 —
     /// which wraps midnight and is exactly the window anybody actually wants.
     /// </summary>
-    public bool IsQuiet(DateTimeOffset at)
+    public bool IsQuiet(DateTimeOffset at) => IsQuiet(at, TimeZoneInfo.Local);
+
+    /// <summary>
+    /// <see cref="IsQuiet(DateTimeOffset)"/> in a given zone. The weekly summary works out
+    /// when to send ahead of time, and its tests do that in a zone with clock changes that
+    /// is the same on every machine rather than whichever one the test runs on.
+    /// </summary>
+    public bool IsQuiet(DateTimeOffset at, TimeZoneInfo zone)
     {
         if (!QuietHoursOn)
             return false;
 
-        var now = TimeOnly.FromDateTime(at.LocalDateTime);
+        var now = TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, zone).DateTime);
 
         return QuietFrom < QuietTo
             ? now >= QuietFrom && now < QuietTo
