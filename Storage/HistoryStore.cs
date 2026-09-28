@@ -191,6 +191,16 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         if (summaries.Count == 0 && window <= options.Value.RawRetention)
             return await RawSamplesAsync(connection, connectionId, metric, since, ct);
 
+        return await HourlySamplesAsync(connection, connectionId, metric, since, summaries, ct);
+    }
+
+    /// <summary>
+    /// The hourly half of <see cref="SamplesAsync"/>: stored summaries merged with the raw
+    /// rows summarised here, one point per hour.
+    /// </summary>
+    private static async Task<IReadOnlyList<Sample>> HourlySamplesAsync(
+        SqliteConnection connection, string connectionId, string metric, long since, List<Bucket> summaries, CancellationToken ct)
+    {
         // Grouped per hour in SQL, so a long window never brings a week of raw rows into
         // memory — one aggregate per hour. The (connection_id, metric, ts) index delivers
         // the range already in ts order, so the grouping streams rather than sorts.
@@ -922,5 +932,21 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         cmd.Parameters.AddWithValue("$m", metric);
         cmd.Parameters.AddWithValue("$from", from);
         return await cmd.ExecuteScalarAsync(ct) is long oldest ? oldest : null;
+    }
+
+    /// <summary>
+    /// A metric's history as one point per hour, whatever the window — the hourly half of
+    /// <see cref="SamplesAsync"/> without the choice. For the unusual-value baselines, which
+    /// compare hours of the day and so want hours even for a window inside the raw retention
+    /// (somebody who keeps a month of raw rows would otherwise hand them 80,000 readings to
+    /// average themselves). The same index range reads: a seek into the summaries and a
+    /// grouped range over the raw rows, never a scan of the connection's history.
+    /// </summary>
+    public async Task<IReadOnlyList<Sample>> HourlyAsync(string connectionId, string metric, TimeSpan window, CancellationToken ct = default)
+    {
+        var since = DateTimeOffset.UtcNow.Subtract(window).ToUnixTimeSeconds();
+        await using var connection = await db.OpenAsync(ct);
+        var summaries = await SummariesAsync(connection, connectionId, metric, since, ct);
+        return await HourlySamplesAsync(connection, connectionId, metric, since, summaries, ct);
     }
 }

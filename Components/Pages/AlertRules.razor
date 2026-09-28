@@ -9,6 +9,8 @@
 @inject AlertService Alerts
 @inject AppSettingsStore AppSettings
 @inject CapacityForecasts Forecasts
+@inject MetricBaselines Baselines
+@inject HealthMonitor Monitor
 
 <PageTitle>Alert rules · LabbyTwo</PageTitle>
 
@@ -102,8 +104,7 @@
                             <div class="tile-name">
                                 @offer.Connection.Name · @offer.Rule.Name
                                 <span class="tile-meta">
-                                    @offer.Rule.Metric @offer.Rule.ComparisonWord @Units.Format(
-                                        Registry.Metric(offer.Connection, offer.Rule.Metric), offer.Rule.Threshold, _units)
+                                    @OfferCondition(offer)
                                     @if (offer.Rule.ForMinutes > 0)
                                     {
                                         <text> for @offer.Rule.ForMinutes min</text>
@@ -167,10 +168,18 @@ else
                                 </div>
                             </td>
                             <td class="tile-meta">
-                                <code>@rule.Metric</code> @rule.ComparisonWord @Units.Format(spec, rule.Threshold, _units)
-                                @if (rule.ClearThreshold is { } clear && Math.Abs(clear - rule.Threshold) > double.Epsilon)
+                                @if (rule.IsUnusual)
                                 {
-                                    <div>clears past @Units.Format(spec, clear, _units)</div>
+                                    <code>@rule.Metric</code> @rule.UnusualPhrase()
+                                    <div>@UnusualDetail(rule)</div>
+                                }
+                                else
+                                {
+                                    <code>@rule.Metric</code> @rule.ComparisonWord @Units.Format(spec, rule.Threshold, _units)
+                                    @if (rule.ClearThreshold is { } clear && Math.Abs(clear - rule.Threshold) > double.Epsilon)
+                                    {
+                                        <div>clears past @Units.Format(spec, clear, _units)</div>
+                                    }
                                 }
                             </td>
                             <td>
@@ -179,11 +188,15 @@ else
                                     <div class="@(breach.Firing ? "text-danger" : "tile-meta")">
                                         @Reading(rule, breach)
                                         <span class="tile-meta">@NameOf(breach.ConnectionId)</span>
+                                        @if (breach.Usual is { } usual)
+                                        {
+                                            <div class="tile-meta">usually about @MetricAlertService.About(SpecFor(rule, breach.ConnectionId), usual.Median, _units) @usual.When</div>
+                                        }
                                     </div>
                                 }
                                 @if (Readings(rule).Count == 0)
                                 {
-                                    <span class="tile-meta">no data yet</span>
+                                    <span class="tile-meta">@(rule.IsUnusual ? LearningNote(rule) : "no data yet")</span>
                                 }
                             </td>
                             <td class="text-end">
@@ -221,7 +234,7 @@ else
                 <label class="form-label" for="rule-metric">Metric</label>
                 <input id="rule-metric" class="form-control font-monospace" list="rule-metric-options"
                        value="@draft.Metric" placeholder="disk_percent"
-                       @onchange="e => _draft = draft with { Metric = e.Value?.ToString() ?? string.Empty }" />
+                       @onchange="e => SetMetricAsync(e.Value?.ToString())" />
                 <datalist id="rule-metric-options">
                     @foreach (var option in _metricOptions)
                     {
@@ -230,44 +243,151 @@ else
                 </datalist>
             </div>
 
-            <div class="row g-2 mb-3">
-                <div class="col-5">
-                    <label class="form-label" for="rule-comparison">When it is</label>
-                    @* The handler is a method rather than a lambda because a string
-                       literal inside a quoted Razor attribute ends the attribute. *@
-                    <select id="rule-comparison" class="form-select" value="@draft.Comparison.ToString()"
-                            @onchange="SetComparison">
-                        <option value="Above">above</option>
-                        <option value="Below">below</option>
-                    </select>
-                </div>
-                <div class="col-7">
-                    <label class="form-label" for="rule-threshold">Threshold @UnitSuffix(draft)</label>
-                    <input id="rule-threshold" type="number" step="any" class="form-control"
-                           value="@ToDisplay(draft, draft.Threshold)"
-                           @onchange="e => SetThreshold(e.Value)" />
+            <div class="mb-3">
+                <label class="form-label" for="rule-kind">Alert on</label>
+                <select id="rule-kind" class="form-select" value="@draft.Kind.ToString()" @onchange="SetKindAsync">
+                    <option value="Threshold">a fixed limit</option>
+                    <option value="Unusual">what is unusual for the time of day</option>
+                </select>
+                <div class="form-text">
+                    For numbers with no single right line — a connection that is quick at 4am and slow at
+                    8pm, a NAS that runs warm in the afternoon. It learns what each hour usually looks like
+                    from the last four weeks, weekdays and weekends apart.
                 </div>
             </div>
 
-            <div class="row g-2 mb-3">
-                <div class="col-6">
-                    <label class="form-label" for="rule-for">For (minutes)</label>
-                    <input id="rule-for" type="number" min="0" class="form-control" value="@draft.ForMinutes"
-                           @onchange="e => _draft = draft with { ForMinutes = (int)Parse(e.Value, 0) }" />
-                    <div class="form-text">0 fires immediately. A few minutes ignores the nightly backup spike.</div>
-                </div>
-                <div class="col-6">
-                    <label class="form-label" for="rule-clear">Clears at @UnitSuffix(draft)</label>
-                    <input id="rule-clear" type="number" step="any" class="form-control"
-                           value="@(draft.ClearThreshold is { } c ? ToDisplay(draft, c) : "")"
-                           placeholder="@ToDisplay(draft, draft.Threshold)"
-                           @onchange="e => SetClearThreshold(e.Value)" />
-                    <div class="form-text">
-                        Blank uses the threshold. Setting it slightly back stops a metric sitting on the
-                        line from alerting over and over.
+            @if (draft.IsUnusual)
+            {
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label" for="rule-direction">When it is</label>
+                        <select id="rule-direction" class="form-select" value="@draft.Comparison.ToString()"
+                                @onchange="SetComparison">
+                            <option value="Below">lower than usual</option>
+                            <option value="Above">higher than usual</option>
+                            <option value="Either">either way</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label" for="rule-by">Measured</label>
+                        <select id="rule-by" class="form-select" value="@draft.UnusualBy.ToString()"
+                                @onchange="SetUnusualBy">
+                            <option value="Percent">as a share of usual</option>
+                            <option value="Spread">against its normal ups and downs</option>
+                        </select>
                     </div>
                 </div>
-            </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="rule-threshold">
+                        @(draft.UnusualBy == UnusualBy.Percent ? "Percent of usual" : "How far outside its normal range")
+                    </label>
+                    <div class="d-flex flex-wrap gap-2 mb-2">
+                        @foreach (var (value, label) in Presets(draft))
+                        {
+                            var chosen = value;
+                            <button type="button"
+                                    class="btn btn-sm @(Math.Abs(draft.Threshold - chosen) < 1e-9 ? "btn-primary" : "btn-outline-secondary")"
+                                    @onclick="() => SetUnusualThreshold(chosen)">@label</button>
+                        }
+                    </div>
+                    <input id="rule-threshold" type="number" step="any" class="form-control"
+                           value="@draft.Threshold.ToString("0.####")"
+                           @onchange="e => SetUnusualThreshold(Parse(e.Value, draft.Threshold))" />
+                    <div class="form-text">
+                        @if (draft.UnusualBy == UnusualBy.Percent)
+                        {
+                            <text>
+                                Now reads “@draft.UnusualPhrase()”. Best for things counted from zero — speeds,
+                                streams, watts. A metric that is usually zero at some hour cannot be judged
+                                this way then; use its normal range instead.
+                            </text>
+                        }
+                        else
+                        {
+                            <text>
+                                Now reads “@draft.UnusualPhrase()”: @draft.Threshold.ToString("0.#") times further
+                                out than it normally strays at that hour. Best for temperatures and anything
+                                steady, where 10% off is already a lot.
+                            </text>
+                        }
+                    </div>
+                </div>
+
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label" for="rule-for">For (minutes)</label>
+                        <input id="rule-for" type="number" min="0" class="form-control" value="@draft.ForMinutes"
+                               @onchange="e => _draft = draft with { ForMinutes = (int)Parse(e.Value, 0) }" />
+                        <div class="form-text">Half an hour stops one odd reading alerting.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label" for="rule-clear">
+                            @(draft.UnusualBy == UnusualBy.Percent ? "Clears at (% of usual)" : "Clears within")
+                        </label>
+                        <input id="rule-clear" type="number" step="any" class="form-control"
+                               value="@(draft.ClearThreshold is { } band ? band.ToString("0.####") : "")"
+                               placeholder="@draft.UnusualClearsAt.ToString("0.#")"
+                               @onchange="e => _draft = draft with { ClearThreshold = ParseOptional(e.Value) }" />
+                        <div class="form-text">
+                            Blank clears two thirds of the way back to usual, so a reading wobbling on the
+                            line does not alert over and over.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="alert alert-secondary py-2 mb-3">
+                    @if (_preview is null)
+                    {
+                        <span class="tile-meta">Working out what is usual…</span>
+                    }
+                    else
+                    {
+                        @_preview
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="row g-2 mb-3">
+                    <div class="col-5">
+                        <label class="form-label" for="rule-comparison">When it is</label>
+                        @* The handler is a method rather than a lambda because a string
+                           literal inside a quoted Razor attribute ends the attribute. *@
+                        <select id="rule-comparison" class="form-select" value="@draft.Comparison.ToString()"
+                                @onchange="SetComparison">
+                            <option value="Above">above</option>
+                            <option value="Below">below</option>
+                        </select>
+                    </div>
+                    <div class="col-7">
+                        <label class="form-label" for="rule-threshold">Threshold @UnitSuffix(draft)</label>
+                        <input id="rule-threshold" type="number" step="any" class="form-control"
+                               value="@ToDisplay(draft, draft.Threshold)"
+                               @onchange="e => SetThreshold(e.Value)" />
+                    </div>
+                </div>
+    
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label" for="rule-for">For (minutes)</label>
+                        <input id="rule-for" type="number" min="0" class="form-control" value="@draft.ForMinutes"
+                               @onchange="e => _draft = draft with { ForMinutes = (int)Parse(e.Value, 0) }" />
+                        <div class="form-text">0 fires immediately. A few minutes ignores the nightly backup spike.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label" for="rule-clear">Clears at @UnitSuffix(draft)</label>
+                        <input id="rule-clear" type="number" step="any" class="form-control"
+                               value="@(draft.ClearThreshold is { } c ? ToDisplay(draft, c) : "")"
+                               placeholder="@ToDisplay(draft, draft.Threshold)"
+                               @onchange="e => SetClearThreshold(e.Value)" />
+                        <div class="form-text">
+                            Blank uses the threshold. Setting it slightly back stops a metric sitting on the
+                            line from alerting over and over.
+                        </div>
+                    </div>
+                </div>
+            }
 
             <div class="mb-3">
                 <label class="form-label" for="rule-channel">Send through</label>
@@ -336,6 +456,15 @@ else
     private AlertRule? _confirmDelete;
     private bool _isNew;
     private string? _validation;
+
+    /// <summary>
+    /// "Now 180 Mbps; usually about 520 at this hour", for the unusual rule being drawn up.
+    /// Null while it is being worked out.
+    /// </summary>
+    private string? _preview;
+
+    /// <summary>Which preview is current, so a slow one finishing after a faster one does not overwrite it.</summary>
+    private int _previewVersion;
 
     protected override async Task OnInitializedAsync()
     {
@@ -468,6 +597,163 @@ else
         var connectionId = string.IsNullOrEmpty(id) ? null : id;
         _draft = _draft! with { ConnectionId = connectionId };
         await LoadMetricsAsync(connectionId);
+        await RefreshPreviewAsync();
+    }
+
+    private async Task SetMetricAsync(string? metric)
+    {
+        _draft = _draft! with { Metric = metric?.Trim() ?? string.Empty };
+        await RefreshPreviewAsync();
+    }
+
+    /// <summary>
+    /// Switching kind resets the numbers to a sensible start for that kind: a threshold of
+    /// 90 means "90%" on one and "90% of usual" on the other, and carrying it across would
+    /// quietly make a rule that fires most evenings.
+    /// </summary>
+    private async Task SetKindAsync(ChangeEventArgs args)
+    {
+        var unusual = string.Equals(args.Value?.ToString(), nameof(RuleKind.Unusual), StringComparison.Ordinal);
+        var draft = _draft!;
+        if (unusual == draft.IsUnusual)
+            return;
+
+        _draft = unusual
+            ? draft with
+            {
+                Kind = RuleKind.Unusual,
+                UnusualBy = UnusualBy.Percent,
+                Comparison = Comparison.Below,
+                Threshold = 50,
+                ClearThreshold = null,
+                ForMinutes = Math.Max(draft.ForMinutes, 30),
+            }
+            : draft with
+            {
+                Kind = RuleKind.Threshold,
+                Comparison = draft.Comparison == Comparison.Either ? Comparison.Above : draft.Comparison,
+                Threshold = 90,
+                ClearThreshold = null,
+            };
+        await RefreshPreviewAsync();
+    }
+
+    private void SetUnusualBy(ChangeEventArgs args)
+    {
+        var spread = string.Equals(args.Value?.ToString(), nameof(UnusualBy.Spread), StringComparison.Ordinal);
+        var draft = _draft!;
+        _draft = draft with
+        {
+            UnusualBy = spread ? UnusualBy.Spread : UnusualBy.Percent,
+            Threshold = spread ? 4 : draft.Comparison == Comparison.Below ? 50 : 200,
+            ClearThreshold = null,
+        };
+    }
+
+    private void SetUnusualThreshold(double value) =>
+        _draft = _draft! with { Threshold = value, ClearThreshold = null };
+
+    /// <summary>The quick picks, in words, for what the threshold box means under the current choices.</summary>
+    private static IReadOnlyList<(double Value, string Label)> Presets(AlertRule draft) =>
+        (draft.UnusualBy, draft.Comparison) switch
+        {
+            (UnusualBy.Spread, _) => [(3, "noticeably"), (4, "well"), (6, "far")],
+            (_, Comparison.Below) => [(75, "under three quarters"), (50, "under half"), (25, "under a quarter")],
+            (_, Comparison.Above) => [(150, "half as much again"), (200, "double"), (300, "triple")],
+            _ => [(150, "1.5× either way"), (200, "double or half"), (300, "triple or a third")],
+        };
+
+    /// <summary>
+    /// What is usual for the metric being drawn up, next to what it reads now, and what the
+    /// rule would make of it — so somebody choosing "less than half" can see that tonight's
+    /// 180 against a usual 520 would already count. Worked out off the circuit: it reads four
+    /// weeks of history, and the page should not freeze while it does.
+    /// </summary>
+    private async Task RefreshPreviewAsync()
+    {
+        var version = ++_previewVersion;
+        if (_draft is not { IsUnusual: true } draft)
+            return;
+
+        if (draft.ConnectionId is not { } connectionId || draft.Metric.Length == 0)
+        {
+            _preview = "Pick a connection to see what is usual for it. A rule on any connection learns each one separately.";
+            return;
+        }
+
+        _preview = null;
+        var metric = draft.Metric;
+        MetricBaseline baseline;
+        try
+        {
+            baseline = Baselines.Get(connectionId, metric)
+                ?? await Task.Run(() => Baselines.RefreshAsync(connectionId, metric, CancellationToken.None));
+        }
+        catch (Exception)
+        {
+            if (version == _previewVersion)
+                _preview = "Could not read this metric's history just now.";
+            return;
+        }
+
+        if (version != _previewVersion || _draft is not { } current)
+            return;
+
+        var spec = SpecFor(current);
+        if (baseline.At(DateTimeOffset.Now, Baselines.Zone) is not { } usual)
+        {
+            _preview = baseline.Days == 0
+                ? $"No history for this metric yet. It needs {Days(MetricBaseline.MinDays)} before it can say what is usual."
+                : $"Learning — needs {Days(baseline.DaysNeeded)} more of history before it can say what is usual. " +
+                  "Until then this rule neither fires nor clears.";
+            return;
+        }
+
+        var expected = $"usually about {MetricAlertService.About(spec, usual.Median, _units)} {usual.When}".TrimEnd();
+        if (Monitor.State(connectionId)?.Metrics.TryGetValue(metric, out var value) != true)
+        {
+            _preview = $"No reading right now; {expected}.";
+            return;
+        }
+
+        var reading = Units.Format(spec, value, _units, 1);
+        var verdict = current.Judge(value, usual) switch
+        {
+            Verdict.Breaching => "That would count as unusual.",
+            null => "A share of a usual zero cannot be judged — try measuring against its normal range.",
+            _ => "That is within what this rule allows.",
+        };
+        _preview = $"Now {reading}; {expected}. {verdict}";
+    }
+
+    private static string Days(int count) => count == 1 ? "1 day" : $"{count} days";
+
+    private string OfferCondition(Offer offer) =>
+        offer.Rule.Kind == RuleKind.Unusual
+            ? $"{offer.Rule.Metric} {offer.Rule.ForConnection(offer.Connection.Id).UnusualPhrase()}"
+            : $"{offer.Rule.Metric} {offer.Rule.ComparisonWord} {Units.Format(Registry.Metric(offer.Connection, offer.Rule.Metric), offer.Rule.Threshold, _units)}";
+
+    /// <summary>The numbers behind an unusual rule's phrase, for somebody who wants to know what "well above" means.</summary>
+    private static string UnusualDetail(AlertRule rule) =>
+        rule.UnusualBy == UnusualBy.Percent
+            ? $"{rule.Threshold:0.##}% of usual, clears at {rule.UnusualClearsAt:0.#}%"
+            : $"{rule.Threshold:0.#}× its normal range, clears within {rule.UnusualClearsAt:0.#}×";
+
+    /// <summary>
+    /// The Now column for an unusual rule with nothing to show: still learning, or not yet
+    /// asked. Only a rule on one connection can say how long it has to go; one on every
+    /// connection learns each separately.
+    /// </summary>
+    private string LearningNote(AlertRule rule)
+    {
+        if (rule.ConnectionId is not { } connectionId)
+            return "learning what is usual";
+        return Baselines.Get(connectionId, rule.Metric) switch
+        {
+            null => "no data yet",
+            { IsLearning: true } baseline => $"learning — needs {Days(baseline.DaysNeeded)} more",
+            _ => "no reading right now",
+        };
     }
 
     private MetricSpec SpecFor(AlertRule rule, string? connectionId = null)
@@ -500,8 +786,22 @@ else
 
     private void SetComparison(ChangeEventArgs args)
     {
-        var below = string.Equals(args.Value?.ToString(), nameof(Comparison.Below), StringComparison.Ordinal);
-        _draft = _draft! with { Comparison = below ? Comparison.Below : Comparison.Above };
+        var comparison = Enum.TryParse<Comparison>(args.Value?.ToString(), out var parsed) ? parsed : Comparison.Above;
+        var draft = _draft!;
+
+        // A percentage that made sense one way round is nonsense the other — "50% of usual"
+        // is lower, and cannot be higher — so an unusual rule's number follows the direction.
+        var threshold = draft is { IsUnusual: true, UnusualBy: UnusualBy.Percent }
+            && (comparison == Comparison.Below) != (draft.Comparison == Comparison.Below)
+                ? comparison == Comparison.Below ? 50 : 200
+                : draft.Threshold;
+
+        _draft = draft with
+        {
+            Comparison = comparison,
+            Threshold = threshold,
+            ClearThreshold = threshold == draft.Threshold ? draft.ClearThreshold : null,
+        };
     }
 
     /// <summary>
@@ -549,11 +849,12 @@ else
         _draft = new AlertRule { Metric = "disk_percent", Comparison = Comparison.Above, Threshold = 90, ForMinutes = 5 };
     }
 
-    private void Edit(AlertRule rule)
+    private async Task Edit(AlertRule rule)
     {
         _isNew = false;
         _validation = null;
         _draft = rule;
+        await RefreshPreviewAsync();
     }
 
     private async Task SaveAsync()
@@ -567,20 +868,11 @@ else
             return;
         }
 
-        // A clear threshold on the wrong side of the trigger would mean the alert can
-        // fire and never clear, which is worse than no alert at all.
-        if (rule.ClearThreshold is { } clear)
+        // A rule that can fire and never clear, or never fire, is worse than no rule at all.
+        if (rule.Problem() is { } problem)
         {
-            if (rule.Comparison == Comparison.Above && clear > rule.Threshold)
-            {
-                _validation = $"For an “above” rule, “clears at” must be at or below {rule.Threshold:0.##} — otherwise it could never clear.";
-                return;
-            }
-            if (rule.Comparison == Comparison.Below && clear < rule.Threshold)
-            {
-                _validation = $"For a “below” rule, “clears at” must be at or above {rule.Threshold:0.##} — otherwise it could never clear.";
-                return;
-            }
+            _validation = problem;
+            return;
         }
 
         await Rules.SaveAsync(rule with { Metric = rule.Metric.Trim(), Name = rule.Name.Trim() });

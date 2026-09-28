@@ -148,7 +148,12 @@ public class MetricSpecTests
 
         foreach (var provider in registry.Providers)
         {
-            foreach (var rule in provider.SuggestedRules.Where(r => r.ClearThreshold is not null))
+            // An unusual rule's numbers are distances from usual rather than readings, so
+            // "the recovery side" is the rule's own business; it is asked directly.
+            foreach (var rule in provider.SuggestedRules.Where(r => r.Kind == RuleKind.Unusual))
+                Assert.Null(rule.ForConnection("c").Problem());
+
+            foreach (var rule in provider.SuggestedRules.Where(r => r.ClearThreshold is not null && r.Kind == RuleKind.Threshold))
             {
                 var clear = rule.ClearThreshold!.Value;
                 // The wrong side would mean the alert can fire and never clear.

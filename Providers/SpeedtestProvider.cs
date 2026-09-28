@@ -54,6 +54,11 @@ public sealed class SpeedtestTrackerProvider(IHttpClientFactory httpFactory) : I
         new("Nothing like the speed you pay for", "download_mbps", Comparison.Below, 100, ForMinutes: 30,
             Why: "Set it to about half your plan. Half an hour avoids alerting on one bad test."),
 
+        new("Download is less than half its usual", "download_mbps", Comparison.Below, 50, ForMinutes: 30,
+            Why: "Nothing to set: it learns what this line does at each hour, so a slow evening only alerts " +
+                 "when it is slower than evenings usually are.")
+        { Kind = RuleKind.Unusual, UnusualBy = UnusualBy.Percent },
+
         new("Tests have stopped running", "result_age_hours", Comparison.Above, 26, ForMinutes: 60,
             Why: "A stalled scheduler leaves yesterday's good result on screen indefinitely. " +
                  "26 hours suits a daily test without firing on a late one."),
@@ -246,6 +251,11 @@ public sealed class InternetSpeedTestProvider(IHttpClientFactory httpFactory) : 
         new("Nothing like the speed you pay for", "download_mbps", Comparison.Below, 100, ForMinutes: 0,
             Why: "Set it to about half your plan. No sustain window here, unlike the tracker: these results " +
                  "arrive hours apart, so requiring one to persist for half an hour would never fire."),
+
+        new("Download is less than half its usual", "download_mbps", Comparison.Below, 50,
+            Why: "Learns what this line does at each hour, so a slow evening only alerts when it is slower " +
+                 "than evenings usually are. No sustain window, for the same reason as above.")
+        { Kind = RuleKind.Unusual, UnusualBy = UnusualBy.Percent },
 
         new("Upload has collapsed", "upload_mbps", Comparison.Below, 5,
             Why: "The half of the connection nobody watches, and the half that breaks video calls and " +

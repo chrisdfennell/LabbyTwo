@@ -263,6 +263,15 @@ public sealed class Db
         // connection, so "every hour before X" would otherwise read the whole table, and
         // that delete runs from the monitor's sweep.
         "CREATE INDEX IF NOT EXISTS ix_samples_hourly_age ON samples_hourly (hour_ts)",
+
+        // 11 — "unusual for the time" rules beside fixed thresholds. The default makes every
+        // existing rule what it always was. The comparison column may now also say
+        // 'either', which only an unusual rule uses.
+        "ALTER TABLE alert_rules ADD COLUMN kind TEXT NOT NULL DEFAULT 'threshold'",
+
+        // 12 — what an unusual rule's threshold is measured in: a percentage of usual, or
+        // spreads away from it. Null on a threshold rule, which has neither.
+        "ALTER TABLE alert_rules ADD COLUMN unusual_by TEXT",
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
