@@ -618,6 +618,119 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     .widget-grid > .widget { grid-column: span 12; }
 }
 
+/* ---------- custom pages ----------
+
+   A custom page is the dashboard grid with a height added. Width is the same twelve
+   columns and the same breakpoints, because the page carries .widget-grid too.
+
+   Height is counted in row units, but the rows themselves are sized by their content
+   rather than fixed at the unit. Fixed rows would crop every block left at "fit the
+   content" — a heading, a card, a whole weather page — to one unit, or make them measure
+   themselves in script; content-sized rows let those be as tall as they are, while a
+   block given a height takes exactly that many units and spans that many rows, so the
+   blocks beside it stack down its side. That is the free layout: a tall section on the
+   left, three cards piled on its right, without a layout engine of our own. */
+
+.custom-grid {
+    --block-row: 5rem;
+    grid-auto-rows: auto;
+}
+
+.custom-grid > .has-rows {
+    grid-row: span var(--rows);
+    height: calc(var(--rows) * var(--block-row) + (var(--rows) - 1) * var(--gap));
+    /* Its own height, not the row's: the rows it spans can come out taller than it is
+       when a neighbour grows, and stretching would undo the height somebody chose. */
+    align-self: start;
+}
+
+/* Whatever does not fit scrolls inside the block, not out over the next one. */
+.custom-grid > .has-rows > .widget-body {
+    min-height: 0;
+    overflow: auto;
+}
+
+/* Headings, dividers and sections have no card round them — see PageBlocks.IsBare. The
+   doubled class outweighs the surface rules above, which would otherwise put a raised or
+   flat card behind a heading. */
+.widget-grid.custom-grid > .widget.is-bare {
+    background: transparent;
+    border: 1px solid transparent;
+    box-shadow: none;
+    padding: 0;
+}
+
+/* In edit mode a bare block needs an edge, or there is nothing to see to grab. */
+.widget-grid.custom-grid.is-editing > .widget.is-bare {
+    border: 1px dashed var(--edge);
+    padding: calc(var(--pad) / 2);
+}
+.widget-grid.custom-grid > .widget.is-bare.is-dragging { border-color: var(--accent-line); }
+
+.page-heading-block { padding-top: .5rem; }
+.page-heading-block h2,
+.page-heading-block h3,
+.page-heading-block h4 { margin: 0; font-weight: 600; }
+.page-heading-block h2 { font-size: 1.35rem; }
+.page-heading-block h3 { font-size: 1.1rem; }
+.page-heading-block h4 {
+    font-size: .8rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+}
+.page-heading-block .subtitle { color: var(--muted); font-size: .875rem; margin: .15rem 0 0; }
+
+/* A hairline, and with a label the line breaks round it. */
+.page-divider-block {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    min-height: 1.25rem;
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+}
+.page-divider-block::before,
+.page-divider-block.has-label::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--edge);
+}
+.page-divider-block.has-label::before { flex: 0 0 1.5rem; }
+
+/* A section is a page inside a page, so its title steps down a size to sit under the
+   page's own rather than compete with it. */
+.page-section-block .page-head { margin-bottom: .75rem; }
+.page-section-block .page-head h1 { font-size: 1.15rem; }
+
+.section-placeholder {
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+    border: 1px dashed var(--edge);
+    border-radius: var(--radius);
+    padding: var(--pad);
+    color: var(--muted);
+    font-size: .875rem;
+}
+.section-placeholder strong { color: var(--text); font-weight: 600; }
+
+/* The size steppers stay together when the edit bar wraps, with the size between them. */
+.block-size { display: inline-flex; align-items: center; gap: .25rem; }
+.block-size-label { min-width: 5.5rem; text-align: center; white-space: nowrap; }
+
+/* A phone is one column, and a fixed height there is a small window onto a block that
+   could simply be as tall as it needs — the page scrolls anyway. So every block fits its
+   content, and nothing scrolls inside anything. */
+@media (max-width: 768px) {
+    .custom-grid > .has-rows {
+        grid-row: auto;
+        height: auto;
+    }
+    .custom-grid > .has-rows > .widget-body { overflow: visible; }
+
 /* Wide screens: more columns rather than wider cards.
 
    A card's width is a number of columns, so the way to keep it the size it is on an
@@ -813,6 +926,15 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .card-picker button:disabled { opacity: .55; }
 .card-picker .picker-title { font-weight: 600; display: flex; gap: .5rem; align-items: center; }
 .card-picker .picker-desc { color: var(--muted); font-size: .8rem; margin-top: .25rem; }
+.card-picker .picker-meta { display: block; color: var(--muted); font-size: .72rem; margin-top: .35rem; opacity: .8; }
+.picker-section {
+    color: var(--muted);
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: .5rem;
+}
 
 .empty-state {
     border: 1px dashed var(--edge);
@@ -1001,57 +1123,105 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
    all — an h1, an h2 and a bold line were indistinguishable. The scale below is modest
    so it still sits nicely inside a small widget card. */
 
+/* Every rule below stops at a card embedded in the note ({{widget: …}}): that card draws
+   itself as it would on a dashboard, and a note underlining its links or boxing its table
+   cells would make it look broken. :not() rather than @scope, which older Firefox lacks.
+   The cost is that a Markdown card embedded in a note renders its own Markdown plainer. */
 .markdown-body { line-height: 1.55; }
-.markdown-body > :first-child { margin-top: 0; }
-.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body > :first-child:not(.md-embed *) { margin-top: 0; }
+.markdown-body > :last-child:not(.md-embed *) { margin-bottom: 0; }
 
-.markdown-body h1,
-.markdown-body h2,
-.markdown-body h3,
-.markdown-body h4 { font-weight: 650; line-height: 1.25; margin: 1.15em 0 .5em; }
-.markdown-body h1 { font-size: 1.3rem; }
-.markdown-body h2 { font-size: 1.1rem; }
-.markdown-body h3 { font-size: .98rem; }
-.markdown-body h4 { font-size: .9rem; color: var(--muted); }
-.markdown-body h1,
-.markdown-body h2 { padding-bottom: .2rem; border-bottom: 1px solid var(--edge); }
+.markdown-body h1:not(.md-embed *),
+.markdown-body h2:not(.md-embed *),
+.markdown-body h3:not(.md-embed *),
+.markdown-body h4:not(.md-embed *) { font-weight: 650; line-height: 1.25; margin: 1.15em 0 .5em; }
+.markdown-body h1:not(.md-embed *) { font-size: 1.3rem; }
+.markdown-body h2:not(.md-embed *) { font-size: 1.1rem; }
+.markdown-body h3:not(.md-embed *) { font-size: .98rem; }
+.markdown-body h4:not(.md-embed *) { font-size: .9rem; color: var(--muted); }
+.markdown-body h1:not(.md-embed *),
+.markdown-body h2:not(.md-embed *) { padding-bottom: .2rem; border-bottom: 1px solid var(--edge); }
 
-.markdown-body p,
-.markdown-body ul,
-.markdown-body ol,
-.markdown-body pre,
-.markdown-body blockquote,
-.markdown-body table { margin: 0 0 .75rem; }
+.markdown-body p:not(.md-embed *),
+.markdown-body ul:not(.md-embed *),
+.markdown-body ol:not(.md-embed *),
+.markdown-body pre:not(.md-embed *),
+.markdown-body blockquote:not(.md-embed *),
+.markdown-body table:not(.md-embed *) { margin: 0 0 .75rem; }
 
-.markdown-body ul, .markdown-body ol { padding-left: 1.4rem; }
-.markdown-body li + li { margin-top: .15rem; }
+.markdown-body ul:not(.md-embed *), .markdown-body ol:not(.md-embed *) { padding-left: 1.4rem; }
+.markdown-body li + li:not(.md-embed *) { margin-top: .15rem; }
 
-.markdown-body blockquote {
+.markdown-body blockquote:not(.md-embed *) {
     border-left: 3px solid var(--accent);
     padding: .1rem 0 .1rem .8rem;
     color: var(--muted);
 }
 
-.markdown-body code {
+.markdown-body code:not(.md-embed *) {
     color: var(--code);
     background: var(--panel-2);
     padding: .1em .35em;
     border-radius: .25rem;
     font-size: .9em;
 }
-.markdown-body pre { background: var(--panel-2); padding: .75rem; border-radius: .5rem; overflow-x: auto; }
+.markdown-body pre:not(.md-embed *) { background: var(--panel-2); padding: .75rem; border-radius: .5rem; overflow-x: auto; }
 /* A code block already has the panel behind it; the inline treatment would double it. */
-.markdown-body pre code { background: none; padding: 0; font-size: 1em; }
+.markdown-body pre code:not(.md-embed *) { background: none; padding: 0; font-size: 1em; }
 
-.markdown-body table { border-collapse: collapse; }
-.markdown-body th,
-.markdown-body td { border: 1px solid var(--edge); padding: .35rem .6rem; text-align: left; }
-.markdown-body th { background: var(--panel-2); font-weight: 650; }
+.markdown-body table:not(.md-embed *) { border-collapse: collapse; }
+.markdown-body th:not(.md-embed *),
+.markdown-body td:not(.md-embed *) { border: 1px solid var(--edge); padding: .35rem .6rem; text-align: left; }
+.markdown-body th:not(.md-embed *) { background: var(--panel-2); font-weight: 650; }
 
-.markdown-body hr { border: 0; border-top: 1px solid var(--edge); margin: 1rem 0; }
-.markdown-body a { text-decoration: underline; }
-.markdown-body img { max-width: 100%; }
-.markdown-body input[type="checkbox"] { margin-right: .4rem; }
+.markdown-body hr:not(.md-embed *) { border: 0; border-top: 1px solid var(--edge); margin: 1rem 0; }
+.markdown-body a:not(.md-embed *) { text-decoration: underline; }
+.markdown-body img:not(.md-embed *) { max-width: 100%; }
+.markdown-body input[type="checkbox"]:not(.md-embed *) { margin-right: .4rem; }
+
+/* Live values written into Markdown ({{status: NAS}} and friends). They sit inside a
+   sentence, so they keep the sentence's size and only gain weight and tabular figures —
+   a number that changes every sweep should not make the words after it shuffle about. */
+.sc-value { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sc-value .status-dot { margin-right: .3em; vertical-align: .05em; }
+.sc-value.is-waiting { color: var(--muted); font-weight: 400; }
+
+/* A shortcode that names nothing: a small question mark rather than an error, with the
+   reason in its tooltip, so one typo does not spoil a whole runbook. */
+.sc-problem {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1em;
+    height: 1.1em;
+    border-radius: 50%;
+    font-size: .8em;
+    font-weight: 700;
+    line-height: 1;
+    vertical-align: .1em;
+    color: var(--warn);
+    border: 1px solid var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    cursor: help;
+}
+
+/* A whole card inside a note: framed like a card, but lighter, since the note around it
+   is usually already a card. */
+.md-embed {
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    padding: .75rem;
+    margin: 0 0 .75rem;
+}
+.md-embed.is-problem { display: flex; align-items: center; gap: .5rem; }
+.md-embed .widget-head { margin-bottom: .5rem; }
+
+.md-insert-form {
+    padding: .6rem .75rem;
+    border: 1px solid var(--edge);
+    border-radius: .5rem;
+}
 
 .flex-none { flex: none; }
 

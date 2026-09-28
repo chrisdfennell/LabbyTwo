@@ -84,6 +84,7 @@ public sealed class WideScreenTests : IDisposable
     [InlineData("weather-station", true)]
     [InlineData(TabKinds.Status, true)]
     [InlineData(TabKinds.Embed, true)]
+    [InlineData(TabKinds.Custom, true)]
     [InlineData(TabKinds.Notes, false)]
     [InlineData("git", false)]
     public void OnlyDashboardKindsFillAWideScreen(string kind, bool fills)

@@ -1,5 +1,4 @@
 @inject NotesStore Notes
-@inject Markdown Markdown
 
 <div class="page-head">
     <div>
@@ -27,7 +26,7 @@ else
                             <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = note">✕</button>
                         </div>
                     </div>
-                    <div class="widget-body markdown-body">@((MarkupString)Markdown.ToHtml(note.Content))</div>
+                    <div class="widget-body markdown-body"><LiveMarkdown Content="@note.Content" OwnerId="@note.Id" /></div>
                     <div class="tile-meta mt-2">Updated @note.UpdatedAt.ToString("d MMM yyyy HH:mm")</div>
                 </div>
             </div>
@@ -48,12 +47,12 @@ else
                 <label class="form-label" for="note-body">Markdown</label>
                 <textarea id="note-body" class="form-control font-monospace" rows="16"
                           @bind="_editing.Content" @bind:event="oninput"></textarea>
-                <MarkdownHintStrip Value="_editing.Content" ValueChanged="v => _editing.Content = v" />
+                <MarkdownHintStrip Value="@_editing.Content" ValueChanged="v => _editing.Content = v" />
             </div>
             <div class="col-lg-6">
                 <label class="form-label">Preview</label>
                 <div class="panel p-3 markdown-body" style="min-height: 20rem">
-                    @((MarkupString)Markdown.ToHtml(_editing.Content))
+                    <LiveMarkdown Content="@_editing.Content" OwnerId="@_editingId" />
                 </div>
             </div>
         </div>

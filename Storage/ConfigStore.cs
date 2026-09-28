@@ -245,6 +245,9 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
         var cmd = connection.CreateCommand();
         cmd.CommandText = """
             DELETE FROM tabs WHERE id = $id;
+            -- A notes section on a custom page keeps its notes under the block's id, so
+            -- they go with the blocks. Before the blocks, or there is nothing to find them by.
+            DELETE FROM notes WHERE tab_id IN (SELECT id FROM widgets WHERE tab_id = $id);
             DELETE FROM widgets WHERE tab_id = $id;
             DELETE FROM notes WHERE tab_id = $id;
             """;
@@ -342,7 +345,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
             var version = _widgets.Version;
             await using var connection = await db.OpenAsync(ct);
             var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT id, tab_id, type, title, connection_id, sort, width, settings FROM widgets ORDER BY sort";
+            cmd.CommandText = "SELECT id, tab_id, type, title, connection_id, sort, width, settings, height FROM widgets ORDER BY sort";
             var list = new List<Widget>();
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
@@ -357,6 +360,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
                     Sort = reader.GetInt32(5),
                     Width = reader.GetInt32(6),
                     Settings = SettingsBag.FromJson(reader.GetString(7)),
+                    Height = reader.GetInt32(8),
                 });
             }
             return _widgets.Store(list, version);
@@ -386,12 +390,12 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO widgets (id, tab_id, type, title, connection_id, sort, width, settings)
-            VALUES ($id, $tab, $type, $title, $conn, $sort, $width, $settings)
+            INSERT INTO widgets (id, tab_id, type, title, connection_id, sort, width, height, settings)
+            VALUES ($id, $tab, $type, $title, $conn, $sort, $width, $height, $settings)
             ON CONFLICT(id) DO UPDATE SET
                 tab_id = excluded.tab_id, type = excluded.type, title = excluded.title,
                 connection_id = excluded.connection_id, sort = excluded.sort,
-                width = excluded.width, settings = excluded.settings
+                width = excluded.width, height = excluded.height, settings = excluded.settings
             """;
         cmd.Parameters.AddWithValue("$id", value.Id);
         cmd.Parameters.AddWithValue("$tab", value.TabId);
@@ -400,6 +404,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
         cmd.Parameters.AddWithValue("$conn", (object?)value.ConnectionId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$sort", value.Sort);
         cmd.Parameters.AddWithValue("$width", value.Width);
+        cmd.Parameters.AddWithValue("$height", value.Height);
         cmd.Parameters.AddWithValue("$settings", value.Settings.ToJson());
         await cmd.ExecuteNonQueryAsync(ct);
     }

@@ -1,0 +1,328 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject Deletions Deletions
+@inject ShareTransfer Share
+@inject Registry Registry
+@inject IJSRuntime JS
+
+@* A page made of blocks: cards, other pages as sections, headings and dividers, each with
+   a width and a height. Deliberately the grid tab's machinery rather than a layout engine
+   of its own — the same widget rows, the same drag script, the same boundary round each
+   block — with height added as the one new idea. A second way of arranging things would
+   be a second thing to learn, and a second thing to break. *@
+
+<div class="page-head">
+    <div>
+        <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "" : Tab.Icon + " ")@Tab.Name</h1>
+        @if (Tab.Settings.Get("subtitle") is { Length: > 0 } subtitle)
+        {
+            <p class="subtitle">@subtitle</p>
+        }
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-sm @(_editing ? "btn-primary" : "btn-outline-secondary")"
+                @onclick="ToggleEditing">
+            @(_editing ? "Done" : "Edit layout")
+        </button>
+        @if (_editing)
+        {
+            <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add block</button>
+        }
+    </div>
+</div>
+
+@if (_moving is { } moving)
+{
+    <div class="alert alert-info d-flex align-items-center gap-2 py-2">
+        <span>Moving <strong>@Describe(moving)</strong> — choose where it goes.</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" @onclick="() => _moving = null">Cancel</button>
+    </div>
+}
+
+@if (_blocks.Count == 0)
+{
+    <div class="empty-state">
+        <p class="mb-3">This page is empty. Put cards on it, whole pages as sections, and headings between them.</p>
+        <button class="btn btn-primary btn-sm" @onclick="() => { _editing = true; _picking = true; }">
+            Add the first block
+        </button>
+    </div>
+}
+else
+{
+    @* widget-grid as well as custom-grid, so the drag script and the width breakpoints
+       apply unchanged; custom-grid adds rows. *@
+    <div class="widget-grid custom-grid @(_editing ? "is-editing" : "")">
+        @foreach (var block in _blocks)
+        {
+            var type = Registry.WidgetType(block.Type);
+            var connection = _connections.FirstOrDefault(c => c.Id == block.ConnectionId);
+            var bare = PageBlocks.IsBare(block.Type);
+            var current = block;
+            @* Keyed on the block, as on a grid tab: a reorder must move blocks, not tear
+               down and rebuild everything after the one that moved — and here "everything"
+               can be a weather page. *@
+            <div class="widget @PageBlocks.Classes(block) block-@block.Type @(_editing ? "is-draggable" : "")"
+                 style="@PageBlocks.Style(block)" data-widget-id="@block.Id" @key="block.Id">
+                @if (_editing || (!bare && block.Title is { Length: > 0 }))
+                {
+                    <div class="widget-head">
+                        @if (_editing)
+                        {
+                            <span class="drag-handle flex-none" title="Drag to rearrange">⠿</span>
+                        }
+                        <h2 class="widget-title text-truncate">@(bare ? "" : block.Title)</h2>
+                        @if (_editing)
+                        {
+                            <span class="tile-meta flex-none">@Label(block, type)</span>
+                        }
+                    </div>
+                }
+
+                <div class="widget-body">
+                    @if (type is null)
+                    {
+                        <p class="tile-meta mb-0">Unknown block type “@block.Type”.</p>
+                    }
+                    else if (type.NeedsConnection && connection is null)
+                    {
+                        <p class="tile-meta mb-0">
+                            The connection this card used is gone. Edit it to pick another.
+                        </p>
+                    }
+                    else if (!RendererInfo.IsInteractive && !IsCheap(block))
+                    {
+                        @* Prerendered as a placeholder, like a grid tab's cards and for the
+                           same reason: prerendering waits for everything on the page, and
+                           a section can be a whole page's worth of waiting. *@
+                        <div class="widget-skeleton" aria-hidden="true">
+                            <span></span><span></span><span></span>
+                        </div>
+                    }
+                    else
+                    {
+                        <CardBoundary Name="@Describe(block)" Version="@Fingerprint(block, connection)">
+                            <DynamicComponent Type="type.Component"
+                                              Parameters="@(new Dictionary<string, object> { ["Context"] = new WidgetContext(block, connection) })" />
+                        </CardBoundary>
+                    }
+                </div>
+
+                @if (_editing && _moving is not null)
+                {
+                    <div class="widget-edit-bar">
+                        @if (_moving.Id == block.Id)
+                        {
+                            <span class="tile-meta">Moving this block…</span>
+                        }
+                        else
+                        {
+                            <button class="btn btn-sm btn-outline-primary w-100"
+                                    @onclick="() => PlaceBeforeAsync(current)">
+                                ↳ Place before this
+                            </button>
+                        }
+                    </div>
+                }
+                else if (_editing)
+                {
+                    <div class="widget-edit-bar">
+                        <button class="btn btn-sm btn-outline-secondary" title="Move this block"
+                                @onclick="() => _moving = current">⠿</button>
+                        <button class="btn btn-sm btn-outline-secondary" title="Move up"
+                                @onclick="() => MoveAsync(current, -1)">↑</button>
+                        <button class="btn btn-sm btn-outline-secondary" title="Move down"
+                                @onclick="() => MoveAsync(current, 1)">↓</button>
+                        @* Width and height side by side, each a pair of steppers, with what
+                           they add up to between them — so the size can be read, not only
+                           changed. *@
+                        <span class="block-size" role="group" aria-label="Size">
+                            <button class="btn btn-sm btn-outline-secondary" title="Narrower"
+                                    @onclick="() => ResizeAsync(current, -1, 0)">−</button>
+                            <button class="btn btn-sm btn-outline-secondary" title="Wider"
+                                    @onclick="() => ResizeAsync(current, 1, 0)">+</button>
+                            <span class="tile-meta block-size-label">@PageBlocks.Describe(block)</span>
+                            <button class="btn btn-sm btn-outline-secondary" title="Shorter"
+                                    @onclick="() => ResizeAsync(current, 0, -1)">↥</button>
+                            <button class="btn btn-sm btn-outline-secondary" title="Taller"
+                                    @onclick="() => ResizeAsync(current, 0, 1)">↧</button>
+                        </span>
+                        <a class="btn btn-sm btn-outline-secondary ms-auto" title="Export this block to share it"
+                           href="@($"api/share/widget?id={block.Id}")">Export</a>
+                        <button class="btn btn-sm btn-outline-secondary" title="Another one like this, on this page"
+                                @onclick="() => DuplicateAsync(current)">Duplicate</button>
+                        <button class="btn btn-sm btn-outline-secondary"
+                                @onclick="() => _editingBlock = current">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger"
+                                @onclick="() => _confirmDelete = current">✕</button>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (_moving is not null)
+        {
+            <div class="widget place-at-end w-12">
+                <button class="btn btn-sm btn-outline-primary w-100" @onclick="() => PlaceBeforeAsync(null)">
+                    ↳ Place at the end
+                </button>
+            </div>
+        }
+    </div>
+}
+
+@if (_picking)
+{
+    <WidgetPicker TabId="@Tab.Id" PageBlocks="true" OnClose="() => _picking = false"
+                  OnPicked="widget => { _picking = false; _editingBlock = widget; }" />
+}
+
+@if (_editingBlock is { } editing)
+{
+    <WidgetEditor Widget="editing" PageLayout="true" OnClose="() => _editingBlock = null" />
+}
+
+@if (_confirmDelete is not null)
+{
+    <ConfirmDialog Title="Remove this block?"
+                   Message="@($"“{Describe(_confirmDelete)}” will be removed from this page.")"
+                   ConfirmText="Remove"
+                   OnCancel="() => _confirmDelete = null"
+                   OnConfirm="DeleteConfirmedAsync" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
+
+    private IReadOnlyList<Widget> _blocks = [];
+    private IReadOnlyList<Connection> _connections = [];
+    private bool _editing;
+    private bool _picking;
+    private Widget? _editingBlock;
+    private Widget? _confirmDelete;
+    private Widget? _moving;
+    private DotNetObjectReference<CustomTab>? _self;
+    private bool _settle;
+
+    /// <summary>The end of a drag in widget-drag.js — see GridTab.DropAsync, which this mirrors.</summary>
+    [JSInvokable]
+    public async Task DropAsync(string id, string? beforeId)
+    {
+        await Config.MoveWidgetAsync(id, beforeId);
+        await LoadAsync();
+        _settle = true;
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("labbyDrag.register", _self);
+        }
+
+        if (_settle)
+        {
+            _settle = false;
+            await JS.InvokeVoidAsync("labbyDrag.clear");
+        }
+    }
+
+    protected override void OnInitialized() => Config.Changed += OnChanged;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    // Both reads come from ConfigStore's in-memory copy after the first, so a page of
+    // sections costs no more database work to redraw than a page of cards.
+    private async Task LoadAsync()
+    {
+        _blocks = await Config.WidgetsForTabAsync(Tab.Id);
+        _connections = await Config.ConnectionsAsync();
+    }
+
+    /// <summary>
+    /// Headings and dividers are drawn even while prerendering. They are a line of text
+    /// each and read nothing, and a page whose headings pop in after its cards jumps
+    /// about for no reason.
+    /// </summary>
+    private static bool IsCheap(Widget block) => block.Type is PageBlocks.Heading or PageBlocks.Divider;
+
+    private void ToggleEditing()
+    {
+        _editing = !_editing;
+        _moving = null;
+    }
+
+    private async Task PlaceBeforeAsync(Widget? target)
+    {
+        var source = _moving;
+        _moving = null;
+        if (source is null || source.Id == target?.Id)
+            return;
+        await Config.MoveWidgetAsync(source.Id, target?.Id);
+    }
+
+    private async Task MoveAsync(Widget block, int direction) => await Config.ReorderWidgetAsync(block.Id, direction);
+
+    private async Task ResizeAsync(Widget block, int widthStep, int heightStep) =>
+        await Config.SaveWidgetAsync(block with
+        {
+            Width = widthStep == 0 ? block.Width : PageBlocks.StepWidth(block.Width, widthStep),
+            Height = PageBlocks.StepRows(block.Height, heightStep),
+        });
+
+    private async Task DuplicateAsync(Widget block)
+    {
+        try
+        {
+            await Share.DuplicateWidgetAsync(block.Id);
+        }
+        catch (Exception)
+        {
+            // A block that will not copy is not worth taking the page down for.
+        }
+    }
+
+    /// <summary>What a block is, for the edit bar: a section says which page it holds.</summary>
+    private string Label(Widget block, IWidgetType? type)
+    {
+        if (block.Type == PageBlocks.Section)
+        {
+            var kind = PageBlocks.SectionKind(block.Settings);
+            return $"Section · {Registry.TabKind(kind)?.DisplayName ?? (kind.Length > 0 ? kind : "nothing yet")}";
+        }
+        return type?.DisplayName ?? block.Type;
+    }
+
+    private string Describe(Widget block)
+    {
+        if (block.Title is { Length: > 0 })
+            return block.Title;
+        if (block.Type == PageBlocks.Heading && block.Settings.Get("text") is { Length: > 0 } text)
+            return text;
+        return Label(block, Registry.WidgetType(block.Type));
+    }
+
+    private static string Fingerprint(Widget block, Connection? connection) =>
+        $"{block.Type}|{block.Settings.ToJson()}|{connection?.Id}|{connection?.Settings.ToJson()}";
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_confirmDelete is { } block)
+            await Deletions.WidgetAsync(block);
+        _confirmDelete = null;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Config.Changed -= OnChanged;
+        _self?.Dispose();
+    }
+}

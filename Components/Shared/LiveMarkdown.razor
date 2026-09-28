@@ -1,0 +1,242 @@
+@implements IDisposable
+@using System.Net
+@using Microsoft.AspNetCore.Components.Rendering
+@using Microsoft.Extensions.Logging
+@inject Markdown Markdown
+@inject ConfigStore Config
+@inject ILogger<LiveMarkdown> Log
+
+@* Markdown with live values in it. Drop-in for the old (MarkupString)Markdown.ToHtml(…):
+   the caller keeps its own markdown-body wrapper, and a note with no shortcodes renders
+   exactly the HTML it always did.
+
+   With shortcodes, the renderer's HTML is read back into elements (see MarkupTree) and
+   each placeholder becomes a component — LiveValue inside a sentence, EmbeddedCard on a
+   line of its own. Those components subscribe to the live state themselves, so a value
+   changes in place without this document being rendered again. *@
+
+@Body
+
+@code {
+    [Parameter] public string? Content { get; set; }
+
+    /// <summary>The widget or note this Markdown belongs to, for the recursion guard.</summary>
+    [Parameter] public string? OwnerId { get; set; }
+
+    [CascadingParameter] public EmbedChain? Chain { get; set; }
+
+    private string? _content;
+    private LiveDocument _document = LiveDocument.Empty;
+    private IReadOnlyList<MarkupNode> _nodes = [];
+    private ShortcodeScope? _scope;
+    private bool _loading;
+    private bool _stale;
+    private bool _disposed;
+
+    protected override void OnInitialized() => Config.Changed += OnConfigChanged;
+
+    protected override void OnParametersSet()
+    {
+        if (_content != Content)
+        {
+            _content = Content;
+            _document = Markdown.Prepare(Content);
+            _nodes = _document.Shortcodes.Count > 0 ? MarkupTree.Parse(_document.Html) : [];
+        }
+
+        if (_document.Shortcodes.Count > 0 && _scope is null)
+            LoadScope();
+    }
+
+    /// <summary>
+    /// Every connection, card and tab, for the shortcodes to look names up in. The store
+    /// caches all three, so this is normally instant — but "normally" is not "never touches
+    /// SQLite", and a render thread waiting on the database is what this app has spent a
+    /// year removing. So it runs on the pool, the shortcodes read "…" for the moment it
+    /// takes, and nothing here waits.
+    /// </summary>
+    private void LoadScope()
+    {
+        if (_loading)
+        {
+            _stale = true;
+            return;
+        }
+        _loading = true;
+        _stale = false;
+
+        _ = Task.Run(async () =>
+        {
+            ShortcodeScope? scope = null;
+            try
+            {
+                scope = new ShortcodeScope(
+                    await Config.ConnectionsAsync(),
+                    await Config.WidgetsAsync(),
+                    await Config.TabsAsync());
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning(ex, "Could not read the connections and cards a note's live values name");
+            }
+
+            if (_disposed)
+                return;
+            try
+            {
+                await InvokeAsync(() =>
+                {
+                    _loading = false;
+                    if (_disposed)
+                        return;
+                    if (scope is not null)
+                        _scope = scope;
+                    if (_stale)
+                        LoadScope();
+                    StateHasChanged();
+                });
+            }
+            catch (ObjectDisposedException)
+            {
+                // The circuit went while the lists were loading. Nobody to tell.
+            }
+        });
+    }
+
+    /// <summary>A connection renamed, a card retitled — the names the shortcodes use may mean something else now.</summary>
+    private void OnConfigChanged()
+    {
+        if (_disposed || _document.Shortcodes.Count == 0)
+            return;
+        _ = InvokeAsync(LoadScope);
+    }
+
+    private RenderFragment Body => builder =>
+    {
+        if (_document.Shortcodes.Count == 0)
+        {
+            builder.AddMarkupContent(0, _document.Html);
+            return;
+        }
+
+        // Cascaded rather than passed, because the next Markdown document down is inside
+        // somebody else's widget component, which has never heard of it.
+        builder.OpenComponent<CascadingValue<EmbedChain>>(1);
+        builder.AddComponentParameter(2, nameof(CascadingValue<EmbedChain>.Value), (Chain ?? EmbedChain.Empty).With(OwnerId));
+        builder.AddComponentParameter(3, nameof(CascadingValue<EmbedChain>.ChildContent), (RenderFragment)(inner => RenderNodes(inner, _nodes, blockAllowed: true)));
+        builder.CloseComponent();
+    };
+
+    /// <summary>
+    /// Elements whose text may hold a whole card: a list item or a quote holding nothing
+    /// else is still "a line of its own". Anywhere else — mid-sentence, in a heading, in a
+    /// link — a card would be drawn inside prose, so it becomes a "?" saying where it goes.
+    /// </summary>
+    private static readonly HashSet<string> BlockParents = new(StringComparer.Ordinal) { "li", "blockquote", "td", "th", "div" };
+
+    private void RenderNodes(RenderTreeBuilder builder, IReadOnlyList<MarkupNode> nodes, bool blockAllowed)
+    {
+        foreach (var node in nodes)
+        {
+            switch (node)
+            {
+                case MarkupText text:
+                    RenderText(builder, text.Html, blockAllowed);
+                    break;
+
+                case MarkupElement element when !Markdown.Placeholders.IsMatch(element.OuterHtml):
+                    // Nothing live inside: the renderer's own HTML, untouched.
+                    builder.AddMarkupContent(10, element.OuterHtml);
+                    break;
+
+                case MarkupElement { Name: "p" } element when SoleBlock(element) is { } index:
+                    // A card on a line of its own is a paragraph to Markdown, and a <div>
+                    // inside a <p> is not something a browser will keep. The paragraph goes.
+                    RenderShortcode(builder, index);
+                    break;
+
+                case MarkupElement element:
+                    builder.OpenElement(20, element.Name);
+                    foreach (var (name, value) in element.Attributes)
+                    {
+                        // A shortcode inside a link's address or an image's alt text has
+                        // nowhere to draw a component, so it reads as what was written.
+                        builder.AddAttribute(21, name, Markdown.Placeholders.Replace(value, m => Source(m)));
+                    }
+                    RenderNodes(builder, element.Children, BlockParents.Contains(element.Name));
+                    builder.CloseElement();
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Text around placeholders. Decoded and written as text, not markup — the render tree
+    /// encodes it again — so nothing in it can become a tag even in principle.
+    /// </summary>
+    private void RenderText(RenderTreeBuilder builder, string html, bool blockAllowed)
+    {
+        // A card only where it is all the text there is: "- {{widget: CPU}}" is a card in a
+        // list, "- see {{widget: CPU}}" is a card in a sentence.
+        var alone = blockAllowed && Markdown.Placeholders.Match(html.Trim()) is { Success: true } only
+            && only.Length == html.Trim().Length;
+        var at = 0;
+        foreach (System.Text.RegularExpressions.Match match in Markdown.Placeholders.Matches(html))
+        {
+            if (match.Index > at)
+                builder.AddContent(30, WebUtility.HtmlDecode(html[at..match.Index]));
+            at = match.Index + match.Length;
+
+            if (Index(match) is { } index)
+                RenderShortcode(builder, index, blockAllowed: alone);
+        }
+        if (at < html.Length)
+            builder.AddContent(31, WebUtility.HtmlDecode(html[at..]));
+    }
+
+    private void RenderShortcode(RenderTreeBuilder builder, int index, bool blockAllowed = true)
+    {
+        var code = _document.Shortcodes[index];
+        // A card where a card cannot go is handed to LiveValue, which says so with a "?".
+        if (code.IsBlock && blockAllowed)
+        {
+            builder.OpenComponent<EmbeddedCard>(40);
+            builder.SetKey(index);
+            builder.AddComponentParameter(41, nameof(EmbeddedCard.Code), code);
+            builder.AddComponentParameter(42, nameof(EmbeddedCard.Scope), _scope);
+            builder.CloseComponent();
+        }
+        else
+        {
+            builder.OpenComponent<LiveValue>(50);
+            builder.SetKey(index);
+            builder.AddComponentParameter(51, nameof(LiveValue.Code), code);
+            builder.AddComponentParameter(52, nameof(LiveValue.Scope), _scope);
+            builder.CloseComponent();
+        }
+    }
+
+    /// <summary>The block shortcode a paragraph consists of, if that is all it is.</summary>
+    private int? SoleBlock(MarkupElement paragraph)
+    {
+        if (paragraph.Children is not [MarkupText { Html: var html }])
+            return null;
+        var match = Markdown.Placeholders.Match(html.Trim());
+        return match.Success && match.Length == html.Trim().Length && Index(match) is { } index
+               && _document.Shortcodes[index].IsBlock
+            ? index
+            : null;
+    }
+
+    private int? Index(System.Text.RegularExpressions.Match match) =>
+        int.TryParse(match.Groups[1].Value, out var index) && index < _document.Shortcodes.Count ? index : null;
+
+    private string Source(System.Text.RegularExpressions.Match match) =>
+        Index(match) is { } index ? _document.Shortcodes[index].Source : "";
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Config.Changed -= OnConfigChanged;
+    }
+}

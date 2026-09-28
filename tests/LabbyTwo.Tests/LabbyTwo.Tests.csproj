@@ -8,6 +8,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Real responses captured from a NAS, serials and MACs replaced. Read from disk by
+         the tests so they stay byte-for-byte what the device sent. -->
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <!-- The real app in memory, for tests that have to go through its whole pipeline:
          the login throttle is only as good as the form, antiforgery and forwarded-header
