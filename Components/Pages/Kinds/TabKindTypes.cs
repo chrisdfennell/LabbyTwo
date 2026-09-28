@@ -17,6 +17,7 @@ public sealed class GridTabKind : ITabKind
         new("subtitle", "Subtitle", FieldKind.Text, Help: "Optional line under the heading."),
     ];
     public Type Component => typeof(GridTab);
+    public bool FillsWideScreens => true;
 }
 
 public sealed class EmbedTabKind : ITabKind
@@ -33,6 +34,7 @@ public sealed class EmbedTabKind : ITabKind
         new("height", "Height (px)", FieldKind.Number, Help: "Blank fills the window."),
     ];
     public Type Component => typeof(EmbedTab);
+    public bool FillsWideScreens => true;
 }
 
 public sealed class NotesTabKind : ITabKind
@@ -82,6 +84,7 @@ public sealed class WeatherStationTabKind : ITabKind
         new("radar_zoom", "Radar zoom", FieldKind.Number, Default: "7"),
     ];
     public Type Component => typeof(WeatherStationTab);
+    public bool FillsWideScreens => true;
 }
 
 /// <summary>
@@ -117,6 +120,7 @@ public sealed class MediaTabKind : ITabKind
     ];
 
     public Type Component => typeof(MediaTab);
+    public bool FillsWideScreens => true;
 }
 
 public sealed class GitTabKind : ITabKind
@@ -146,4 +150,5 @@ public sealed class StatusTabKind : ITabKind
         new("days", "Days shown", FieldKind.Number, Default: "30"),
     ];
     public Type Component => typeof(StatusTab);
+    public bool FillsWideScreens => true;
 }

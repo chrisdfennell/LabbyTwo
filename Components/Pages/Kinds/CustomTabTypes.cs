@@ -13,6 +13,10 @@ public sealed class CustomTabKind : ITabKind
 {
     public string Kind => TabKinds.Custom;
     public string DisplayName => "Custom page";
+
+    // A page of cards and sections: on a wide screen it should gain columns like a
+    // dashboard, not sit in the narrow column the settings pages keep.
+    public bool FillsWideScreens => true;
     public string Icon => "🧩";
     public string Description =>
         "Mix anything on one page — cards, whole pages like the weather or the status page as " +

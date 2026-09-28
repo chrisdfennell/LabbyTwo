@@ -101,7 +101,8 @@ public sealed record Appearance(
     string TextScale,
     string Font,
     string FontFamily,
-    string FontUrl)
+    string FontUrl,
+    string WideScreens)
 {
     public const string ThemeKey = "theme";
     public const string AccentKey = "accent";
@@ -115,10 +116,11 @@ public sealed record Appearance(
     public const string FontKey = "font";
     public const string FontFamilyKey = "font_family";
     public const string FontUrlKey = "font_url";
+    public const string WideScreensKey = "wide_screens";
 
     public static Appearance Default => new(
         "system", "#4da3ff", "comfortable", "LabbyTwo", Core.Units.Imperial,
-        "rounded", "outlined", "midnight", "normal", "sans", "", "");
+        "rounded", "outlined", "midnight", "normal", "sans", "", "", "columns");
 
     public static Appearance From(SettingsBag settings) => new(
         settings.Get(ThemeKey, Default.Theme),
@@ -132,7 +134,8 @@ public sealed record Appearance(
         settings.Get(TextScaleKey, Default.TextScale),
         settings.Get(FontKey, Default.Font),
         settings.Get(FontFamilyKey, Default.FontFamily),
-        settings.Get(FontUrlKey, Default.FontUrl));
+        settings.Get(FontUrlKey, Default.FontUrl),
+        settings.Get(WideScreensKey, Default.WideScreens));
 
     /// <summary>
     /// The choices themselves, so the settings page renders from the same list the CSS is
@@ -173,6 +176,26 @@ public sealed record Appearance(
         ("serif", "Serif", ""),
         ("mono", "Monospace", "Every figure the same width, so columns of numbers line up."),
         ("custom", "Custom", "Your own — a family name, an uploaded file, or a web font."),
+    ];
+
+    /// <summary>
+    /// What a dashboard does with a screen wider than it was laid out for.
+    ///
+    /// Cards are sized in twelfths of the row, which is right on a laptop and wrong on an
+    /// ultra-wide: stretched across 5000 pixels a quarter-width card is a banner, and capped
+    /// at 1600 the page is a strip down the middle of the monitor. Adding columns as the row
+    /// grows keeps a card about the size it was and fits more of them in, which is what a
+    /// bigger screen is usually bought for — so that is the default, and the other two are
+    /// there for somebody who wants the cards bigger or the page as it always was.
+    /// </summary>
+    public static readonly (string Value, string Label, string Hint)[] WideScreenModes =
+    [
+        ("columns", "More cards per row",
+            "The dashboard uses the whole width, and the grid gains columns as it grows so each card keeps about the size it has on an ordinary monitor. The default."),
+        ("stretch", "Stretch cards to fill",
+            "The whole width, still twelve columns — the same layout as a laptop, every card wider."),
+        ("centred", "Keep it centred",
+            "A column 1600 pixels wide down the middle, with the rest of the screen left empty."),
     ];
 
     /// <summary>
@@ -240,6 +263,14 @@ public sealed record Appearance(
     /// <summary>Card treatment, for the same reason: it is a set of rules, not a value.</summary>
     public string? SurfaceAttribute =>
         Surfaces.Any(s => s.Value == Surface) && Surface != "outlined" ? Surface : null;
+
+    /// <summary>
+    /// The wide-screen treatment, as an attribute for the same reason as the surface: it
+    /// switches rules on and off rather than setting a value. Absent for the default, and
+    /// for anything unrecognised, so a stray value gets the default rather than nothing.
+    /// </summary>
+    public string? WideAttribute =>
+        WideScreenModes.Any(m => m.Value == WideScreens) && WideScreens != "columns" ? WideScreens : null;
 
     /// <summary>
     /// Inline overrides for whatever the user picked, applied on the html element.

@@ -168,6 +168,26 @@ summary:focus-visible,
     padding: calc(1.5rem * var(--density)) calc(1.75rem * var(--density)) 4rem;
     max-width: 1600px;
     min-width: 0;
+
+    /* The card grid asks this how wide it has to work with — see "wide screens" below.
+       The page column rather than the window, so the sidebar is already taken off and a
+       wall with no sidebar gets the extra room it really has. */
+    container: page / inline-size;
+}
+
+/* A dashboard spreads across whatever it is given. Everything else keeps the 1600px
+   column: a form or a table of text on a line five thousand pixels long is a page nobody
+   can read, and the eye loses its row somewhere in the middle.
+
+   Which is which is the tab kind's to say (ITabKind.FillsWideScreens), and TabPage marks
+   its wrapper with it. The wrapper draws no box, so it cannot move anything; it is only
+   there to be found by :has(). The wall is all dashboards by definition, so it is uncapped
+   outright — the bare wall always was. */
+.tab-page { display: contents; }
+
+:root:not([data-wide="centred"]) .app-main:has(> .tab-page.fills-width),
+:root:not([data-wide="centred"]) .app-main.wall-stage {
+    max-width: none;
 }
 
 .app-nav {
@@ -710,6 +730,35 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
         height: auto;
     }
     .custom-grid > .has-rows > .widget-body { overflow: visible; }
+}
+
+/* Wide screens: more columns rather than wider cards.
+
+   A card's width is a number of columns, so the way to keep it the size it is on an
+   ordinary monitor is to add columns as the row grows and leave the spans alone. At the
+   capped 1600px layout a column is about 130px; these steps keep it within a third of
+   that either way, and step in twelves so every w-N is still a clean fraction of the row
+   (a half-width card becomes a quarter, then a sixth). The full-width card is the
+   exception — it is full width because it is meant to be, a search bar or a banner, so it
+   takes the whole row whatever the count is.
+
+   Asked of the page column, not the window, so the sidebar and a wall with no sidebar are
+   both accounted for. Only the default mode: "stretch" keeps twelve columns and wider
+   cards, and "centred" never gets this wide. The phone and laptop rules above are about
+   narrow windows, which never reach these widths, so the two cannot meet. Nothing here
+   touches rows, so a grid that sizes its own rows and spans cards down them keeps both. */
+@container page (min-width: 2400px) {
+    :root:not([data-wide]) .widget-grid { grid-template-columns: repeat(24, minmax(0, 1fr)); }
+    :root:not([data-wide]) .widget-grid > .w-12 { grid-column: 1 / -1; }
+}
+
+@container page (min-width: 3600px) {
+    :root:not([data-wide]) .widget-grid { grid-template-columns: repeat(36, minmax(0, 1fr)); }
+}
+
+/* An 8K panel on a wall. */
+@container page (min-width: 6000px) {
+    :root:not([data-wide]) .widget-grid { grid-template-columns: repeat(48, minmax(0, 1fr)); }
 }
 
 /* ---------- status ---------- */
@@ -1747,6 +1796,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
    the theme and the dark palette without rules of their own. */
 
 .wall-bare {
+    container: page / inline-size;
     min-height: 100vh;
     padding: calc(1.25rem * var(--density)) calc(1.5rem * var(--density)) 3rem;
 }
