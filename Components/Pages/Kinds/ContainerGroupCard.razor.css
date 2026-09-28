@@ -1,0 +1,99 @@
+/* One Compose project. A grid rather than a table so a row can fold onto two lines on a
+   phone without a horizontal scrollbar — the actions drop under the name instead. */
+
+.ct-group {
+    margin-bottom: .75rem;
+    padding: .5rem .75rem;
+}
+
+.ct-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+}
+
+.ct-toggle {
+    display: flex;
+    align-items: baseline;
+    gap: .5rem;
+    background: none;
+    border: 0;
+    color: var(--text);
+    padding: .25rem 0;
+    text-align: left;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.ct-caret { color: var(--muted); width: 1em; }
+.ct-group-title { font-weight: 600; }
+
+.ct-bulk { display: flex; gap: .35rem; flex-wrap: wrap; }
+
+.ct-rows { margin-top: .35rem; }
+
+.ct-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1.6fr) auto;
+    gap: .35rem .75rem;
+    align-items: center;
+    padding: .45rem 0;
+    border-top: 1px solid var(--edge);
+}
+
+.ct-name { min-width: 0; }
+
+.ct-title {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    min-width: 0;
+    font-weight: 500;
+}
+
+.ct-badge {
+    flex: none;
+    font-size: .7rem;
+    font-weight: 500;
+    line-height: 1.4;
+    padding: 0 .4rem;
+    border-radius: 999px;
+    border: 1px solid var(--edge);
+    color: var(--muted);
+    background: var(--panel-2);
+}
+
+.ct-health-healthy { color: var(--up); border-color: color-mix(in srgb, var(--up) 45%, transparent); }
+.ct-health-unhealthy { color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, transparent); }
+.ct-health-starting { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.ct-self { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.ct-protected { color: var(--warn); }
+.ct-update { color: var(--accent); }
+
+.ct-ports { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ct-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .1rem .75rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.ct-actions {
+    display: flex;
+    gap: .25rem;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.ct-actions .btn { min-width: 2rem; }
+
+@media (max-width: 900px) {
+    .ct-row {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+    .ct-ports { display: none; }
+    .ct-stats { grid-column: 2 / 4; }
+    .ct-actions { grid-column: 1 / 4; justify-content: flex-start; }
+}

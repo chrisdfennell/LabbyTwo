@@ -400,7 +400,7 @@ added to the Home Screen.
 
 The sidebar is literally a table. Add, rename, reorder, hide, delete — and **Sort** puts a
 nav that grew in no particular order into one, A–Z or by kind. **Duplicate** makes another
-tab like this one, cards and bindings and all. Seven kinds ship:
+tab like this one, cards and bindings and all. Eight kinds ship:
 
 - **Dashboard** — a grid of widgets.
 - **Embedded page** — a full-height iframe of another app's web UI. One tab kind covers
@@ -425,6 +425,18 @@ tab like this one, cards and bindings and all. Seven kinds ship:
   growth. It names no connections — it gathers every one whose integration calls itself
   Media or Downloads, so the eighth *arr you add appears on it by itself. Built from the
   same widgets a dashboard tab can use, arranged for you.
+- **Containers** — every container on one Docker host, grouped by Compose project: state,
+  health check, image, uptime or exit code, published ports, and live CPU, memory and
+  network for the running ones (read every ten seconds, four at a time, and only while the
+  page is visible). Start, stop, restart, pause and remove — one at a time or a whole
+  project — each confirmed; logs with follow, pause, search and download; and an inspect
+  panel whose environment values stay hidden until you reveal one. It points out a
+  container still running an older image than its tag now names locally (pulled, not
+  recreated), without asking any registry. **Whoever can open this page controls every
+  container on that host**, so keep the login on — or switch the tab to read-only.
+  LabbyTwo's own container, and any you list as protected (your tunnel, say), need their
+  name typed before being stopped, paused or removed, and project-wide buttons skip them.
+  With the Terminal plugin and a Terminal tab, each running container gets a shell button.
 - **Status page** — uptime for everything monitored: 24h/7d/30d percentages, a daily bar
   strip, and a log of every time something went down or came back. Percentages are
   measured from when monitoring actually started, marked `*`, rather than crediting a
@@ -985,8 +997,8 @@ socket, which is worth a deliberate decision rather than a copy-paste:
 Anything that can talk to that socket can start a privileged container, which is root on
 the host. The `:ro` stops the socket *file* being modified; it does **not** make the
 Docker API read-only, because there is no such mode. LabbyTwo reads, restarts when you press
-↻, and creates a container only when you press **Update now** without a Watchtower API set
-up — but that is a property of this code rather than a restriction the mount imposes on it.
+↻, starts, stops and removes containers only from a **Containers** tab you have added, and
+creates a container only when you press **Update now** without a Watchtower API set up — but that is a property of this code rather than a restriction the mount imposes on it.
 Leaving it out costs you the Docker features and nothing else.
 
 Adding a `volumes:` key in the override merges with the base file rather than replacing
@@ -1023,10 +1035,20 @@ What each feature asks Docker for, and what the proxy has to allow:
 | ↻ on a container, **Restart LabbyTwo** | `POST /containers/{id}/restart` | `ALLOW_RESTARTS=1` — and on tecnativa also `POST=1`, see above |
 | **Update now**, through a Watchtower's HTTP API | none — LabbyTwo calls Watchtower, not Docker | none |
 | **Update now**, one-shot Watchtower | `POST /images/create`, `POST /containers/create`, `POST /containers/{id}/start`, and then everything Watchtower does to recreate LabbyTwo | `CONTAINERS=1`, `IMAGES=1`, `POST=1` at least — the same power as the raw socket, so don't |
+| Containers tab: list, inspect, live stats | `GET /containers/json?all=1`, `GET /containers/{id}/json`, `GET /containers/{id}/stats?stream=false` | `CONTAINERS=1` |
+| Containers tab: logs | `GET /containers/{id}/logs` (with `follow=1` while following) | `CONTAINERS=1` and, on linuxserver, `ALLOW_LOGS=1` |
+| Containers tab: restart / stop | `POST /containers/{id}/restart`, `/stop` | `ALLOW_RESTARTS=1` (or `ALLOW_STOP=1` for stop) — on tecnativa also `POST=1` |
+| Containers tab: start | `POST /containers/{id}/start` | `ALLOW_START=1` — on tecnativa also `POST=1` |
+| Containers tab: pause / unpause | `POST /containers/{id}/pause`, `/unpause` | linuxserver: `ALLOW_PAUSE=1`, `ALLOW_UNPAUSE=1`; tecnativa: `CONTAINERS=1`, `POST=1` |
+| Containers tab: remove | `DELETE /containers/{id}` | `CONTAINERS=1`, `POST=1` — root-equivalent, so usually leave it refused |
+| Containers tab: the newer-image hint | `GET /images/json` | `IMAGES=1` |
 | Terminal plugin (`docker exec`) | `POST /containers/{id}/exec`, `POST /exec/{id}/start` | `CONTAINERS=1`, `EXEC=1`, `POST=1` — root-equivalent too |
 
 When the proxy refuses something, LabbyTwo says which flag to set rather than "HTTP 403".
-`ALLOW_RESTARTS` covers stop and kill as well as restart; LabbyTwo only ever restarts.
+`ALLOW_RESTARTS` covers stop and kill as well as restart. The Containers tab works out what
+the proxy allows when it opens — by asking for each action on a container name that cannot
+exist, which the proxy refuses with 403 or Docker answers with 404 — and greys out what is
+refused, with the flag in the button's tooltip, instead of letting each button fail.
 
 Point LabbyTwo at it by setting the Docker connection's **Endpoint** to
 `tcp://socket-proxy:2375`. Settings → Updates and **Restart LabbyTwo** use that connection's

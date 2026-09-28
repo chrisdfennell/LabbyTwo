@@ -1,0 +1,187 @@
+@* The parts of `docker inspect` worth reading on a phone. Environment values are hidden
+   until asked for one at a time: they are where compose files keep database passwords and
+   API keys, and this panel gets opened on a screen other people can see. The value is not
+   even sent to the browser until it is revealed — hiding it with CSS would leave it in the
+   page for anyone who looked. *@
+
+<div class="ct-inspect">
+    <dl class="ct-facts">
+        <dt>Image</dt>
+        <dd><code>@Details.Image</code> <span class="tile-meta">@ShortImage</span></dd>
+
+        @if (Details.Command.Length > 0)
+        {
+            <dt>Command</dt>
+            <dd><code>@Details.Command</code></dd>
+        }
+
+        <dt>Restart policy</dt>
+        <dd>@RestartText</dd>
+
+        <dt>Created</dt>
+        <dd>@When(Details.Created)</dd>
+
+        <dt>Started</dt>
+        <dd>@When(Details.Started)</dd>
+
+        @if (Details.Finished is not null)
+        {
+            <dt>Last stopped</dt>
+            <dd>@When(Details.Finished)</dd>
+        }
+    </dl>
+
+    <h3 class="ct-subhead">Environment <span class="tile-meta">@_env.Count</span></h3>
+    @if (_env.Count == 0)
+    {
+        <p class="tile-meta">None.</p>
+    }
+    else
+    {
+        <div class="d-flex gap-2 mb-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reveal-all"
+                    @onclick="ToggleAll">@(_revealed.Count == _env.Count ? "Hide all" : "Reveal all")</button>
+        </div>
+        <table class="table table-sm ct-table">
+            <tbody>
+                @for (var i = 0; i < _env.Count; i++)
+                {
+                    var index = i;
+                    var entry = _env[index];
+                    var shown = _revealed.Contains(index);
+                    <tr @key="index">
+                        <th scope="row"><code>@entry.Key</code></th>
+                        <td class="ct-env-value">
+                            <code class="@(shown ? "" : "ct-masked")">@ContainerSafety.Display(entry, shown)</code>
+                        </td>
+                        <td class="text-end">
+                            @if (entry.Value.Length > 0)
+                            {
+                                <button type="button" class="btn btn-sm btn-link p-0" data-action="reveal"
+                                        aria-label="@((shown ? "Hide " : "Reveal ") + entry.Key)"
+                                        @onclick="() => Toggle(index)">@(shown ? "Hide" : "Reveal")</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <h3 class="ct-subhead">Mounts <span class="tile-meta">@Details.Mounts.Count</span></h3>
+    @if (Details.Mounts.Count == 0)
+    {
+        <p class="tile-meta">None.</p>
+    }
+    else
+    {
+        <ul class="ct-list">
+            @foreach (var mount in Details.Mounts)
+            {
+                <li>
+                    <span class="ct-badge">@mount.Type</span>
+                    <code>@mount.Source</code> → <code>@mount.Destination</code>
+                    @if (!mount.ReadWrite)
+                    {
+                        <span class="tile-meta">read-only</span>
+                    }
+                </li>
+            }
+        </ul>
+    }
+
+    <h3 class="ct-subhead">Networks <span class="tile-meta">@Details.Networks.Count</span></h3>
+    @if (Details.Networks.Count == 0)
+    {
+        <p class="tile-meta">None.</p>
+    }
+    else
+    {
+        <ul class="ct-list">
+            @foreach (var network in Details.Networks)
+            {
+                <li>
+                    <strong>@network.Name</strong>
+                    @if (network.IpAddress.Length > 0)
+                    {
+                        <text> </text><code>@network.IpAddress</code>
+                    }
+                    @if (network.Aliases.Count > 0)
+                    {
+                        <span class="tile-meta">also @string.Join(", ", network.Aliases)</span>
+                    }
+                </li>
+            }
+        </ul>
+    }
+
+    <h3 class="ct-subhead">Labels <span class="tile-meta">@Details.Labels.Count</span></h3>
+    @if (Details.Labels.Count == 0)
+    {
+        <p class="tile-meta">None.</p>
+    }
+    else
+    {
+        <table class="table table-sm ct-table">
+            <tbody>
+                @foreach (var label in Details.Labels.OrderBy(l => l.Key, StringComparer.Ordinal))
+                {
+                    <tr>
+                        <th scope="row"><code>@label.Key</code></th>
+                        <td><code>@label.Value</code></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ContainerDetails Details { get; set; } = default!;
+
+    private IReadOnlyList<ContainerSafety.EnvEntry> _env = [];
+    private readonly HashSet<int> _revealed = [];
+    private string? _for;
+
+    protected override void OnParametersSet()
+    {
+        // A different container starts hidden again; the same one keeps what was revealed.
+        if (_for != Details.Id)
+        {
+            _for = Details.Id;
+            _revealed.Clear();
+        }
+        _env = ContainerSafety.ParseEnv(Details.Environment);
+    }
+
+    private void Toggle(int index)
+    {
+        if (!_revealed.Remove(index))
+            _revealed.Add(index);
+    }
+
+    private void ToggleAll()
+    {
+        if (_revealed.Count == _env.Count)
+            _revealed.Clear();
+        else
+            for (var i = 0; i < _env.Count; i++)
+                _revealed.Add(i);
+    }
+
+    private string ShortImage => Details.ImageId.StartsWith("sha256:", StringComparison.Ordinal) && Details.ImageId.Length > 19
+        ? Details.ImageId[7..19]
+        : "";
+
+    private string RestartText => Details.RestartPolicy switch
+    {
+        "" or "no" => "Never — it stays down if it stops",
+        "always" => "Always",
+        "unless-stopped" => "Unless stopped by hand",
+        "on-failure" => Details.RestartRetries > 0 ? $"On failure, up to {Details.RestartRetries} times" : "On failure",
+        var other => other,
+    };
+
+    private static string When(DateTimeOffset? time) =>
+        time is { } at ? $"{at.ToLocalTime():yyyy-MM-dd HH:mm:ss} ({Ago.Since(at)})" : "—";
+}
