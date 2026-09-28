@@ -88,16 +88,22 @@ public sealed class BackgroundLoadTests
         var component = new FakeComponent();
         using var load = component.Loader();
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var first = load.Load("a", async ct =>
         {
             ct.Register(() => cancelled.TrySetResult());
+            started.TrySetResult();
             await Task.Delay(System.Threading.Timeout.Infinite, ct);
             return 0;
         }, _ => { });
 
-        // Wait until the fetch is actually running before superseding it.
-        await Task.Delay(50);
+        // Wait until the fetch is actually running before superseding it — on the signal,
+        // not a fixed pause. A 50 ms sleep passed on a fast machine and failed on a busy CI
+        // runner, where the fetch had not been scheduled yet: the second load then
+        // cancelled it before it ever registered, and the test waited for a cancellation
+        // it could no longer see.
+        await started.Task.WaitAsync(Timeout);
         _ = load.Load("b", _ => Task.FromResult(1), _ => { });
 
         await cancelled.Task.WaitAsync(Timeout);
@@ -141,7 +147,9 @@ public sealed class BackgroundLoadTests
         }
 
         var first = load.Load("key", Fetch, applied.Add);
-        await Task.Delay(50);
+        // Until the first fetch is really running, not a fixed pause — see
+        // A_superseded_load_is_cancelled for what a pause did on a busy CI runner.
+        await WaitUntil(() => Volatile.Read(ref fetches) == 1);
 
         // Three sweeps land while the first load is still going. The first is not
         // cancelled — a query slower than the sweep would otherwise never finish — and the
