@@ -71,6 +71,7 @@ await new Promise((resolve, reject) => {
 let nextId = 0;
 const pending = new Map();
 const problems = [];
+let crashedTab = false;
 
 socket.onmessage = event => {
   const message = JSON.parse(event.data);
@@ -79,6 +80,12 @@ socket.onmessage = event => {
     pending.delete(message.id);
     if (message.error) reject(new Error(message.error.message));
     else resolve(message.result);
+    return;
+  }
+  // The tab itself dying, out of memory on a small CI runner most likely. Nothing can be
+  // asked of it afterwards, so say so rather than timing out on a page that no longer exists.
+  if (message.method === 'Inspector.targetCrashed') {
+    crashedTab = true;
     return;
   }
   // Errors in the page itself, which is where a circuit that failed says so.
@@ -100,6 +107,7 @@ const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
 const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
 await send('Runtime.enable', {}, sessionId);
 await send('Page.enable', {}, sessionId);
+await send('Inspector.enable', {}, sessionId);
 // The clock starts here rather than with Chrome, whose own start is not the page's time.
 started = Date.now();
 await send('Page.navigate', { url }, sessionId);
@@ -130,13 +138,41 @@ let lastClick = 0;
 
 let state = { cards: 0, waiting: -1, failed: [], crashed: false };
 let reached;
+// Why the page could not be asked, kept so a timeout says something. "-1 of 0 cards" on its
+// own meant every question failed for the whole run, with nothing to say what went wrong.
+let lastError = '';
+let lastRead = Date.now();
+let reloaded = false;
 while (Date.now() < deadline) {
+  if (crashedTab) {
+    if (reloaded) finish(2, `The browser tab crashed again after a reload.\n${problems.join('\n')}`);
+    // Once, and only once: a tab that crashes twice is telling us something about the page.
+    console.log('The browser tab crashed; loading the page again once.');
+    crashedTab = false;
+    reloaded = true;
+    lastRead = Date.now();
+    await send('Page.navigate', { url }, sessionId).catch(() => {});
+  }
+
   try {
     const value = await evaluate(inspect);
-    if (typeof value === 'string') state = JSON.parse(value);
+    if (typeof value === 'string') {
+      state = JSON.parse(value);
+      lastRead = Date.now();
+    }
     if (until) reached = await evaluate(until);
-  } catch {
+  } catch (error) {
     // Mid-navigation there is no document to ask. The next attempt will have one.
+    lastError = error?.message ?? String(error);
+  }
+
+  // Ten seconds without being able to read the page at all is not a slow card: the
+  // navigation never took. Load it again once before calling it.
+  if (!reloaded && Date.now() - lastRead > 10_000) {
+    console.log(`Could not read the page for 10s (${lastError || 'no document'}); loading it again once.`);
+    reloaded = true;
+    lastRead = Date.now();
+    await send('Page.navigate', { url }, sessionId).catch(error => { lastError = error.message; });
   }
 
   if (state.crashed) finish(1, `Blazor reported an unhandled error.\n${problems.join('\n')}`);
@@ -158,5 +194,7 @@ if (until) {
   finish(2, `After ${seconds}s, the page had still not got as far as: ${until}` +
     (problems.length ? `\nThe page said:\n${problems.join('\n')}` : ''));
 }
-finish(2, `After ${seconds}s, ${state.waiting} of ${state.cards} cards were still loading.` +
+finish(2, (state.waiting < 0
+    ? `After ${seconds}s the page could never be read${lastError ? ` (last error: ${lastError})` : ''}.`
+    : `After ${seconds}s, ${state.waiting} of ${state.cards} cards were still loading.`) +
   (problems.length ? `\nThe page said:\n${problems.join('\n')}` : ''));
