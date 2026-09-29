@@ -361,6 +361,8 @@
             "containers" when blockAllowed => typeof(LiveContainers),
             "updates" when blockAllowed => typeof(LiveUpdates),
             "renewals" when blockAllowed => typeof(LiveRenewals),
+            "changes" when blockAllowed => typeof(LiveChanges),
+            "incidents" when blockAllowed => typeof(LiveIncidents),
             _ => null,
         };
         if (own is not null)

@@ -42,6 +42,26 @@ public sealed class LabbyOptions
     /// </summary>
     public int HourlyRetentionDays { get; set; } = 365;
 
+    /// <summary>
+    /// Days of the "what changed" feed to keep. Three months is long enough to answer "has
+    /// this happened before" and "what did we change before it broke last time", and at a
+    /// few dozen rows a day it costs next to nothing. Never less than a week.
+    /// </summary>
+    public int ChangeRetentionDays { get; set; } = 90;
+
+    /// <summary>
+    /// Days of incidents to keep. Longer than the feed, because an incident is one row where
+    /// the feed is dozens, and "how often did the NAS go down this year" is worth answering.
+    /// Never shorter than <see cref="ChangeRetentionDays"/>.
+    /// </summary>
+    public int IncidentRetentionDays { get; set; } = 365;
+
+    /// <summary><see cref="ChangeRetentionDays"/>, clamped to at least a week.</summary>
+    public TimeSpan ChangeRetention => TimeSpan.FromDays(Math.Max(7, ChangeRetentionDays));
+
+    /// <summary><see cref="IncidentRetentionDays"/>, never shorter than <see cref="ChangeRetention"/>.</summary>
+    public TimeSpan IncidentRetention => TimeSpan.FromDays(Math.Max(IncidentRetentionDays, Math.Max(7, ChangeRetentionDays)));
+
     /// <summary><see cref="RetentionDays"/>, clamped to at least a day.</summary>
     public TimeSpan RawRetention => TimeSpan.FromDays(Math.Max(1, RetentionDays));
 
@@ -389,6 +409,63 @@ public sealed class Db
             body           TEXT NOT NULL DEFAULT '',
             link           TEXT,
             value          REAL NOT NULL DEFAULT 0)
+        """,
+
+        // 21 — the "what changed" feed: one row per thing that changed anywhere in the lab —
+        // a service going down, a container restarting or pulling a new image, an alert
+        // firing, a certificate renewed, LabbyTwo itself updated. Written a handful of times
+        // a day, read by time, so the only index is on ts: every read is "newest first in a
+        // window", with kind and connection filtered from the rows that range yields. The
+        // id doubles as the tiebreak for two changes stamped in the same second.
+        """
+        CREATE TABLE IF NOT EXISTS changes (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            INTEGER NOT NULL,
+            kind          TEXT    NOT NULL,
+            action        TEXT    NOT NULL,
+            connection_id TEXT,
+            subject       TEXT    NOT NULL DEFAULT '',
+            title         TEXT    NOT NULL,
+            detail        TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_changes_ts ON changes (ts);
+        """,
+
+        // 22 — what each change detector saw last, so a restart compares against what was
+        // true before it rather than against nothing. One row per thing watched — a Docker
+        // host's container list, a certificate's serial, this install's version — written
+        // only when that thing changes. The key is the only lookup, so it is the table.
+        """
+        CREATE TABLE IF NOT EXISTS change_baselines (
+            key        TEXT    PRIMARY KEY,
+            value      TEXT    NOT NULL,
+            updated_at INTEGER NOT NULL) WITHOUT ROWID
+        """,
+
+        // 23 — incidents: one row per outage, however many things it took down, and one
+        // member row per service or alert rule involved. Listed newest first by start, and
+        // the open ones found through a partial index that holds nothing once they close.
+        // Members are always read for one incident at a time, which is their primary key.
+        // seq is the order they joined in: several can fail inside one second, and the one
+        // that failed first is what the incident is called after.
+        """
+        CREATE TABLE IF NOT EXISTS incidents (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_ts  INTEGER NOT NULL,
+            ended_ts    INTEGER,
+            last_ts     INTEGER NOT NULL,
+            maintenance INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS ix_incidents_started ON incidents (started_ts);
+        CREATE INDEX IF NOT EXISTS ix_incidents_open ON incidents (started_ts) WHERE ended_ts IS NULL;
+        CREATE TABLE IF NOT EXISTS incident_members (
+            incident_id   INTEGER NOT NULL,
+            member        TEXT    NOT NULL,
+            kind          TEXT    NOT NULL,
+            connection_id TEXT,
+            name          TEXT    NOT NULL,
+            down_ts       INTEGER NOT NULL,
+            up_ts         INTEGER,
+            seq           INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
     ];
 

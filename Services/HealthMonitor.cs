@@ -47,6 +47,15 @@ public sealed partial class HealthMonitor(
 
     public sealed record StatusChange(Connection Connection, bool IsUp, string Message, TimeSpan? PreviousDuration);
 
+    /// <summary>
+    /// Fires after every probe with what it found, before the sweep's <see cref="Updated"/>.
+    /// For the change detectors that read what a probe reported rather than whether it was
+    /// up — a certificate's serial, a scan's new devices — and so need each probe, not only
+    /// the ones that changed a status. Listeners must be quick and must not throw; anything
+    /// slow belongs on a task of its own.
+    /// </summary>
+    public event Action<Connection, ProbeState>? Probed;
+
     /// <summary>Whether this connection is something the monitor polls at all.</summary>
     public bool IsMonitored(Connection connection) =>
         connection.Enabled && registry.Provider(connection.Provider)?.IsMonitored != false;
@@ -278,6 +287,15 @@ public sealed partial class HealthMonitor(
             result.Metrics ?? new Dictionary<string, double>(),
             result.Details ?? new Dictionary<string, string>());
         _states[connection.Id] = state;
+
+        try
+        {
+            Probed?.Invoke(connection, state);
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "A probe listener threw for {Connection}", connection.Name);
+        }
 
         if (result.Metrics is { Count: > 0 } metrics)
         {
