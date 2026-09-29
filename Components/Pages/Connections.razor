@@ -7,6 +7,7 @@
 @inject HealthMonitor Health
 @inject AppSettingsStore AppSettings
 @inject NavigationManager Nav
+@inject AlertService Alerts
 
 <PageTitle>Connections · LabbyTwo</PageTitle>
 
@@ -167,6 +168,12 @@ else
                                 {
                                     <span class="badge text-bg-warning" title="@($"Alerts held until {connection.SilencedUntil:HH:mm}")">
                                         silenced until @connection.SilencedUntil?.ToString("HH:mm")
+                                    </span>
+                                }
+                                @if (!IsAlertChannel(connection) && Alerts.MutedBy(null, connection.Id, _now) is { } window)
+                                {
+                                    <span class="badge text-bg-warning" title="Going down will not be sent until this mute window ends">
+                                        muted by @window.Name
                                     </span>
                                 }
                                 @if (connection.DependsOn is { Length: > 0 } parent && Name(parent) is { Length: > 0 } behind)

@@ -133,8 +133,37 @@ public sealed class MetricAlertService(
             _ = EvaluateSafelyAsync();
     }
 
+    /// <summary>Whether the breaches that were firing before the last restart have been put back.</summary>
+    private bool _restored;
+
+    /// <summary>
+    /// Puts back the breaches that were firing when LabbyTwo last stopped, from the ledger
+    /// <see cref="AlertService"/> keeps. Without this every restart forgot them: a rule
+    /// still breaching fired again as if new — a second "disk nearly full" for the same
+    /// disk after every update — and one that recovered while the app was down was never
+    /// announced, because nothing remembered it had been firing. Restored as firing, so the
+    /// first reading after the restart either keeps it quiet or clears it, with a recovery.
+    /// Done on the first pass rather than at startup so it never holds up the app starting.
+    /// </summary>
+    private async Task RestoreAsync(CancellationToken ct)
+    {
+        if (_restored)
+            return;
+
+        foreach (var entry in await alerts.FiringAsync(ct))
+        {
+            if (entry.RuleId is not { } ruleId)
+                continue;
+            _breaches.TryAdd(Key(ruleId, entry.ConnectionId),
+                new Breach(ruleId, entry.ConnectionId, entry.Since, true, entry.Value));
+        }
+        _restored = true;
+    }
+
     private async Task EvaluatePassAsync(DateTimeOffset now, CancellationToken ct)
     {
+        await RestoreAsync(ct);
+
         var active = await rules.AllAsync(ct);
         var connections = await config.ConnectionsAsync(ct);
 
@@ -189,8 +218,25 @@ public sealed class MetricAlertService(
         // Forget rules and connections that went away — deleted, disabled, muted, or no
         // longer a target — so a deleted rule does not keep showing as firing and a
         // recreated one starts its sustain window fresh.
+        var forgotten = new List<string>();
         foreach (var key in _breaches.Keys.Where(k => !watched.Contains(k)))
-            _breaches.TryRemove(key, out _);
+        {
+            if (_breaches.TryRemove(key, out var gone) && gone.Firing)
+                forgotten.Add(FiringAlert.RuleKey(gone.RuleId, gone.ConnectionId));
+        }
+
+        // Mute windows ending and escalations coming due are checked after every pass, and
+        // after it rather than beside it so an alert this pass cleared is not escalated first.
+        try
+        {
+            if (forgotten.Count > 0)
+                await alerts.ForgetAsync(forgotten, ct);
+            await alerts.FollowUpAsync(now, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            log.LogError(ex, "Following up firing alerts failed");
+        }
 
         Updated?.Invoke();
     }
@@ -230,7 +276,7 @@ public sealed class MetricAlertService(
             _breaches[key] = new Breach(rule.Id, connection.Id, since, firing || sustained, value) { Usual = usual };
 
             if (!firing && sustained)
-                await SendAsync(rule, connection, spec, value, usual, AlertLevel.Down, ct);
+                await SendAsync(rule, connection, spec, value, usual, AlertLevel.Down, since, now, ct);
             return;
         }
 
@@ -239,7 +285,7 @@ public sealed class MetricAlertService(
             _breaches[key] = new Breach(rule.Id, connection.Id, null, false, value) { Usual = usual };
 
             if (previous?.Firing == true)
-                await SendAsync(rule, connection, spec, value, usual, AlertLevel.Up, ct);
+                await SendAsync(rule, connection, spec, value, usual, AlertLevel.Up, null, now, ct);
             return;
         }
 
@@ -275,7 +321,8 @@ public sealed class MetricAlertService(
     }
 
     private async Task SendAsync(
-        AlertRule rule, Connection connection, MetricSpec spec, double value, Usual? usual, AlertLevel level, CancellationToken ct)
+        AlertRule rule, Connection connection, MetricSpec spec, double value, Usual? usual, AlertLevel level,
+        DateTimeOffset? since, DateTimeOffset now, CancellationToken ct)
     {
         // A notification saying "-6.0°C" to someone who thinks in Fahrenheit is a puzzle
         // rather than a warning, so the message follows the same setting the UI does.
@@ -313,7 +360,7 @@ public sealed class MetricAlertService(
                 $"{connection.Name} · {spec.Label} is back to {reading}",
                 $"{spec.Label} returned past {limit}.");
 
-        alert = alert with { Tag = $"rule:{rule.Id}:{connection.Id}", Link = "settings/alerts" };
+        alert = alert with { Tag = FiringAlert.RuleKey(rule.Id, connection.Id), Link = "settings/alerts" };
 
         log.Log(level == AlertLevel.Down ? LogLevel.Warning : LogLevel.Information,
             "Alert rule {Rule} {State} for {Connection}: {Metric} = {Value}",
@@ -322,14 +369,13 @@ public sealed class MetricAlertService(
             connection.Name, rule.Metric, value);
 
         // The rule still changes state above — it is only the notification that is held —
-        // so the Alerts page keeps showing the truth while a silence is in force.
-        if (await alerts.SuppressedAsync(connection, level == AlertLevel.Up, ct) is { } reason)
-        {
-            log.LogInformation("Alert for {Connection} not sent: {Reason}", connection.Name, reason);
-            return;
-        }
-
-        await alerts.BroadcastAsync(alert, ct, rule.ChannelId);
+        // so the Alerts page keeps showing the truth while a silence or a mute window is in
+        // force. Whether it is held, and where the recovery goes, is AlertService's call,
+        // so a rule and a connection going down follow exactly the same rules.
+        if (level == AlertLevel.Down)
+            await alerts.FiredAsync(connection, rule.Id, alert, rule.ChannelId, since ?? now, value, now, ct);
+        else
+            await alerts.ClearedAsync(connection, rule.Id, alert, rule.ChannelId, now, ct);
     }
 
     /// <summary>
