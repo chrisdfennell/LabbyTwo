@@ -67,6 +67,9 @@ public static class ChangeKinds
     public const string Device = "device";
     public const string Update = "update";
 
+    /// <summary>Somebody pressed "Something's broken" on the family status page.</summary>
+    public const string Report = "report";
+
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
     public static readonly IReadOnlyList<(string Key, string Label)> All =
     [
@@ -77,6 +80,7 @@ public static class ChangeKinds
         (Dns, "DNS answers"),
         (Device, "Devices on the network"),
         (Update, "LabbyTwo updates"),
+        (Report, "Reports from the family"),
     ];
 
     /// <summary>
@@ -96,6 +100,7 @@ public static class ChangeKinds
             "dns" => Dns,
             "device" or "devices" or "lan" or "network" => Device,
             "update" or "updates" or "labbytwo" => Update,
+            "report" or "reports" or "family" => Report,
             _ => null,
         };
     }
@@ -126,6 +131,7 @@ public static class ChangeActions
     public const string Changed = "changed";
     public const string Appeared = "appeared";
     public const string Updated = "updated";
+    public const string Reported = "reported";
 }
 
 /// <summary>

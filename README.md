@@ -1020,6 +1020,92 @@ token is a plain 404.
 
 ![The public status page](docs/images/public-status.png)
 
+### A status page for the family
+
+The public status page is for people who like numbers. **Settings → Family status page** is
+for the people you live with, who want to know one thing: is Plex broken, or is it the TV?
+
+- **You choose what is on it.** Add the connections people actually ask about, give each the
+  name they use — "Plex", "The internet", "Front door camera" — an emoji, and a group such as
+  *TV & Movies*, *Internet* or *Cameras*. Nothing you have not added appears, and what you
+  have added appears only by the name you gave it.
+- **Four words.** Each one is *Working*, *Having trouble* (checks are failing but it is not
+  yet down), *Down*, or *Under maintenance* (a maintenance window is on, or you silenced that
+  connection, and it is not working), with "since 20 min ago" where that is known.
+  Something that stays up during maintenance still says *Working*.
+- **"Something's broken?"** Anyone on the page can say what is not working — one of the
+  things on it, or "something else" — with an optional short message and name. It lands in
+  **Settings → Family status page**, in **What changed** as a *report*, as "3 reports from
+  the family" at the top of the sidebar, and through your alert channels. Maintenance and a
+  silenced connection hold the notification (you are already on it) and quiet hours hold it
+  like any other non-urgent alert; the report itself is always kept until you dismiss it.
+- **Phone first.** One column, big targets, your theme and dark mode, no script at all. It
+  refreshes itself every minute.
+
+Turning it on creates the link: `https://your-labbytwo/family/<token>`, where the token is
+128 random bits. Optionally, **also open at /family on the home network** lets a tablet on
+the kitchen wall use the short address without the link.
+
+#### What the link gives away, and how to take it back
+
+Anyone holding the link can see the names, emoji, groups and states you put on the page, and
+when each state began — and can send reports. That is all. The page is built from those
+fields alone: no addresses, host names, ports, error messages, metrics, container names or
+versions, and no other connection. The link opens nothing else in LabbyTwo: every other page
+and API still needs you to sign in (if you have set a password), and the page is rendered on
+the server without starting a Blazor session, so there is nothing interactive to reach
+through it. A wrong link, an old link, a switched-off page and a request from outside the
+home network for `/family` all get the same plain 404.
+
+To take the link back, press **New link…** — the old one stops working immediately, and
+you share the new one with whoever should still have it. Turning the page off makes every
+family URL a 404 until you turn it on again.
+
+Things that keep it quiet:
+
+- **Rate limits.** Each address may load the page 60 times a minute (wrong links count too),
+  send 3 reports in 15 minutes and 10 in a day, and everybody together 20 reports an hour.
+  Past that the page says how long to wait. IPv6 visitors are counted by their /64, as the
+  login throttle does.
+- **Text is text.** Messages are cut to 280 characters and names to 40, folded onto one line,
+  and stripped of control and invisible characters. They are never rendered as HTML or
+  Markdown: the page and the owner's list encode them, Discord gets them with Markdown
+  escaped, and `@everyone`-style mentions and Slack's `<!channel>` links are broken up
+  before anything is sent.
+- **Not cached, not indexed, not framed, not passed on.** The page sends `no-store`,
+  `noindex`, a content security policy that allows no script and no framing, and
+  `Referrer-Policy: no-referrer` so the link in the address bar never leaks to another site.
+- **The home-network address is off by default**, and only answers a request from a private
+  address that carries no proxy headers at all. Behind Cloudflare, or a proxy you have not
+  listed in `LABBY_TRUSTED_PROXIES`, every visitor from the internet appears to come from the
+  proxy's private address; refusing anything with `X-Forwarded-For`, `Forwarded`,
+  `X-Real-IP` or a Cloudflare header is what stops that from publishing `/family` to the
+  world. If you trust your proxy, LabbyTwo sees the real visitor's address instead, and a
+  public one is refused.
+
+#### Sharing it through a Cloudflare Tunnel
+
+To let the family open it away from home without exposing the rest of LabbyTwo, publish only
+the family page's paths through the tunnel and answer everything else with a 404 at
+Cloudflare, before it ever reaches your network:
+
+```yaml
+# cloudflared config.yml
+ingress:
+  - hostname: home.example.com
+    path: ^/(family/[A-Za-z0-9_-]+(/report)?|app\.css|family\.css|icon\.svg)$
+    service: http://labbytwo:8080
+  - hostname: home.example.com
+    service: http_status:404
+  - service: http_status:404
+```
+
+The rule deliberately leaves out bare `/family`, so the home-network address can never be
+reached through the tunnel however the proxy settings end up. Set `LABBY_TRUSTED_PROXIES`
+and `LABBY_CLIENT_IP_HEADER=CF-Connecting-IP` as described under
+[Configuration](#configuration), or every visitor shares one rate limit. If you use the
+dashboard-managed tunnel instead of a config file, add a public hostname with the same path.
+
 ### Making it yours
 
 **Settings → Appearance** holds the things that are yours rather than your lab's:

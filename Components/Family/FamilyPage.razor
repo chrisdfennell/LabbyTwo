@@ -1,0 +1,219 @@
+@* The family status page, and the "something's broken" form beside it.
+
+   Rendered by the minimal-API endpoints in FamilyEndpoints as a whole document, not through
+   App.razor: there is no blazor.web.js here, so no circuit is ever opened and nothing
+   interactive exists for an anonymous visitor to reach. It has no @page directive for the
+   same reason — the router cannot send anybody here, only those endpoints can, after they
+   have checked the link.
+
+   Everything shown comes from a FamilyView: names the owner typed, a state and when it
+   began. Every value goes through Razor's encoding; nothing here is a MarkupString, and
+   nothing a visitor typed is ever shown back except in the form's own fields. *@
+
+<!DOCTYPE html>
+<html lang="en" data-theme="@Look.ThemeAttribute" data-palette="@Look.PaletteAttribute" style="@Look.StyleAttribute">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    @* The token is in the URL, so the URL must go nowhere else — not to a link's target. *@
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex, nofollow" />
+    @if (Screen == Screens.Status)
+    {
+        @* No circuit, so this is what keeps a phone left on the page current. *@
+        <meta http-equiv="refresh" content="60" />
+    }
+    <title>@PageTitle</title>
+    <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/family.css" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta name="theme-color" content="@(Look.Theme == "light" ? "#f2f5f9" : "#0a0e13")" />
+</head>
+<body class="family-body">
+    <main class="family">
+        @switch (Screen)
+        {
+            case Screens.NotFound:
+                <div class="family-card family-message">
+                    <h1>Not found</h1>
+                    <p>This page is not available. Ask whoever sent you the link for a new one.</p>
+                </div>
+                break;
+
+            case Screens.Busy:
+                <div class="family-card family-message">
+                    <h1>Slow down a little</h1>
+                    <p>That was a lot of requests at once. Try again in @LoginThrottle.Describe(RetryAfter).</p>
+                    @if (View is not null)
+                    {
+                        <a class="family-link" href="@Base">Back to the status page</a>
+                    }
+                </div>
+                break;
+
+            case Screens.Report when View is not null:
+                <header class="family-head">
+                    <h1>Something's broken?</h1>
+                    <p class="family-sub">Tell us what isn't working and we'll take a look.</p>
+                </header>
+
+                <form class="family-card family-form" method="post" action="@($"{Base}/report")">
+                    <input type="hidden" name="@AntiforgeryField" value="@AntiforgeryValue" />
+
+                    @if (Error is { Length: > 0 })
+                    {
+                        <p class="family-error" role="alert">@Error</p>
+                    }
+
+                    <fieldset>
+                        <legend>What isn't working?</legend>
+                        @foreach (var row in View.Rows)
+                        {
+                            var id = "what-" + row.Id;
+                            <label class="family-choice" for="@id">
+                                <input type="radio" name="what" id="@id" value="@row.Id" checked="@(Chosen == row.Id)" />
+                                <span class="family-icon" aria-hidden="true">@Icon(row)</span>
+                                <span class="family-name">@row.Name</span>
+                                <span class="family-pill @StateClass(row.State)">@row.Word</span>
+                            </label>
+                        }
+                        <label class="family-choice" for="what-other">
+                            <input type="radio" name="what" id="what-other" value="@FamilyStatus.SomethingElse"
+                                   checked="@(Chosen == FamilyStatus.SomethingElse)" />
+                            <span class="family-icon" aria-hidden="true">❓</span>
+                            <span class="family-name">@FamilyStatus.SomethingElseName</span>
+                        </label>
+                    </fieldset>
+
+                    <label class="family-label" for="message">What's happening? <span class="family-optional">(optional)</span></label>
+                    <textarea id="message" name="message" rows="3" maxlength="@FamilyText.MaxMessage"
+                              placeholder="The TV says it can't connect…">@Message</textarea>
+
+                    <label class="family-label" for="name">Your name <span class="family-optional">(optional)</span></label>
+                    <input id="name" name="name" type="text" maxlength="@FamilyText.MaxReporter" autocomplete="given-name" value="@Reporter" />
+
+                    <div class="family-actions">
+                        <button type="submit" class="family-button">Send</button>
+                        <a class="family-link" href="@Base">Cancel</a>
+                    </div>
+                </form>
+                break;
+
+            case Screens.Status when View is not null:
+                var overall = View.Overall;
+                <header class="family-head">
+                    <h1>@View.Title</h1>
+                    <p class="family-overall @StateClass(overall)">
+                        <span class="family-dot" aria-hidden="true"></span>
+                        @FamilyWords.Overall(overall)
+                    </p>
+                    @if (View.MaintenanceOn)
+                    {
+                        <p class="family-note">
+                            🛠️ Some work is going on, so things may come and go for a bit.
+                            @if (View.MaintenanceUntil is { } until)
+                            {
+                                @(" " + FamilyWords.BackBy(until) + ".")
+                            }
+                        </p>
+                    }
+                </header>
+
+                @if (Sent)
+                {
+                    <p class="family-card family-thanks" role="status">Thanks — your message has been passed on.</p>
+                }
+
+                @if (!View.Groups.Any())
+                {
+                    <div class="family-card family-message"><p>Nothing has been added to this page yet.</p></div>
+                }
+
+                @foreach (var group in View.Groups)
+                {
+                    <section class="family-card family-group">
+                        @if (group.Name.Length > 0)
+                        {
+                            <h2>@group.Name</h2>
+                        }
+                        <ul>
+                            @foreach (var row in group.Rows)
+                            {
+                                <li class="family-row">
+                                    <span class="family-icon" aria-hidden="true">@Icon(row)</span>
+                                    <span class="family-name">@row.Name</span>
+                                    <span class="family-state">
+                                        <span class="family-pill @StateClass(row.State)">@row.Word</span>
+                                        @if (row.Since is { } since)
+                                        {
+                                            <span class="family-since">@FamilyWords.Since(since, View.At)</span>
+                                        }
+                                    </span>
+                                </li>
+                            }
+                        </ul>
+                    </section>
+                }
+
+                <a class="family-button family-report" href="@($"{Base}/report")">Something's broken?</a>
+
+                <p class="family-foot">Updated @View.At.ToString("HH:mm") · refreshes by itself every minute</p>
+                break;
+        }
+    </main>
+</body>
+</html>
+
+@code {
+    public enum Screens
+    {
+        Status,
+        Report,
+        NotFound,
+        Busy,
+    }
+
+    [Parameter] public Screens Screen { get; set; }
+
+    [Parameter] public FamilyView? View { get; set; }
+
+    [Parameter] public Appearance Look { get; set; } = Appearance.Default;
+
+    /// <summary>Where this page lives: <c>/family/{token}</c>, or <c>/family</c> on the home network.</summary>
+    [Parameter] public string Base { get; set; } = "/family";
+
+    [Parameter] public bool Sent { get; set; }
+
+    [Parameter] public string? Error { get; set; }
+
+    [Parameter] public TimeSpan RetryAfter { get; set; }
+
+    [Parameter] public string AntiforgeryField { get; set; } = "";
+
+    [Parameter] public string AntiforgeryValue { get; set; } = "";
+
+    /// <summary>The form's values, handed back when it has to be shown again.</summary>
+    [Parameter] public string? Chosen { get; set; }
+
+    [Parameter] public string? Message { get; set; }
+
+    [Parameter] public string? Reporter { get; set; }
+
+    private string PageTitle => Screen switch
+    {
+        Screens.Report => "Something's broken?",
+        Screens.Status when View is not null => View.Title,
+        _ => "Status",
+    };
+
+    private static string Icon(FamilyRow row) => row.Icon.Length > 0 ? row.Icon : "•";
+
+    public static string StateClass(FamilyState state) => state switch
+    {
+        FamilyState.Working => "is-working",
+        FamilyState.Trouble => "is-trouble",
+        FamilyState.Down => "is-down",
+        FamilyState.Maintenance => "is-maintenance",
+        _ => "is-unknown",
+    };
+}

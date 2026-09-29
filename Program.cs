@@ -191,6 +191,13 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ChangeWatcher>());
 builder.Services.AddSingleton<IncidentTracker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IncidentTracker>());
 
+// The family status page: a read-only "is Plex working?" for the household, reachable by a
+// share link without signing in, and the "something's broken" reports it sends. The
+// throttle is its own, not the login's: page loads and reports are budgeted, not failures.
+builder.Services.AddSingleton<FamilyReportStore>();
+builder.Services.AddSingleton<FamilyStatus>();
+builder.Services.AddSingleton<FamilyThrottle>();
+
 // Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
 // plugin's nightly tidy-up cannot hang startup or take the process down with it.
 builder.Services.AddSingleton<BackgroundJobRunner>();
@@ -379,6 +386,10 @@ app.MapPost("/logout", async (HttpContext context, IAntiforgery antiforgery) =>
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.LocalRedirect("/login");
 });
+
+// The family status page, at /family/{token} and optionally /family on the home network.
+// Anonymous by design and checked inside: see FamilyEndpoints.
+app.MapFamilyStatus();
 
 // Routes contributed by extensions, the app's own and any plugin's. A component can
 // render a listing; only an endpoint can hand the browser a file with Range honoured, so

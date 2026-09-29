@@ -467,6 +467,22 @@ public sealed class Db
             seq           INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
+
+        // 24 — "something's broken" reports from the family status page. One row per
+        // report, read newest first; dismissing one deletes it, because the change feed
+        // already keeps the history. item_name is what the family saw at the time, kept
+        // because the owner may rename or remove the item before reading the report.
+        """
+        CREATE TABLE IF NOT EXISTS family_reports (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            INTEGER NOT NULL,
+            item_id       TEXT    NOT NULL DEFAULT '',
+            connection_id TEXT,
+            item_name     TEXT    NOT NULL,
+            message       TEXT    NOT NULL DEFAULT '',
+            reporter      TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_family_reports_ts ON family_reports (ts);
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

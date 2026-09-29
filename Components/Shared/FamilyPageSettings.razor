@@ -1,0 +1,315 @@
+@implements IDisposable
+@inject FamilyStatus Family
+@inject FamilyReportStore Reports
+@inject ConfigStore Config
+@inject Offload Offload
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+@* The owner's side of the family status page: switch it on, choose what it shows and by
+   what names, hand out the link, and read what the family reported. Its own component for
+   the same reason the weekly summary is — Settings.razor is long enough already. *@
+
+<div class="widget" id="family">
+    <div class="widget-head">
+        <h2 class="widget-title">Family status page</h2>
+        @if (_reports.Count > 0)
+        {
+            <span class="badge text-bg-danger">@ReportsText(_reports.Count)</span>
+        }
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            A simple page for the people you live with — “is Plex working, or is it the TV?” — that
+            opens on a phone without signing in. It shows only what you add below, by the names you
+            give it, as Working, Having trouble, Down or Under maintenance. No addresses, host names,
+            error messages or numbers. A “Something's broken” button lets them tell you, and that
+            arrives through your alert channels.
+        </p>
+
+        <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="family-enabled"
+                   checked="@_settings.Enabled" @onchange="e => SaveAsync(_settings with { Enabled = e.Value is true })" />
+            <label class="form-check-label" for="family-enabled">Turn on the family status page</label>
+        </div>
+
+        @if (_settings.Enabled)
+        {
+            <div class="mb-3">
+                <div class="form-label mb-1">Share link</div>
+                @if (_settings.Token.Length == 0)
+                {
+                    <button class="btn btn-sm btn-primary" @onclick="RegenerateAsync">Create a link</button>
+                }
+                else
+                {
+                    <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
+                        <input class="form-control font-monospace" readonly value="@LinkUrl" style="max-width: 34rem"
+                               aria-label="Family status page link" />
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="CopyAsync">@(_copied ? "Copied" : "Copy")</button>
+                        <a class="btn btn-sm btn-outline-secondary" href="@LinkUrl" target="_blank" rel="noreferrer">Open</a>
+                    </div>
+                    @if (_confirmRegenerate)
+                    {
+                        <div class="d-flex gap-2 align-items-center flex-wrap">
+                            <span class="tile-meta">The old link stops working immediately. Everybody will need the new one.</span>
+                            <button class="btn btn-sm btn-danger" @onclick="RegenerateAsync">Make a new link</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmRegenerate = false">Keep this one</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmRegenerate = true">New link…</button>
+                    }
+                    <div class="form-text">
+                        Anyone with the link can see this page, so share it the way you would share a Wi-Fi
+                        password. A new link is how you take it back from somebody.
+                    </div>
+                }
+            </div>
+
+            <div class="form-check form-switch mb-1">
+                <input class="form-check-input" type="checkbox" role="switch" id="family-lan"
+                       checked="@_settings.LanAccess" @onchange="e => SaveAsync(_settings with { LanAccess = e.Value is true })" />
+                <label class="form-check-label" for="family-lan">
+                    Also open at <span class="font-monospace">@LanUrl</span> on the home network, without the link
+                </label>
+            </div>
+            <div class="form-text mb-3">
+                For a tablet on the kitchen wall. Only answers requests from a private address that did not
+                come through a proxy or Cloudflare; anything else gets “not found”.
+            </div>
+
+            <div class="mb-3" style="max-width: 34rem">
+                <label class="form-label" for="family-title">Heading</label>
+                <input id="family-title" class="form-control" maxlength="@FamilyStatusSettings.MaxName"
+                       placeholder="@FamilyStatusSettings.DefaultTitle" value="@_settings.Title"
+                       @onchange="e => SaveAsync(_settings with { Title = FamilyText.Clean(e.Value?.ToString(), FamilyStatusSettings.MaxName) })" />
+            </div>
+
+            <div class="form-label mb-1">What it shows</div>
+            @if (_settings.Items.Count == 0)
+            {
+                <p class="tile-meta">Nothing yet. Add the things people ask you about.</p>
+            }
+            else
+            {
+                <datalist id="family-groups">
+                    @foreach (var group in _settings.Groups.Where(g => g.Length > 0))
+                    {
+                        <option value="@group"></option>
+                    }
+                    <option value="TV &amp; Movies"></option>
+                    <option value="Internet"></option>
+                    <option value="Cameras"></option>
+                </datalist>
+
+                <div class="d-flex flex-column gap-2 mb-2">
+                    @for (var i = 0; i < _settings.Items.Count; i++)
+                    {
+                        var index = i;
+                        var item = _settings.Items[index];
+                        <div class="panel p-2">
+                            <div class="row g-2 align-items-end">
+                                <div class="col-auto">
+                                    <div class="form-label small mb-1">Icon</div>
+                                    <EmojiPicker Value="@item.Icon" ValueChanged="value => UpdateAsync(index, item with { Icon = value })" />
+                                </div>
+                                <div class="col-12 col-sm">
+                                    <label class="form-label small mb-1" for="@($"family-name-{item.Id}")">Name they see</label>
+                                    <input id="@($"family-name-{item.Id}")" class="form-control form-control-sm"
+                                           maxlength="@FamilyStatusSettings.MaxName" value="@item.Name"
+                                           @onchange="e => UpdateAsync(index, item with { Name = e.Value?.ToString() ?? string.Empty })" />
+                                </div>
+                                <div class="col-12 col-sm">
+                                    <label class="form-label small mb-1" for="@($"family-group-{item.Id}")">Group</label>
+                                    <input id="@($"family-group-{item.Id}")" class="form-control form-control-sm" list="family-groups"
+                                           maxlength="@FamilyStatusSettings.MaxName" value="@item.Group" placeholder="None"
+                                           @onchange="e => UpdateAsync(index, item with { Group = e.Value?.ToString() ?? string.Empty })" />
+                                </div>
+                                <div class="col-auto d-flex gap-1">
+                                    <button class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@(index == 0)"
+                                            @onclick="() => MoveAsync(index, -1)">↑</button>
+                                    <button class="btn btn-sm btn-outline-secondary" title="Move down" disabled="@(index == _settings.Items.Count - 1)"
+                                            @onclick="() => MoveAsync(index, 1)">↓</button>
+                                    <button class="btn btn-sm btn-outline-danger" title="Remove from the page"
+                                            @onclick="() => RemoveAsync(index)">✕</button>
+                                </div>
+                            </div>
+                            <div class="tile-meta mt-1">
+                                Shows the state of @ConnectionName(item.ConnectionId) — only to you, never on the page.
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+
+            @if (_settings.Items.Count < FamilyStatusSettings.MaxItems)
+            {
+                <div class="d-flex gap-2 align-items-center flex-wrap mb-3">
+                    <select class="form-select form-select-sm" style="width: auto; max-width: 100%" aria-label="Connection to add"
+                            value="@_adding" @onchange="e => _adding = e.Value?.ToString() ?? string.Empty">
+                        <option value="">Choose a connection…</option>
+                        @foreach (var connection in _connections)
+                        {
+                            <option value="@connection.Id">@connection.Name</option>
+                        }
+                    </select>
+                    <button class="btn btn-sm btn-outline-primary" disabled="@(_adding.Length == 0)" @onclick="AddAsync">Add to the page</button>
+                </div>
+            }
+            <div class="form-text mb-3">
+                Rename each one to what the family calls it — “The internet” rather than the name of your router.
+                The same thing can be added more than once, under different names or groups.
+            </div>
+        }
+
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-2">
+            <div class="form-label mb-0">Reports</div>
+            @if (_reports.Count > 1)
+            {
+                <button class="btn btn-sm btn-outline-secondary" @onclick="DismissAllAsync">Dismiss all</button>
+            }
+        </div>
+        @if (_reports.Count == 0)
+        {
+            <p class="tile-meta mb-0">None waiting.</p>
+        }
+        else
+        {
+            <ul class="list-unstyled mb-0">
+                @foreach (var report in _reports)
+                {
+                    @* Everything here is what somebody typed without signing in, so it is text and
+                       only text: Razor encodes it, and nothing renders it as Markdown. *@
+                    <li class="d-flex gap-2 align-items-start py-2 border-top">
+                        <div class="flex-grow-1" style="min-width: 0">
+                            <div class="fw-semibold text-break">
+                                @(report.Reporter.Length > 0 ? report.Reporter : "Someone") — @report.ItemName
+                            </div>
+                            @if (report.Message.Length > 0)
+                            {
+                                <div class="text-break" style="white-space: pre-wrap">@report.Message</div>
+                            }
+                            <div class="tile-meta">@Ago.Since(report.At)</div>
+                        </div>
+                        <button class="btn btn-sm btn-outline-secondary flex-none" @onclick="() => DismissAsync(report.Id)">Dismiss</button>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</div>
+
+@code {
+    private FamilyStatusSettings _settings = FamilyStatusSettings.Default;
+    private IReadOnlyList<Connection> _connections = [];
+    private IReadOnlyList<FamilyReport> _reports = [];
+    private string _adding = "";
+    private bool _confirmRegenerate;
+    private bool _copied;
+
+    private string LinkUrl => $"{Nav.BaseUri.TrimEnd('/')}{FamilyEndpoints.Prefix}/{_settings.Token}";
+
+    private string LanUrl => $"{Nav.BaseUri.TrimEnd('/')}{FamilyEndpoints.Prefix}";
+
+    public static string ReportsText(int count) => count == 1 ? "1 report" : $"{count} reports";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Reports.Changed += OnReportsChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _settings = await Family.SettingsAsync();
+        _connections = [.. (await Offload.Run(ct => Config.ConnectionsAsync(ct))).OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)];
+        _reports = await Offload.Run(ct => Reports.ListAsync(100, ct));
+    }
+
+    private void OnReportsChanged() => _ = InvokeAsync(async () =>
+    {
+        _reports = await Offload.Run(ct => Reports.ListAsync(100, ct));
+        StateHasChanged();
+    });
+
+    private string ConnectionName(string id) =>
+        _connections.FirstOrDefault(c => c.Id == id)?.Name is { } name ? $"“{name}”" : "a connection that no longer exists";
+
+    private async Task SaveAsync(FamilyStatusSettings value)
+    {
+        // Turning it on for the first time makes the link too: a page nobody can open is not on.
+        if (value.Enabled && value.Token.Length == 0)
+            value = value with { Token = FamilyStatusSettings.NewToken() };
+        await Family.SaveAsync(value);
+        _settings = value;
+    }
+
+    private Task UpdateAsync(int index, FamilyItem item)
+    {
+        var items = _settings.Items.ToList();
+        items[index] = item.Normalised();
+        return SaveAsync(_settings with { Items = items });
+    }
+
+    private Task MoveAsync(int index, int direction)
+    {
+        var target = index + direction;
+        var items = _settings.Items.ToList();
+        if (target < 0 || target >= items.Count)
+            return Task.CompletedTask;
+        (items[index], items[target]) = (items[target], items[index]);
+        return SaveAsync(_settings with { Items = items });
+    }
+
+    private Task RemoveAsync(int index)
+    {
+        var items = _settings.Items.ToList();
+        items.RemoveAt(index);
+        return SaveAsync(_settings with { Items = items });
+    }
+
+    private async Task AddAsync()
+    {
+        if (_connections.FirstOrDefault(c => c.Id == _adding) is not { } connection)
+            return;
+        var item = new FamilyItem(Ids.New(), connection.Id, connection.Name, connection.Icon, "").Normalised();
+        _adding = "";
+        await SaveAsync(_settings with { Items = [.. _settings.Items, item] });
+    }
+
+    private async Task RegenerateAsync()
+    {
+        _confirmRegenerate = false;
+        _copied = false;
+        await SaveAsync(_settings with { Token = FamilyStatusSettings.NewToken() });
+    }
+
+    private async Task CopyAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", LinkUrl);
+            _copied = true;
+        }
+        catch (JSException)
+        {
+            // Clipboard access needs https or localhost. The link is in the box to select by hand.
+        }
+    }
+
+    private async Task DismissAsync(long id) => await Offload.Run(async ct =>
+    {
+        await Reports.DismissAsync(id, ct);
+        return true;
+    });
+
+    private async Task DismissAllAsync() => await Offload.Run(async ct =>
+    {
+        await Reports.DismissAllAsync(ct);
+        return true;
+    });
+
+    public void Dispose() => Reports.Changed -= OnReportsChanged;
+}
