@@ -74,6 +74,9 @@ public sealed class ChangeFeedTests : IAsyncDisposable
         services.AddSingleton<ChangeWatcher>();
         services.AddSingleton<IncidentTracker>();
         services.AddSingleton<DnsCheck>();
+        services.AddSingleton<NotesStore>();
+        services.AddSingleton<ProbableCauses>();
+        services.AddSingleton<IncidentWriteUps>();
         _services = services.BuildServiceProvider();
         Get<Db>().EnsureSchemaAsync().GetAwaiter().GetResult();
     }
@@ -268,6 +271,17 @@ public sealed class ChangeFeedTests : IAsyncDisposable
             var plan = await PlanAsync(sql);
             Assert.DoesNotContain(plan, step => step.StartsWith("SCAN incident", StringComparison.Ordinal));
         }
+
+        var one = await PlanAsync(IncidentStore.ByIdSql);
+        Assert.Contains(one, step => step.StartsWith("SEARCH incidents USING INTEGER PRIMARY KEY", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AWriteUpsNoteIsFoundByItsPrimaryKey()
+    {
+        var plan = await PlanAsync(NotesStore.ByIdSql);
+        Assert.Contains(plan, step => step.StartsWith("SEARCH notes USING INDEX sqlite_autoindex_notes_1", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN notes", StringComparison.Ordinal));
     }
 
     // ---------- the watcher ----------
@@ -486,11 +500,103 @@ public sealed class ChangeFeedTests : IAsyncDisposable
         Assert.Contains("back after 12m", html);
         Assert.Contains($"incidents#incident-{open.Id}", html);
         Assert.True(html.IndexOf("Router", StringComparison.Ordinal) < html.IndexOf("QNAP NAS and Plex", StringComparison.Ordinal));
+        // Nothing recorded around either, and no connections to tie them together: said plainly.
+        Assert.Contains("Probably: No obvious cause", html);
 
         await Renderer.RenderMarkdownAsync("{{incidents: open}}");
         html = WebUtility.HtmlDecode(await Renderer.WaitForAsync(h => h.Contains("Router", StringComparison.Ordinal)
                                                                   && !h.Contains("QNAP NAS and Plex", StringComparison.Ordinal)));
         Assert.Contains(">open<", html);
+    }
+
+    [Fact]
+    public async Task IncidentsSayWhatProbablyCausedThem()
+    {
+        var plex = await ConnectionAsync("Plex");
+        plex = plex with { Settings = new SettingsBag { ["url"] = "http://plex:32400" } };
+        await Get<ConfigStore>().SaveConnectionAsync(plex);
+
+        var down = DateTimeOffset.Now.AddMinutes(-20);
+        await Get<ChangeStore>().RecordAsync(new Change(down.AddMinutes(-2), ChangeKinds.Container, ChangeActions.Image, "docker", "plex",
+            "plex is on a new image", "lscr.io/linuxserver/plex:latest"));
+        await Get<IncidentStore>().SaveAsync(new Incident(0, down, down.AddMinutes(3), down.AddMinutes(3), false,
+            [new IncidentMember(IncidentMember.StatusKey(plex.Id), ChangeKinds.Status, plex.Id, "Plex", down, down.AddMinutes(3))]));
+
+        await Renderer.RenderMarkdownAsync("{{incidents}}");
+        var html = WebUtility.HtmlDecode(await Renderer.WaitForAsync("Probably"));
+        Assert.Contains("Probably: Plex went down 2 minutes after it got a new image.", html);
+    }
+
+    [Fact]
+    public async Task ADownNotificationIsToldTheCauseWhenOneIsFoundInTime()
+    {
+        var plex = await ConnectionAsync("Plex");
+        plex = plex with { Settings = new SettingsBag { ["url"] = "http://plex:32400" } };
+        await Get<ConfigStore>().SaveConnectionAsync(plex);
+        var router = await ConnectionAsync("Router");
+
+        var now = DateTimeOffset.Now;
+        await Get<ChangeStore>().RecordAsync(new Change(now.AddMinutes(-4), ChangeKinds.Container, ChangeActions.Recreated, "docker", "plex",
+            "plex was recreated"));
+
+        var causes = Get<ProbableCauses>();
+        Assert.Equal("Plex went down 4 minutes after it was recreated.", await causes.ExplainDownAsync(plex, now, CancellationToken.None));
+        // Nothing about the router: no cause, rather than somebody else's.
+        Assert.Null(await causes.ExplainDownAsync(router, now, CancellationToken.None));
+
+        // And the alerting is handed it when the causes start.
+        await causes.StartAsync(CancellationToken.None);
+        Assert.NotNull(Get<AlertService>().ExplainDown);
+        await causes.StopAsync(CancellationToken.None);
+        Assert.Null(Get<AlertService>().ExplainDown);
+    }
+
+    [Fact]
+    public async Task AnIncidentIsWrittenUpOnceOnATabOfItsOwnAndLinkedBothWays()
+    {
+        var nas = await ConnectionAsync("QNAP NAS");
+        var start = DateTimeOffset.Now.AddHours(-1);
+        var incident = await Get<IncidentStore>().SaveAsync(new Incident(0, start, start.AddMinutes(9), start.AddMinutes(9), false,
+            [new IncidentMember(IncidentMember.StatusKey(nas.Id), ChangeKinds.Status, nas.Id, "QNAP NAS", start, start.AddMinutes(9))]));
+        await Get<ChangeStore>().RecordAsync(new Change(start, ChangeKinds.Status, ChangeActions.Down, nas.Id, "", "QNAP NAS went down",
+            "Connection refused"));
+
+        var writeUps = Get<IncidentWriteUps>();
+        var link = await writeUps.CreateAsync(incident);
+
+        // A notes tab made for it, found again by its setting rather than its name.
+        var tab = Assert.Single(await Get<ConfigStore>().TabsAsync(), t => t.Settings.GetBool(IncidentWriteUps.TabSetting));
+        Assert.Equal(TabKinds.Notes, tab.Kind);
+        Assert.Equal(tab.Slug, link.TabSlug);
+        Assert.Equal($"t/{tab.Slug}?edit={link.NoteId}", link.EditUrl);
+
+        // The note links to the incident...
+        var note = Assert.Single(await Get<NotesStore>().ForTabAsync(tab.Id));
+        Assert.Contains($"(incidents#incident-{incident.Id})", note.Content);
+        Assert.Contains("QNAP NAS went down — Connection refused", note.Content);
+        Assert.Contains("{{status: QNAP NAS}}", note.Content);
+        Assert.StartsWith("Incident: QNAP NAS — ", note.Title);
+
+        // ...and the incident to the note.
+        var stored = await Get<IncidentStore>().GetAsync(incident.Id);
+        Assert.Equal(link.NoteId, stored!.WriteUpNoteId);
+        var links = await writeUps.LinksAsync([stored]);
+        Assert.Equal($"t/{tab.Slug}#note-{link.NoteId}", links[incident.Id].Url);
+
+        // Pressing it again opens the same one; a second incident goes on the same tab.
+        Assert.Equal(link.NoteId, (await writeUps.CreateAsync(stored)).NoteId);
+        var other = await Get<IncidentStore>().SaveAsync(incident with { Id = 0 });
+        await writeUps.CreateAsync(other);
+        Assert.Equal(2, (await Get<NotesStore>().ForTabAsync(tab.Id)).Count);
+        Assert.Single(await Get<ConfigStore>().TabsAsync(), t => t.Settings.GetBool(IncidentWriteUps.TabSetting));
+
+        // The tracker saving the incident again does not forget its write-up.
+        await Get<IncidentStore>().SaveAsync(incident with { LastActivity = start.AddMinutes(10) });
+        Assert.Equal(link.NoteId, (await Get<IncidentStore>().GetAsync(incident.Id))!.WriteUpNoteId);
+
+        // A deleted note is no write-up: the incident offers to write one again.
+        await Get<NotesStore>().DeleteAsync(link.NoteId);
+        Assert.Empty(await writeUps.LinksAsync([stored]));
     }
 
     [Fact]

@@ -467,6 +467,57 @@ public sealed class Db
             seq           INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
+
+        // 24 — "something's broken" reports from the family status page. One row per
+        // report, read newest first; dismissing one deletes it, because the change feed
+        // already keeps the history. item_name is what the family saw at the time, kept
+        // because the owner may rename or remove the item before reading the report.
+        """
+        CREATE TABLE IF NOT EXISTS family_reports (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            INTEGER NOT NULL,
+            item_id       TEXT    NOT NULL DEFAULT '',
+            connection_id TEXT,
+            item_name     TEXT    NOT NULL,
+            message       TEXT    NOT NULL DEFAULT '',
+            reporter      TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_family_reports_ts ON family_reports (ts);
+        """,
+
+        // 24 — self-healing: the automatic action attached to an alert rule or to a
+        // connection going down, one per trigger, and what each has done about the alert
+        // it is answering — one row per firing key, so a restart of LabbyTwo neither runs
+        // it again nor loses the check it was waiting on. The runs themselves are in the
+        // change feed, which is what the page lists and the hourly cap counts.
+        """
+        CREATE TABLE IF NOT EXISTS remediations (
+            trigger              TEXT    PRIMARY KEY,
+            enabled              INTEGER NOT NULL DEFAULT 1,
+            after_minutes        INTEGER NOT NULL DEFAULT 5,
+            kind                 TEXT    NOT NULL,
+            target_connection_id TEXT    NOT NULL DEFAULT '',
+            container            TEXT    NOT NULL DEFAULT '',
+            action_id            TEXT    NOT NULL DEFAULT '',
+            max_attempts         INTEGER NOT NULL DEFAULT 1,
+            cooldown_minutes     INTEGER NOT NULL DEFAULT 30,
+            check_minutes        INTEGER NOT NULL DEFAULT 5,
+            allow_protected      INTEGER NOT NULL DEFAULT 0,
+            if_not_fixed         TEXT    NOT NULL DEFAULT 'notify') WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS remediation_state (
+            alert_key     TEXT    PRIMARY KEY,
+            episode_start INTEGER NOT NULL,
+            attempts      INTEGER NOT NULL DEFAULT 0,
+            last_run      INTEGER,
+            check_at      INTEGER,
+            did           TEXT    NOT NULL DEFAULT '',
+            outcome       TEXT    NOT NULL DEFAULT '',
+            note          TEXT    NOT NULL DEFAULT '',
+            gave_up       INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+        """,
+        // 24 — an incident's write-up: the id of the note written about it, so the incident
+        // can link to the note as the note links back to it. A column rather than a table:
+        // an incident has one write-up at most, and it is read with the incident anyway.
+        "ALTER TABLE incidents ADD COLUMN writeup_note TEXT",
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

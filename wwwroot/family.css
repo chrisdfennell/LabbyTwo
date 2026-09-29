@@ -1,0 +1,297 @@
+/* ---------- family status page ----------
+   The page the household opens on a phone. Written against app.css's tokens, so the owner's
+   theme, accent and dark palette carry over, and on its own file so the page does not need
+   Bootstrap or anything else the dashboard loads. Phone first: one column, big touch
+   targets, nothing wider than 360px needs to scroll. */
+
+.family-body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--ink);
+    color: var(--text);
+    font-family: var(--font-body);
+    -webkit-text-size-adjust: 100%;
+}
+
+.family {
+    box-sizing: border-box;
+    width: min(36rem, 100%);
+    margin: 0 auto;
+    padding: 1.25rem 1rem 2.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.family *,
+.family *::before,
+.family *::after {
+    box-sizing: border-box;
+}
+
+.family-head h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0 0 .35rem;
+    line-height: 1.2;
+}
+
+.family-sub,
+.family-note {
+    margin: .25rem 0 0;
+    color: var(--muted);
+}
+
+.family-overall {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+
+.family-dot {
+    width: .8rem;
+    height: .8rem;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+}
+
+.family-card {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    padding: 1rem;
+}
+
+.family-message h1 {
+    font-size: 1.25rem;
+    margin: 0 0 .5rem;
+}
+
+.family-message p {
+    margin: 0 0 .5rem;
+}
+
+.family-thanks {
+    margin: 0;
+    border-color: color-mix(in srgb, var(--up) 45%, transparent);
+    background: color-mix(in srgb, var(--up) 12%, var(--panel));
+}
+
+.family-group h2 {
+    font-size: .8rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 .5rem;
+}
+
+.family-group ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.family-row {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .65rem 0;
+    min-height: 3rem;
+}
+
+.family-row + .family-row {
+    border-top: 1px solid var(--edge);
+}
+
+.family-icon {
+    font-size: 1.5rem;
+    width: 2rem;
+    text-align: center;
+    flex: none;
+    line-height: 1;
+}
+
+.family-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.family-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: .15rem;
+    flex: none;
+    max-width: 50%;
+    text-align: right;
+}
+
+.family-since {
+    font-size: .8rem;
+    color: var(--muted);
+}
+
+.family-pill {
+    display: inline-block;
+    padding: .2rem .6rem;
+    border-radius: 999px;
+    font-size: .85rem;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--text);
+    background: var(--panel-2);
+}
+
+/* The four words, each with its colour. Text colour and fill both come from the token, so
+   the pill reads the same way in light and dark. */
+.is-working { --family-tone: var(--up); }
+.is-trouble { --family-tone: var(--warn); }
+.is-down { --family-tone: var(--down); }
+.is-maintenance { --family-tone: var(--accent); }
+.is-unknown { --family-tone: var(--muted); }
+
+.family-pill.is-working,
+.family-pill.is-trouble,
+.family-pill.is-down,
+.family-pill.is-maintenance,
+.family-pill.is-unknown {
+    color: var(--family-tone);
+    background: color-mix(in srgb, var(--family-tone) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--family-tone) 40%, transparent);
+}
+
+.family-overall.is-working,
+.family-overall.is-trouble,
+.family-overall.is-down,
+.family-overall.is-maintenance,
+.family-overall.is-unknown {
+    color: var(--family-tone);
+}
+
+.family-button {
+    display: block;
+    width: 100%;
+    padding: .9rem 1rem;
+    border: 0;
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: var(--accent-ink);
+    font: inherit;
+    font-size: 1.05rem;
+    font-weight: 700;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.family-button:focus-visible,
+.family-link:focus-visible,
+.family-form textarea:focus-visible,
+.family-form input:focus-visible {
+    outline: 3px solid var(--accent-line);
+    outline-offset: 2px;
+}
+
+.family-report {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--edge);
+}
+
+.family-link {
+    color: var(--accent);
+    text-align: center;
+    padding: .75rem;
+    display: block;
+}
+
+.family-foot {
+    text-align: center;
+    font-size: .8rem;
+    color: var(--muted);
+    margin: 0;
+}
+
+.family-form fieldset {
+    border: 0;
+    margin: 0 0 1rem;
+    padding: 0;
+}
+
+.family-form legend,
+.family-label {
+    font-weight: 700;
+    margin-bottom: .5rem;
+    display: block;
+}
+
+.family-optional {
+    font-weight: 400;
+    color: var(--muted);
+}
+
+.family-choice {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: .6rem .5rem;
+    min-height: 3rem;
+    border-radius: var(--radius-inner);
+    cursor: pointer;
+}
+
+.family-choice + .family-choice {
+    border-top: 1px solid var(--edge);
+}
+
+.family-choice:has(input:checked) {
+    background: var(--accent-soft);
+}
+
+.family-choice input {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: none;
+    accent-color: var(--accent);
+}
+
+.family-form textarea,
+.family-form input[type="text"] {
+    display: block;
+    width: 100%;
+    margin-bottom: 1rem;
+    padding: .7rem .8rem;
+    border-radius: var(--radius-inner);
+    border: 1px solid var(--edge);
+    background: var(--panel-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 1rem; /* 16px or more, or iOS zooms the page when the field is tapped */
+}
+
+.family-form textarea::placeholder {
+    color: var(--placeholder);
+}
+
+.family-actions {
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+}
+
+.family-error {
+    margin: 0 0 1rem;
+    padding: .6rem .8rem;
+    border-radius: var(--radius-inner);
+    color: var(--down);
+    background: var(--down-soft);
+    border: 1px solid var(--down-line);
+}

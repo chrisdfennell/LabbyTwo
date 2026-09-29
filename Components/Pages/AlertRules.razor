@@ -13,6 +13,8 @@
 @inject MetricBaselines Baselines
 @inject HealthMonitor Monitor
 @inject MuteWindowStore Mutes
+@inject RemediationStore Remediations
+@inject RemediationService Healing
 
 <PageTitle>Alert rules · LabbyTwo</PageTitle>
 
@@ -193,6 +195,71 @@
     </div>
 </div>
 
+@* Self-healing sits with escalation because it is the other half of the same question —
+   what happens when an alert is not dealt with — and because the switch that stops all of
+   it has to be somewhere obvious. *@
+<div class="widget mb-3">
+    <div class="widget-head">
+        <h2 class="widget-title">Self-healing</h2>
+        <span class="tile-meta">
+            @(!_healing.Enabled ? "Switched off." : _fixCount == 0 ? "Nothing set up yet." : $"{_fixCount} automatic action{(_fixCount == 1 ? "" : "s")} set up.")
+        </span>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            Let LabbyTwo try the obvious fix before it wakes you: restart the container, run a
+            connection's action. Set one up in a rule's editor under “When this fires…”, or on a
+            connection under “When this is down…”. The alert says what it will try, and you hear
+            whether it worked. It never acts during maintenance, a silence or a mute window, never on
+            LabbyTwo's own container, and never on a protected container unless that remediation says so.
+        </p>
+        <div class="row g-2 align-items-end mb-3">
+            <div class="col-12 col-md-6">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="healing-enabled"
+                           checked="@_healing.Enabled"
+                           @onchange="e => SaveHealingAsync(_healing with { Enabled = e.Value is true })" />
+                    <label class="form-check-label" for="healing-enabled">
+                        Allow automatic actions
+                        <span class="form-text d-block">Off stops every one of them at once, without losing how they are set up.</span>
+                    </label>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="healing-cap">At most, per hour</label>
+                <input id="healing-cap" type="number" min="0" class="form-control" value="@_healing.MaxPerHour"
+                       @onchange="e => SaveHealingAsync(_healing with { MaxPerHour = Math.Max(0, (int)Parse(e.Value, RemediationSettings.DefaultMaxPerHour)) })" />
+                <div class="form-text">Across everything. A backstop against two fixes fighting.</div>
+            </div>
+        </div>
+
+        <div class="form-label">Recent automatic actions</div>
+        @if (_recentFixes.Count == 0)
+        {
+            <div class="tile-meta">None in the last two weeks.</div>
+        }
+        else
+        {
+            <ul class="list-unstyled mb-0">
+                @foreach (var change in _recentFixes)
+                {
+                    <li class="d-flex align-items-start gap-2 mb-1">
+                        <span class="status-dot @change.Dot mt-1" aria-hidden="true"></span>
+                        <div class="min-w-0">
+                            <div>@change.Title <span class="tile-meta">· @Ago.Since(change.At)</span></div>
+                            @if (change.Detail.Length > 0)
+                            {
+                                <div class="tile-meta">@change.Detail</div>
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+            <a class="small" href="changes?kind=remediation">All of them in the change feed</a>
+        }
+    </div>
+</div>
+
 @if (_suggestions.Count > 0)
 {
     <div class="widget mb-3">
@@ -277,6 +344,10 @@ else
                                     @if (rule.ForMinutes > 0)
                                     {
                                         <text> · sustained @rule.ForMinutes min</text>
+                                    }
+                                    @if (FixNote(rule) is { } fixNote)
+                                    {
+                                        <text> · 🩹 @fixNote</text>
                                     }
                                 </div>
                             </td>
@@ -562,6 +633,10 @@ else
                 }
             </div>
 
+            <RemediationEditor Value="_draftFix" ValueChanged="v => _draftFix = v" Heading="When this fires…"
+                               Trigger="@Remediation.RuleTrigger(draft.Id)" Id="rule-fix"
+                               SuggestedContainer="@SuggestedContainer(draft)" />
+
             <div class="mb-3">
                 <label class="form-label" for="rule-name">Name</label>
                 <input id="rule-name" class="form-control" value="@draft.Name" placeholder="@Preview(draft)"
@@ -731,6 +806,12 @@ else
 
     private AlertRule? _draft;
     private AlertRule? _confirmDelete;
+
+    /// <summary>The self-healing part of the rule being edited; null for none. Saved with the rule.</summary>
+    private Remediation? _draftFix;
+    private RemediationSettings _healing = new(true, RemediationSettings.DefaultMaxPerHour);
+    private IReadOnlyList<Change> _recentFixes = [];
+    private int _fixCount;
     private bool _isNew;
     private string? _validation;
 
@@ -755,6 +836,7 @@ else
         _recordedMetrics = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Rules.Changed += OnChanged;
         Mutes.Changed += OnChanged;
+        Remediations.Changed += OnChanged;
         Evaluator.Updated += OnChanged;
         await LoadAsync();
     }
@@ -773,6 +855,39 @@ else
             return true;
         });
     }
+
+    private async Task SaveHealingAsync(RemediationSettings next)
+    {
+        _healing = next;
+        await Offload.Run(async ct =>
+        {
+            await AppSettings.SaveAsync(next.ToSettings(), ct);
+            return true;
+        });
+    }
+
+    /// <summary>Saves or removes the self-healing part of a rule, with the rule.</summary>
+    private async Task SaveFixAsync(string trigger, Remediation? fix)
+    {
+        await Offload.Run(async ct =>
+        {
+            if (fix is null)
+                await Remediations.DeleteAsync(trigger, ct);
+            else
+                await Remediations.SaveAsync(fix with { Trigger = trigger }, ct);
+            return true;
+        });
+    }
+
+    /// <summary>A rule on one connection suggests a container named after it — Plex, plex.</summary>
+    private string? SuggestedContainer(AlertRule rule) =>
+        rule.ConnectionId is { } id ? _connections.FirstOrDefault(c => c.Id == id)?.Name.ToLowerInvariant().Replace(' ', '-') : null;
+
+    /// <summary>"self-healing: restart plex" under a rule that has one.</summary>
+    private string? FixNote(AlertRule rule) =>
+        Remediations.Current.FirstOrDefault(f => f.Trigger == Remediation.RuleTrigger(rule.Id)) is { Enabled: true, IsComplete: true } fix
+            ? fix.Kind == RemediationKind.RestartContainer ? $"self-healing: restart {fix.Container}" : "self-healing: runs an action"
+            : null;
 
     private string ChannelName(string id) => _channels.FirstOrDefault(c => c.Id == id)?.Name ?? "a deleted channel";
 
@@ -934,6 +1049,10 @@ else
         _escalation = EscalationPolicy.From(await AppSettings.AllAsync());
         _units = Units.Preferences.From(await AppSettings.AllAsync());
         _windows = await Offload.Run(ct => Mutes.AllAsync(ct));
+        _healing = RemediationSettings.From(await AppSettings.AllAsync());
+        var fixes = await Offload.Run(ct => Remediations.AllAsync(ct));
+        _fixCount = fixes.Count(f => f.Enabled);
+        _recentFixes = await Offload.Run(ct => Healing.RecentAsync(14, 10, DateTimeOffset.Now, ct));
         LoadSuggestions();
         LoadMetrics(_draft?.ConnectionId);
     }
@@ -1319,6 +1438,7 @@ else
         _isNew = true;
         _validation = null;
         _draft = new AlertRule { Metric = "disk_percent", Comparison = Comparison.Above, Threshold = 90, ForMinutes = 5 };
+        _draftFix = null;
     }
 
     private async Task Edit(AlertRule rule)
@@ -1326,6 +1446,7 @@ else
         _isNew = false;
         _validation = null;
         _draft = rule;
+        _draftFix = Remediations.Current.FirstOrDefault(f => f.Trigger == Remediation.RuleTrigger(rule.Id));
         await RefreshPreviewAsync();
     }
 
@@ -1348,13 +1469,17 @@ else
         }
 
         await Rules.SaveAsync(rule with { Metric = rule.Metric.Trim(), Name = rule.Name.Trim() });
+        await SaveFixAsync(Remediation.RuleTrigger(rule.Id), _draftFix);
         _draft = null;
     }
 
     private async Task DeleteConfirmedAsync()
     {
         if (_confirmDelete is { } rule)
+        {
             await Rules.DeleteAsync(rule.Id);
+            await SaveFixAsync(Remediation.RuleTrigger(rule.Id), null);
+        }
         _confirmDelete = null;
     }
 
@@ -1368,6 +1493,7 @@ else
     {
         Rules.Changed -= OnChanged;
         Mutes.Changed -= OnChanged;
+        Remediations.Changed -= OnChanged;
         Evaluator.Updated -= OnChanged;
         _recordedMetrics?.Dispose();
     }

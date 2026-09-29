@@ -2,10 +2,12 @@
 @inject IncidentStore Incidents
 @inject HealthMonitor Health
 @inject Offload Offload
+@inject ProbableCauses Causes
 
 @* {{incidents}}: recent outages in a runbook, one line each — what went down first, what
-   followed, when it started and how long it took — open ones marked and counting. The full
-   timeline of each is on the Incidents page, which every line links to.
+   followed, when it started and how long it took — open ones marked and counting — and what
+   probably caused it, or "No obvious cause". The full timeline of each is on the Incidents
+   page, which every line links to.
 
    Read off the render thread, then read again only when an incident is written; between
    those the "so far" durations are brought up to date on each sweep, from memory. *@
@@ -51,6 +53,10 @@ else
                         }
                     </div>
                     <div class="tile-meta">@ChangeLists.IncidentWhen(incident, now)</div>
+                    @if (_causes.GetValueOrDefault(incident.Id) is { } causes)
+                    {
+                        <div class="tile-meta md-down-message md-incident-cause">Probably: @IncidentCauses.Headline(causes)</div>
+                    }
                     @if (incident.Members.Count > 1)
                     {
                         <div class="tile-meta md-down-message">
@@ -72,6 +78,7 @@ else
     private IncidentListOptions? _options;
     private string? _problem;
     private IReadOnlyList<Incident> _incidents = [];
+    private IReadOnlyDictionary<long, IReadOnlyList<ProbableCause>> _causes = new Dictionary<long, IReadOnlyList<ProbableCause>>();
     private BackgroundLoad _load = default!;
 
     protected override void OnInitialized()
@@ -92,13 +99,24 @@ else
         if (_options is not { } options)
             return;
 
-        Task<IReadOnlyList<Incident>> Fetch(CancellationToken ct) =>
-            Offload.Run(c => Incidents.RecentAsync(DateTimeOffset.Now - options.Window, options.Limit, options.OpenOnly, c), ct);
+        // With their causes, in one read, so a line never appears and then grows a "Probably".
+        Task<(IReadOnlyList<Incident>, IReadOnlyDictionary<long, IReadOnlyList<ProbableCause>>)> Fetch(CancellationToken ct) =>
+            Offload.Run(async c =>
+            {
+                var list = await Incidents.RecentAsync(DateTimeOffset.Now - options.Window, options.Limit, options.OpenOnly, c);
+                return (list, await Causes.ExplainAsync(list, c));
+            }, ct);
+
+        void Apply((IReadOnlyList<Incident> List, IReadOnlyDictionary<long, IReadOnlyList<ProbableCause>> Causes) loaded)
+        {
+            _incidents = loaded.List;
+            _causes = loaded.Causes;
+        }
 
         if (refresh)
-            _ = _load.Refresh(Code.Source, Fetch, list => _incidents = list);
+            _ = _load.Refresh(Code.Source, Fetch, Apply);
         else
-            _ = _load.Load(Code.Source, Fetch, list => _incidents = list);
+            _ = _load.Load(Code.Source, Fetch, Apply);
     }
 
     private void OnIncidentChanged(Incident incident) => _ = InvokeAsync(() => Load(refresh: true));

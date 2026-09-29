@@ -52,6 +52,12 @@ public sealed record Incident(
 {
     public bool IsOpen => EndedAt is null;
 
+    /// <summary>
+    /// The note written up about it, if there is one — see <c>IncidentWriteUp</c>. Not a
+    /// positional parameter, so everything that builds an incident without one still does.
+    /// </summary>
+    public string? WriteUpNoteId { get; init; }
+
     /// <summary>How long it lasted, or has lasted so far.</summary>
     public TimeSpan Duration(DateTimeOffset now) => (EndedAt ?? now) - StartedAt;
 

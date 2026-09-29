@@ -6,6 +6,9 @@
 @inject ConfigStore Config
 @inject HealthMonitor Health
 @inject Offload Offload
+@inject ProbableCauses Causes
+@inject IncidentWriteUps WriteUps
+@inject ILogger<IncidentsPage> Log
 @inject NavigationManager Nav
 
 <PageTitle>Incidents · LabbyTwo</PageTitle>
@@ -14,6 +17,10 @@
    followed, how long until the last came back — and, opened up, the timeline: everything
    the change feed recorded from half an hour before it started until just after it ended.
    That half hour is usually where the cause is.
+
+   Each one says what probably caused it — worked out by a few rules from the feed and the
+   lab's shape, never guessed (see IncidentCauses) — and can be written up as a note in one
+   click, which the incident then links to.
 
    The list is read in the background and again when an incident is written. A timeline is
    read when it is opened, and again while it is open and changes arrive. *@
@@ -54,6 +61,10 @@
             until @IncidentRules.ContextAfter.TotalMinutes minutes after it ended.</li>
         <li>Anything that happened while alerts were silenced for maintenance is still recorded, and marked
             <span class="badge text-bg-secondary">during maintenance</span>.</li>
+        <li>“Probably” is worked out from what was recorded: several things behind one connection that went down first,
+            a container given a new image or restarted up to @IncidentCauses.Window.TotalMinutes minutes before its service failed,
+            everything on one address failing within a minute, a certificate, DNS answer or LabbyTwo update just before, or a
+            disk alert on a disk that has been filling for weeks. When none of those fit it says so, rather than guess.</li>
     </ul>
 </details>
 
@@ -94,6 +105,13 @@ else
                             }
                         </div>
                         <div class="tile-meta">@ChangeLists.IncidentWhen(incident, now)</div>
+                        @if (_causes.GetValueOrDefault(incident.Id) is { } causes)
+                        {
+                            <div class="incident-cause mt-1">
+                                <span class="tile-meta">Probably:</span>
+                                <span class="@(causes.Count == 0 ? "tile-meta" : "")">@IncidentCauses.Headline(causes)</span>
+                            </div>
+                        }
                         <ul class="incident-members tile-meta mb-0 mt-1">
                             @foreach (var member in incident.Members.OrderBy(m => m.DownAt))
                             {
@@ -104,10 +122,61 @@ else
                                 </li>
                             }
                         </ul>
+                        @if (_writeUps.GetValueOrDefault(incident.Id) is { } writeUp)
+                        {
+                            <div class="tile-meta mt-1">
+                                Write-up:
+                                @if (writeUp.Url is { } url)
+                                {
+                                    <a href="@url">@writeUp.Title</a>
+                                }
+                                else
+                                {
+                                    <span>@writeUp.Title</span>
+                                }
+                            </div>
+                        }
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline-secondary flex-none" aria-expanded="@(open ? "true" : "false")"
-                            @onclick="() => Toggle(incident)">@(open ? "Hide timeline" : "Timeline")</button>
+                    <div class="d-flex flex-column gap-1 flex-none">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" aria-expanded="@(open ? "true" : "false")"
+                                @onclick="() => Toggle(incident)">@(open ? "Hide timeline" : "Timeline")</button>
+                        @if (!_writeUps.ContainsKey(incident.Id))
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_writing == incident.Id)"
+                                    title="Make a note about this incident with its times, cause and timeline filled in"
+                                    @onclick="() => WriteUpAsync(incident)">@(_writing == incident.Id ? "Writing…" : "Write up")</button>
+                        }
+                    </div>
                 </div>
+                @if (_writeProblem is { } problem && _writeProblemFor == incident.Id)
+                {
+                    <div class="text-danger small mt-2" role="alert">@problem</div>
+                }
+
+                @if (open && _causes.GetValueOrDefault(incident.Id) is { Count: > 0 } explained)
+                {
+                    <div class="incident-causes mt-3">
+                        <div class="tile-meta mb-1">What probably caused it, surest first</div>
+                        <ol class="mb-0 ps-3">
+                            @foreach (var cause in explained)
+                            {
+                                <li>
+                                    <span>@cause.Sentence</span>
+                                    <span class="badge text-bg-secondary ms-1">@ConfidenceWord(cause.Confidence)</span>
+                                    @if (cause.Evidence.Count > 0)
+                                    {
+                                        <ul class="tile-meta mb-0">
+                                            @foreach (var change in cause.Evidence)
+                                            {
+                                                <li><a href="@($"incidents#incident-{incident.Id}-change-{change.Id}")">@change.At.ToLocalTime().ToString("HH:mm:ss") — @change.Title</a></li>
+                                            }
+                                        </ul>
+                                    }
+                                </li>
+                            }
+                        </ol>
+                    </div>
+                }
 
                 @if (open)
                 {
@@ -127,7 +196,9 @@ else
                                 {
                                     var where = ChangeLists.Where(change, _connections);
                                     var offset = change.At - incident.StartedAt;
-                                    <li class="change-row @(offset < TimeSpan.Zero ? "is-before" : "")" @key="change.Id">
+                                    var evidence = _causes.GetValueOrDefault(incident.Id)?.Any(c => c.Evidence.Any(e => e.Id == change.Id)) == true;
+                                    <li class="change-row @(offset < TimeSpan.Zero ? "is-before" : "") @(evidence ? "is-evidence" : "")" @key="change.Id"
+                                        id="@($"incident-{incident.Id}-change-{change.Id}")">
                                         <span class="change-time tile-meta" title="@change.At.ToLocalTime().ToString("f")">
                                             @change.At.ToLocalTime().ToString("HH:mm:ss")
                                             <span class="change-offset">@Offset(offset)</span>
@@ -139,6 +210,10 @@ else
                                                 @if (where is not null)
                                                 {
                                                     <span class="tile-meta"> · @where</span>
+                                                }
+                                                @if (evidence)
+                                                {
+                                                    <span class="badge text-bg-warning ms-1">probable cause</span>
                                                 }
                                             </div>
                                             @if (change.Detail.Length > 0)
@@ -167,6 +242,11 @@ else
     private IReadOnlyList<Connection> _connections = [];
     private readonly HashSet<long> _expanded = [];
     private readonly Dictionary<long, IReadOnlyList<Change>> _timelines = [];
+    private IReadOnlyDictionary<long, IReadOnlyList<ProbableCause>> _causes = new Dictionary<long, IReadOnlyList<ProbableCause>>();
+    private IReadOnlyDictionary<long, WriteUpLink> _writeUps = new Dictionary<long, WriteUpLink>();
+    private long? _writing;
+    private string? _writeProblem;
+    private long? _writeProblemFor;
     private BackgroundLoad _load = default!;
     private bool _disposed;
 
@@ -179,7 +259,9 @@ else
 
         // A link from a runbook's {{incidents}} names one; open its timeline straight away.
         var fragment = new Uri(Nav.Uri).Fragment;
-        if (fragment.StartsWith("#incident-", StringComparison.Ordinal) && long.TryParse(fragment["#incident-".Length..], out var id))
+        // So does a link to one change on its timeline, #incident-12-change-340, from a cause's evidence.
+        if (fragment.StartsWith("#incident-", StringComparison.Ordinal)
+            && long.TryParse(fragment["#incident-".Length..].Split('-')[0], out var id))
             _expanded.Add(id);
 
         _connections = await Config.ConnectionsAsync();
@@ -199,12 +281,21 @@ else
         var since = DateTimeOffset.Now.AddDays(-_days);
         var openOnly = _openOnly;
 
-        Task<IReadOnlyList<Incident>> Fetch(CancellationToken ct) =>
-            Offload.Run(c => Incidents.RecentAsync(since, Limit, openOnly, c), ct);
-
-        void Apply(IReadOnlyList<Incident> list)
+        // The causes and write-ups are read with the list, not after it, so an incident never
+        // shows without its "Probably" and then jumps when it arrives. Closed incidents' causes
+        // are remembered by the service, so a refresh reads the feed only for open ones.
+        Task<Loaded> Fetch(CancellationToken ct) => Offload.Run(async c =>
         {
+            var list = await Incidents.RecentAsync(since, Limit, openOnly, c);
+            return new Loaded(list, await Causes.ExplainAsync(list, c), await WriteUps.LinksAsync(list, c));
+        }, ct);
+
+        void Apply(Loaded loaded)
+        {
+            var list = loaded.Incidents;
             _incidents = list;
+            _causes = loaded.Causes;
+            _writeUps = loaded.WriteUps;
             foreach (var incident in list.Where(i => _expanded.Contains(i.Id)))
                 LoadTimeline(incident);
         }
@@ -214,6 +305,46 @@ else
             _ = _load.Refresh(key, Fetch, Apply);
         else
             _ = _load.Load(key, Fetch, Apply);
+    }
+
+    private sealed record Loaded(
+        IReadOnlyList<Incident> Incidents,
+        IReadOnlyDictionary<long, IReadOnlyList<ProbableCause>> Causes,
+        IReadOnlyDictionary<long, WriteUpLink> WriteUps);
+
+    private static string ConfidenceWord(CauseConfidence confidence) => confidence switch
+    {
+        CauseConfidence.High => "likely",
+        CauseConfidence.Medium => "possible",
+        _ => "worth a look",
+    };
+
+    /// <summary>
+    /// Writes the incident up as a note and opens it in the editor. Off the render thread:
+    /// it reads the incident's half hour of the feed and writes a note, and a tab the first time.
+    /// </summary>
+    private async Task WriteUpAsync(Incident incident)
+    {
+        if (_writing is not null)
+            return;
+        _writing = incident.Id;
+        _writeProblem = null;
+        try
+        {
+            var link = await Offload.Run(c => WriteUps.CreateAsync(incident, c));
+            if (link.EditUrl is { } edit)
+                Nav.NavigateTo(edit);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not write up incident {Id}", incident.Id);
+            _writeProblem = "The write-up could not be saved. The log says why.";
+            _writeProblemFor = incident.Id;
+        }
+        finally
+        {
+            _writing = null;
+        }
     }
 
     private void Toggle(Incident incident)
