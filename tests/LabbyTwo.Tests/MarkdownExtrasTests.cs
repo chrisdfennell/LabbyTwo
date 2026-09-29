@@ -486,12 +486,12 @@ public sealed class MarkdownExtrasTests : IDisposable
                 // A rule since deleted.
                 new MetricAlertService.Breach("gone", nas.Id, now, true, 1),
             ],
-            [slow, unnamed], [nas, plex], Registry, only: null);
+            [slow, unnamed], [nas, plex], Registry, only: null, Units.Preferences.Default);
 
         Assert.Collection(lines,
             l =>
             {
-                Assert.Equal("Plex · Response time above 900", l.Name);
+                Assert.Equal("Plex · Response time above 900 ms", l.Name);
                 Assert.Equal("1250 ms", l.Value);
                 Assert.Equal("above 900 ms", l.Limit);
             },
@@ -505,7 +505,7 @@ public sealed class MarkdownExtrasTests : IDisposable
         var only = MarkdownLists.Only(Code("{{alerts: only=\"nas, Nowhere\"}}"), [nas, plex], out var problem);
         Assert.Contains("“Nowhere”", problem);
         var filtered = MarkdownLists.Alerts([new(slow.Id, nas.Id, now, true, 812), new(unnamed.Id, plex.Id, now, true, 1250)],
-            [slow, unnamed], [nas, plex], Registry, only);
+            [slow, unnamed], [nas, plex], Registry, only, Units.Preferences.Default);
         Assert.Equal("NAS", Assert.Single(filtered).Connection.Name);
     }
 

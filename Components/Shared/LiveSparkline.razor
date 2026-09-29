@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 @inject SharedSeries Series
@@ -52,6 +53,7 @@ else
     {
         _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         History.Recorded += OnRecorded;
+        DisplayUnits.Changed += OnUnitsChanged;
         Latest.Changed += OnLatestLoaded;
     }
 
@@ -118,7 +120,7 @@ else
 
         var spec = Registry.Metric(connection, key);
         _connectionId = connection.Id;
-        _unit = spec.Unit;
+        _unit = Units.Display(0, spec.Unit, DisplayUnits.Current).Unit;
         _decimals = spec.Decimals;
         var about = $"{connection.Name} · {spec.Label} over the last {SparkWindow.Describe(window)}";
         _title = _values is null ? about : _title;
@@ -133,13 +135,17 @@ else
 
         void Apply(IReadOnlyList<HistoryStore.Sample> samples)
         {
-            _values = SparkWindow.Thin([.. samples.Select(s => s.Value)]);
+            // In the reader's units, like {{metric: …}} beside it: the line's shape does not
+            // change, but its tooltip and the title read the numbers back.
+            var units = DisplayUnits.Current;
+            _unit = Units.Display(0, spec.Unit, units).Unit;
+            _values = SparkWindow.Thin([.. samples.Select(s => Units.Display(s.Value, spec.Unit, units).Value)]);
             _from = samples.Count > 0 ? samples[0].At : null;
             _to = samples.Count > 0 ? samples[^1].At : null;
             var about = $"{name} · {spec.Label} over the last {SparkWindow.Describe(window)}";
             _title = samples.Count == 0
                 ? $"{about}: nothing recorded"
-                : $"{about}: now {spec.Format(samples[^1].Value)} (low {spec.Format(samples.Min(s => s.Value))}, high {spec.Format(samples.Max(s => s.Value))})";
+                : $"{about}: now {Units.Format(spec, samples[^1].Value, units)} (low {Units.Format(spec, samples.Min(s => s.Value), units)}, high {Units.Format(spec, samples.Max(s => s.Value), units)})";
         }
 
         if (refresh)
@@ -160,9 +166,17 @@ else
         });
     }
 
+    /// <summary>The Units setting changed: draw the same history again in the new units.</summary>
+    private void OnUnitsChanged() => _ = InvokeAsync(() =>
+    {
+        if (_asked is { } asked && Scope is not null && ShortcodeLookup.Connection(Scope.Connections, asked.Id) is { } connection)
+            Load(asked.Id, connection.Name, Registry.Metric(connection, asked.Key), asked.Key, asked.Window, refresh: true);
+    });
+
     public void Dispose()
     {
         History.Recorded -= OnRecorded;
+        DisplayUnits.Changed -= OnUnitsChanged;
         Latest.Changed -= OnLatestLoaded;
         _load.Dispose();
     }

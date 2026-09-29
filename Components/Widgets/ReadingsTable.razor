@@ -5,6 +5,7 @@
 @inject Offload Offload
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
+@inject DisplayUnits DisplayUnits
 
 @* Generic on purpose: any connection, any metrics. A weather station is where you most
    want the raw numbers, but "what did this actually record" is a fair question of a UPS
@@ -74,7 +75,7 @@ else
 
     private List<Column> _columns = [];
     private List<Row> _rows = [];
-    private Units.Preferences _units = Units.Preferences.Default;
+    private Units.Preferences _units => DisplayUnits.Current;
     private BackgroundLoad _load = default!;
 
     private bool StartOpen => Context.Widget.Settings.GetBool("open", false);
@@ -85,11 +86,11 @@ else
         (MetricsOverride ?? Context.Widget.Settings.Get("metrics"))
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
-        _units = Units.Preferences.From(await AppSettings.AllAsync());
+        DisplayUnits.Changed += OnUpdated;
     }
 
     protected override void OnParametersSet() => Load(refresh: false);
@@ -158,6 +159,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         _load?.Dispose();
     }
 }

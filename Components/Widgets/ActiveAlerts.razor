@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject MetricAlertService Evaluator
 @inject AlertRuleStore Rules
 @inject ConfigStore Config
@@ -38,6 +39,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Evaluator.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Rules.Changed += OnUpdated;
         await LoadAsync();
     }
@@ -57,9 +59,12 @@ else
                     return null;
 
                 var spec = Registry.Metric(connection, rule.Metric);
+                // The reading and the limit in the reader's units, as the alert rules page
+                // shows them; the rule is still stored and compared in the metric's own.
+                var units = DisplayUnits.Current;
                 return new Row(
                     $"{connection.Name} · {spec.Label}",
-                    $"{spec.Format(breach.LastValue, 1)} — {rule.ComparisonWord} {spec.Format(rule.Threshold)}" +
+                    $"{Units.Format(spec, breach.LastValue, units, 1)} — {rule.ComparisonWord} {Units.Format(spec, rule.Threshold, units)}" +
                     (breach.Since is { } since ? $", since {since:HH:mm}" : ""));
             })
             .OfType<Row>()
@@ -75,6 +80,7 @@ else
     public void Dispose()
     {
         Evaluator.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Rules.Changed -= OnUpdated;
     }
 }

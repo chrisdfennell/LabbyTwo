@@ -110,6 +110,7 @@ builder.Services.AddSingleton<Registry>();
 
 builder.Services.AddSingleton<Db>();
 builder.Services.AddSingleton<AppSettingsStore>();
+builder.Services.AddSingleton<DisplayUnits>();
 builder.Services.AddSingleton<AlertRuleStore>();
 builder.Services.AddSingleton<ConfigStore>();
 builder.Services.AddSingleton<HistoryStore>();
@@ -240,6 +241,10 @@ await app.Services.GetRequiredService<Db>().EnsureSchemaAsync();
 // Built now rather than by the first card that asks, so it is already listening when the
 // monitor's first sweep lands and that sweep's readings are in memory for the first page.
 app.Services.GetRequiredService<LatestReadings>();
+
+// The units every card draws its readings in, read before the first page rather than by
+// it, so nobody who reads in Celsius sees a page of Fahrenheit flash past first.
+await app.Services.GetRequiredService<DisplayUnits>().RefreshAsync();
 
 // Liveness probe for Docker and monitoring; always anonymous.
 app.MapGet("/healthz", () => Results.Text("ok")).AllowAnonymous();

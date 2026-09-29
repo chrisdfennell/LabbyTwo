@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject ConfigStore Config
 @inject HealthMonitor Health
 @inject LatestReadings Latest
@@ -18,7 +19,7 @@ else
 {
     <div class="metric-value">
         @_value.ToString($"F{Decimals}")
-        <span class="metric-unit">@Unit</span>
+        <span class="metric-unit">@_unit</span>
     </div>
     <div class="tile-meta">@Caption</div>
 
@@ -29,7 +30,7 @@ else
             {
                 <div class="d-flex justify-content-between gap-2 small">
                     <span class="text-truncate">@part.Name</span>
-                    <span class="tile-meta flex-none">@Spec.Format(part.Value)</span>
+                    <span class="tile-meta flex-none">@(part.Value.ToString($"F{_spec.Decimals}") + _partUnit)</span>
                 </div>
             }
         </div>
@@ -41,7 +42,10 @@ else
 
     private sealed record Part(string Name, double Value);
 
+    // Every figure on the card is already in the reader's units — see LoadAsync.
     private double _value;
+    private string _unit = "";
+    private string _partUnit = "";
     private int _count;
     private List<Part> _parts = [];
     private MetricSpec _spec = MetricSpec.Fallback("value");
@@ -55,7 +59,7 @@ else
 
     private MetricSpec Spec => _spec;
     private int Decimals => Math.Clamp(Context.Widget.Settings.GetInt("decimals", _spec.Decimals), 0, 4);
-    private string Unit => Context.Widget.Settings.Get("suffix", How == "count" ? "" : _spec.Unit);
+    private string? Suffix => Context.Widget.Settings.Get("suffix") is { Length: > 0 } set ? set : null;
 
     private string Caption =>
         Context.Widget.Settings.Get("caption") is { Length: > 0 } set
@@ -74,6 +78,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
         await LoadAsync();
     }
@@ -110,10 +115,22 @@ else
                 parts.Add(new Part(connection.Name, number));
         }
 
+        _spec = connections.Count > 0 ? Registry.Metric(connections[0], Metric) : MetricSpec.Fallback(Metric);
+
+        // Each reading is converted before they are combined rather than the total after,
+        // because Fahrenheit does not start at zero: the sum of two readings in °C, turned
+        // into °F, is 32 degrees short of the sum of the two in °F. The card's suffix follows
+        // the metric tile's rule — a unit of the same kind converts to it, anything else is
+        // a label on a number that still follows the Units setting.
+        var units = DisplayUnits.Current;
+        var asked = Units.ConvertsTo(_spec.Unit, Suffix) ? Suffix : null;
+        parts = [.. parts.Select(part => part with { Value = Units.Display(part.Value, _spec.Unit, units, asked).Value })];
+        _partUnit = Units.Display(0, _spec.Unit, units, asked).Unit;
+        _unit = How == "count" ? Suffix ?? "" : Units.Display(0, _spec.Unit, units, Suffix).Unit;
+
         _ids = connections.Select(c => c.Id).ToHashSet();
         _parts = [.. parts.OrderByDescending(part => part.Value)];
         _count = parts.Count;
-        _spec = connections.Count > 0 ? Registry.Metric(connections[0], Metric) : MetricSpec.Fallback(Metric);
 
         _value = _count == 0 ? 0 : How switch
         {
@@ -141,6 +158,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }
 }

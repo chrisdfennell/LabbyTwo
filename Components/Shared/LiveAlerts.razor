@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject MetricAlertService Evaluator
 @inject AlertRuleStore Rules
 @inject Registry Registry
@@ -20,7 +21,7 @@
 else
 {
     var only = MarkdownLists.Only(Code, Scope.Connections, out var problem);
-    var lines = MarkdownLists.Alerts(Evaluator.Firing, _rules, Scope.Connections, Registry, only);
+    var lines = MarkdownLists.Alerts(Evaluator.Firing, _rules, Scope.Connections, Registry, only, DisplayUnits.Current);
     <div class="md-down md-alerts" role="list" aria-label="Alerts firing">
         @if (problem is not null)
         {
@@ -70,6 +71,7 @@ else
     {
         _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Evaluator.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Rules.Changed += OnRulesChanged;
         _load.Load("rules", ct => Offload.Run(c => Rules.AllAsync(c), ct), rules => _rules = rules);
     }
@@ -82,6 +84,7 @@ else
     public void Dispose()
     {
         Evaluator.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Rules.Changed -= OnRulesChanged;
         _load.Dispose();
     }

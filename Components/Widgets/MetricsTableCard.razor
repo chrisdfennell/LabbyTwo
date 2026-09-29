@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 @inject Registry Registry
@@ -54,6 +55,7 @@ else
     protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
 
@@ -93,7 +95,7 @@ else
             .. wanted.Take(Limit).Select(pair =>
             {
                 var spec = Registry.Metric(connection, pair.Key);
-                return new Row(pair.Key, spec.Label, spec.Format(pair.Value));
+                return new Row(pair.Key, spec.Label, Units.Format(spec, pair.Value, DisplayUnits.Current));
             }),
         ];
     }
@@ -130,6 +132,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }
 }

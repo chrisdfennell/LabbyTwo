@@ -607,7 +607,7 @@ their own; a few mark the edges of a section.
 | Shortcode | Shows |
 |---|---|
 | `{{status: NAS}}` | up / down / checking / paused, with the service tile's coloured dot |
-| `{{metric: NAS / cpu_percent}}` | the latest reading as the metric tile formats it; `decimals=2` and `unit=" %"` override |
+| `{{metric: NAS / cpu_percent}}` | the latest reading as the metric tile formats it, in the units chosen in Settings → Appearance; `decimals=2` and `unit=` override (below) |
 | `{{forecast: NAS}}` | when it fills up — "in about 6 weeks", "now", "not at the current rate": the soonest to fill, or `{{forecast: NAS / disk_percent}}` for one |
 | `{{uptime: NAS}}` | uptime over the last 30 days, `99.8%`; `days=7` for another window (1–90) |
 | `{{since: NAS}}` | how long it has been as it is now, "3d 4h" — write "up for {{since: NAS}}" |
@@ -662,7 +662,7 @@ installed or not.
 | `up: NAS` | its last verdict is up |
 | `any down` | anything monitored is down |
 | `all up` | everything monitored is up, and nothing is still being checked |
-| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=`, and a unit after the number is allowed if it is the metric's own |
+| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
 
 #### The rules
 
@@ -696,10 +696,26 @@ All of them visible when broken, rather than silently wrong:
 - **"Checking" is neither.** Just after a restart, before a connection's first probe,
   `down:` and `up:` are both false for it, and `all up` is false — so a runbook does not
   tell you to power-cycle the NAS because LabbyTwo restarted a second ago.
-- **Metrics are compared in their stored unit** — the unit the metric tile shows beside
-  the number (%, ms, °C for temperatures whatever the display preference). A unit written
-  after the number must be that one, or is left off: `> 90 %` is fine, `> 90 GB` on a
-  percentage is a **?**.
+- **Units in a live value.** `{{metric: …}}` shows a reading as the metric tile does, in
+  the units chosen in **Settings → Appearance**: an outdoor temperature stored as 17.6 °C
+  reads `63.7°F` to somebody who chose Fahrenheit. `unit=` does one of two things. If it
+  names a unit of the same kind as the metric — `°C`, `°F`, `K`; `mph`, `km/h`, `m/s`,
+  `kn`; `inHg`, `hPa`, `mbar`, `mmHg`, `kPa`; `in`, `mm` (and the obvious spellings: `F`,
+  `kph`, `knots`) — the reading is converted to it whatever the setting says, so
+  `{{metric: NAS / temp_c unit=°C}}` is always Celsius. Anything else is a label: the
+  number still follows the setting and your words go after it, so `unit=" degrees"` reads
+  `63.7 degrees`, and `unit=""` shows the number alone. A metric with no unit of its own is
+  never converted, so a `unit="°F"` on one is the label it always was. `suffix=` is the
+  same option by the metric tile's name, and the tile's own **Suffix** follows the same
+  rule. Decimals are the metric's own in any unit, unless `decimals=` says otherwise.
+- **Metrics are compared in their stored unit** — the unit the provider records (%, ms,
+  °C for temperatures, mph, inHg, inches) whatever the display preference, so a bare number
+  means that unit: `temp_c > 50` is 50 °C, as it always was, even when the page shows °F.
+  A unit written after the number is either that one (`> 90 %`) or, for something that
+  converts, any unit of the same kind, which the number is converted from before
+  comparing: `temp_c > 122°F`, `temp_c > 50°C` and `temp_c > 50 C` are one condition, and
+  mean the same to everyone who reads the runbook whichever units they chose. A unit of
+  another kind — `> 90 GB` on a percentage, `> 50 mph` on a temperature — is a **?**.
 - **Buttons are the real thing.** A `{{button}}` is the same button the Connections page and
   the Controls card draw, run by the same code — it asks for confirmation (a dangerous one
   always does), shows it is working, says what happened, and silences the connection
@@ -892,6 +908,16 @@ token is a plain 404.
   no longer add up to either. A pilot wants knots and inHg, and the old single switch could
   not say that. Readings are always *recorded* in one unit so history stays comparable and
   a rule written today keeps meaning the same thing; only what you read and type converts.
+  And it applies everywhere a reading is shown, not only on the weather cards: metric
+  tiles, gauges, charts and their tooltips, the compare, aggregate, readings and
+  metrics-table cards, the NAS card's CPU and drive temperatures, live values and
+  sparklines in Markdown, the Active alerts card and `{{alerts}}`, alert notifications and
+  the weekly summary — and it changes on a page that is already open, without a reload.
+  Anything with nothing to choose (%, ms, GB, µg/m³) is shown as it is. A gauge's full
+  scale and warning mark, like an alert rule's stored threshold, are in the metric's own
+  unit; the alert rules editor converts what you type, so the threshold you enter and the
+  one the alerts show are the same number. The weather cards follow the setting too unless
+  a card has been given its own preset.
 - **Name** — call it after your house instead of after this project.
 
 **Reset to defaults** puts the look back without touching the dashboard's name or your

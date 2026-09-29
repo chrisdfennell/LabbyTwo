@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 
@@ -36,11 +37,13 @@ else
 
     private IReadOnlyDictionary<string, double>? _metrics;
 
-    private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
+    /// <summary>The card's own preset, or the Units setting when it follows that.</summary>
+    private Units.Preferences Prefs => WeatherUnits.Resolve(Context.Widget.Settings, DisplayUnits.Current);
 
     protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
 
@@ -67,8 +70,7 @@ else
 
     private string Temp(string key) => _metrics!.TryGetValue(key, out var c) ? FormatTemp(c) : "—";
 
-    private string FormatTemp(double celsius) =>
-        Metric ? $"{celsius:0.0}°C" : $"{AmbientWeatherProvider.CToF(celsius):0.0}°F";
+    private string FormatTemp(double celsius) => WeatherUnits.Temperature(celsius, Prefs);
 
     private IEnumerable<(string Label, string Value)> Rows()
     {
@@ -78,18 +80,16 @@ else
         if (_metrics.TryGetValue("wind_mph", out var wind))
         {
             var gust = _metrics.TryGetValue("gust_mph", out var g) ? g : (double?)null;
-            var speed = Metric ? $"{wind * 1.60934:0} km/h" : $"{wind:0} mph";
-            var gustText = gust is { } value
-                ? Metric ? $" (gust {value * 1.60934:0})" : $" (gust {value:0})"
-                : "";
-            yield return ("Wind", speed + gustText);
+            var (speed, unit) = WeatherUnits.Wind(wind, Prefs);
+            var gustText = gust is { } value ? $" (gust {WeatherUnits.Wind(value, Prefs).Value:0})" : "";
+            yield return ("Wind", $"{speed:0} {unit}{gustText}");
         }
 
         if (_metrics.TryGetValue("pressure_inhg", out var pressure))
-            yield return ("Pressure", Metric ? $"{pressure * 33.8639:0} hPa" : $"{pressure:0.00} inHg");
+            yield return ("Pressure", WeatherUnits.Pressure(pressure, Prefs));
 
         if (_metrics.TryGetValue("rain_in", out var rain))
-            yield return ("Rain today", Metric ? $"{rain * 25.4:0.0} mm" : $"{rain:0.00} in");
+            yield return ("Rain today", WeatherUnits.Rain(rain, Prefs));
 
         if (_metrics.TryGetValue("temp_indoor_c", out var indoor))
             yield return ("Indoor", FormatTemp(indoor));
@@ -113,6 +113,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }
 }

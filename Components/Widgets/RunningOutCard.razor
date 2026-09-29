@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject CapacityForecasts Forecasts
 @inject ConfigStore Config
 @inject Registry Registry
@@ -63,6 +64,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Forecasts.Changed += OnChanged;
+        DisplayUnits.Changed += OnChanged;
         await LoadAsync();
     }
 
@@ -88,7 +90,7 @@ else
             {
                 var connection = connections[e.ConnectionId];
                 var spec = Registry.Metric(connection, e.Metric);
-                return new Row(connection.Name, spec.Label, spec.Format(e.Forecast.Current), e.Forecast);
+                return new Row(connection.Name, spec.Label, Units.Format(spec, e.Forecast.Current, DisplayUnits.Current), e.Forecast);
             })
             .ToList();
 
@@ -116,5 +118,9 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Forecasts.Changed -= OnChanged;
+    public void Dispose()
+    {
+        Forecasts.Changed -= OnChanged;
+        DisplayUnits.Changed -= OnChanged;
+    }
 }

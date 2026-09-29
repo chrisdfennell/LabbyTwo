@@ -4,6 +4,7 @@
 @inject LatestReadings Latest
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
+@inject DisplayUnits DisplayUnits
 
 @* A whole page for one weather station, rather than fifteen widgets to arrange by hand.
    Everything on it is built from the same reusable widgets available on a dashboard tab —
@@ -201,7 +202,7 @@ else
     private Dictionary<string, object> _airParameters = [];
     private DateTimeOffset? _lastReport;
     private IReadOnlyDictionary<string, double> _readings = new Dictionary<string, double>();
-    private Units.Preferences _units = Units.Preferences.Default;
+    private Units.Preferences _units => DisplayUnits.Current;
     private int _hours = 24;
 
     // What the panels' boundaries compare to decide whether a failed panel deserves another
@@ -311,6 +312,7 @@ else
     protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Config.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
@@ -401,7 +403,6 @@ else
                 ? connections.FirstOrDefault(c => c.Id == picked)
                 : connections.FirstOrDefault(c => c.Provider == provider && c.Enabled);
 
-        _units = Units.Preferences.From(await AppSettings.AllAsync());
 
         var state = Health.State(_station.Id);
         _lastReport = state?.At;
@@ -440,6 +441,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Config.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }

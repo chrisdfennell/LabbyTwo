@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject HealthMonitor Health
 @inject AppSettingsStore AppSettings
+@inject DisplayUnits DisplayUnits
 @inject Registry Registry
 
 @* The next few hours, which is the question a daily forecast cannot answer: "89% chance
@@ -38,15 +39,15 @@ else
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
 
     private IReadOnlyList<ForecastProvider.Hour> _hours = [];
-    private Units.Preferences _units = Units.Preferences.Default;
+    private Units.Preferences _units => DisplayUnits.Current;
 
     private IReadOnlyList<ForecastProvider.Hour> Hours =>
         [.. _hours.Take(Math.Clamp(Context.Widget.Settings.GetInt("hours", 12), 1, 48))];
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
-        _units = Units.Preferences.From(await AppSettings.AllAsync());
+        DisplayUnits.Changed += OnUpdated;
     }
 
     protected override void OnParametersSet() => Load();
@@ -73,5 +74,9 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
+    }
 }

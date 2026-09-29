@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 
@@ -45,7 +46,8 @@ else
 
     private IReadOnlyDictionary<string, double>? _metrics;
 
-    private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
+    /// <summary>The card's own preset, or the Units setting when it follows that.</summary>
+    private Units.Preferences Prefs => WeatherUnits.Resolve(Context.Widget.Settings, DisplayUnits.Current);
 
     private double Indoor => _metrics!.GetValueOrDefault("temp_indoor_c");
     private double Outdoor => _metrics!.GetValueOrDefault("temp_outdoor_c");
@@ -71,16 +73,15 @@ else
         }
     }
 
-    private string FormatTemp(double celsius) =>
-        Metric ? $"{celsius:0.0}°C" : $"{AmbientWeatherProvider.CToF(celsius):0.0}°F";
+    private string FormatTemp(double celsius) => WeatherUnits.Temperature(celsius, Prefs);
 
     /// <summary>A difference rather than a reading, so it converts as an interval.</summary>
-    private string FormatDelta(double celsius) =>
-        Metric ? $"{celsius:0.0}°C" : $"{celsius * 9 / 5:0.0}°F";
+    private string FormatDelta(double celsius) => WeatherUnits.TemperatureChange(celsius, Prefs);
 
     protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
 
@@ -124,6 +125,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }
 }
