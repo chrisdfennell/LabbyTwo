@@ -805,6 +805,69 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         return new Aggregate(reader.GetDouble(0) / count, reader.GetDouble(1), reader.GetDouble(2), count);
     }
 
+    /// <summary>The hourly half of <see cref="EnergyInputAsync"/>: a range on the summaries' primary key.</summary>
+    public const string EnergySummariesSql = """
+        SELECT hour_ts, avg, min, max, count, last_ts, last_value FROM samples_hourly
+        WHERE connection_id = $c AND metric = $m AND hour_ts >= $from AND hour_ts < $to
+        ORDER BY hour_ts
+        """;
+
+    /// <summary>The raw half of <see cref="EnergyInputAsync"/>: a range on ix_samples_lookup, already in time order.</summary>
+    public const string EnergyRawSql = """
+        SELECT ts, value FROM samples
+        WHERE connection_id = $c AND metric = $m AND ts >= $from AND ts < $to
+        ORDER BY ts
+        """;
+
+    /// <summary>
+    /// One power or energy series over [<paramref name="from"/>, <paramref name="to"/>), as
+    /// <see cref="Core.Energy"/> integrates it: the hourly summaries for whatever has been
+    /// rolled up, and the raw readings for the rest.
+    ///
+    /// Raw readings rather than <see cref="SamplesAsync"/>'s per-hour points, because the
+    /// trapezoid needs to see the gaps between readings to leave them out — an hourly
+    /// average has already hidden them. That is at most the raw retention's worth of one
+    /// series (a week at 30 seconds is 20,000 rows), read as one index range; everything
+    /// older is one summary row per hour. Two range reads on the (connection, metric, time)
+    /// keys, never a scan — pinned by the query-plan tests.
+    /// </summary>
+    public async Task<(IReadOnlyList<Core.Energy.HourSummary> Hours, IReadOnlyList<Core.Energy.Reading> Raw)> EnergyInputAsync(
+        string connectionId, string metric, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+
+        var hours = new List<Core.Energy.HourSummary>();
+        var summaries = connection.CreateCommand();
+        summaries.CommandText = EnergySummariesSql;
+        summaries.Parameters.AddWithValue("$c", connectionId);
+        summaries.Parameters.AddWithValue("$m", metric);
+        summaries.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+        summaries.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+        await using (var reader = await summaries.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                hours.Add(new Core.Energy.HourSummary(reader.GetInt64(0), reader.GetDouble(1), reader.GetDouble(2),
+                    reader.GetDouble(3), reader.GetInt64(4), reader.GetInt64(5), reader.GetDouble(6)));
+            }
+        }
+
+        var raw = new List<Core.Energy.Reading>();
+        var readings = connection.CreateCommand();
+        readings.CommandText = EnergyRawSql;
+        readings.Parameters.AddWithValue("$c", connectionId);
+        readings.Parameters.AddWithValue("$m", metric);
+        readings.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+        readings.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+        await using (var reader = await readings.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                raw.Add(new Core.Energy.Reading(reader.GetInt64(0), reader.GetDouble(1)));
+        }
+
+        return (hours, raw);
+    }
+
     /// <summary>
     /// Drops hourly summaries past their retention. Status events are kept — they are tiny
     /// and are the audit trail.

@@ -165,6 +165,7 @@ builder.Services.AddSingleton<MediaStack>();
 
 // What the weekly summary says. The job that sends it is an IBackgroundJob and is
 // discovered; this is the part it and the Settings preview share.
+builder.Services.AddSingleton<PowerCosts>();
 builder.Services.AddSingleton<WeeklySummaryGatherer>();
 
 // Web Push: the devices that asked for notifications, this install's signing key, and the

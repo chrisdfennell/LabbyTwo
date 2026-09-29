@@ -338,8 +338,8 @@ shows the real state, so a rule that fired overnight is red in the morning.
 Once a week, on the day and at the time you pick in **Settings → Weekly summary**, LabbyTwo
 sends a short note through the same alert channels: the week's uptime, each outage and how
 long it lasted, the least reliable and slowest services, disks that are filling and when
-they will be full, certificates and renewals coming up, speed test averages, and what
-changed. A section with nothing to say is left out, so a quiet week is one line. It is off
+they will be full, certificates and renewals coming up, speed test averages, what the
+electricity cost, and what changed. A section with nothing to say is left out, so a quiet week is one line. It is off
 until you turn it on, it waits out quiet hours rather than arriving at 3am, and if LabbyTwo
 was not running at the time it is sent once when it next starts — never twice. The page
 shows a preview and can send one on demand.
@@ -521,6 +521,56 @@ Both go into a runbook with `{{changes}}` and `{{incidents}}` (see [Shortcodes](
 The feed is kept for 90 days and incidents for a year (`Labby__ChangeRetentionDays`,
 `Labby__IncidentRetentionDays`). A plugin that notices something changing can record it
 too: ask for `ChangeStore` and call `RecordAsync`.
+
+### What the electricity costs
+
+**Power** in the nav adds up what the lab's electricity costs, from anything that reports
+it: a **Shelly plug**, a **UPS** through Network UPS Tools, or a Home Assistant or MQTT
+sensor named like `rack_watts` or `rack_kwh`. Any recorded metric in watts (unit `W`, or a
+name like `watts`, `load_watts`, `…_watts`) is a power reading, and any in kWh or Wh is the
+device's own meter; a connection's reading and meter that measure the same thing are
+treated as one source. For each source — and for all of them together — it shows the
+average draw, the kWh and the cost **today**, **this month**, over **the last 30 days**,
+and **projected** for the whole month, with a chart of cost per day over the last 30 or 90
+days.
+
+**Prices and sources…** on the page sets the price per kWh and the currency (15 cents in
+dollars until you do), an optional **fixed monthly charge** — added to the projected bill,
+never shared out between devices, since it is paid whether they are plugged in or not —
+and optional **time-of-use rates**: a different price on chosen days between two times.
+The first window that matches wins; one that ends earlier than it starts runs past
+midnight, so "Friday 23:00 to 07:00" covers Saturday morning; times are the lab's own
+wall-clock times, so they follow the clocks when they change. The same form lets you
+untick a source (a plug behind the UPS is already inside the UPS's load, so count one of
+them), give it a friendly name, and say what is on it — `NAS, Plex, Frigate` to split its
+cost evenly, `NAS=2, Plex=1` by weight — which adds a **by service** table. That is an
+estimate and is labelled as one: a plug knows what it delivered, not which program asked
+for it.
+
+How the numbers are worked out:
+
+- A device with its own running total is read from that: the rise between readings is what
+  it used, even across time LabbyTwo was not looking. A total that goes down was **reset**
+  (a firmware update, a power cut), and what it reads afterwards counts from zero; a fall of
+  less than half a percent is rounding and counts as nothing.
+- Otherwise its watts are **integrated** — reading to reading in straight lines (the
+  trapezoid rule), split at each hour. A gap longer than **five minutes, or three probe
+  intervals if that is longer**, is left out rather than filled in: nobody knows what a plug
+  drew for the six hours it could not be reached, so it adds nothing, and the page says how
+  much of each period was actually measured. Negative watts (export) count as zero.
+- History older than the raw retention is kept as hourly averages; each counts for the part
+  of its hour its readings covered (readings × how often the series is actually read).
+- Each hour is priced at its own rate, so time-of-use windows apply to exactly the hours
+  they cover. The projection is the month so far plus the rest of the month at the last
+  seven days' cost per measured hour.
+- Anything not on a plug — the fridge, the router on the wall — is not counted, and the page
+  says so under the table. A UPS that reports its load only as a percentage needs its rated
+  output in watts (the connection's **Rated output** field) unless the driver reports
+  `ups.realpower` or `ups.realpower.nominal`.
+
+`{{power}}` puts the figures in a note or a runbook (see [Shortcodes](#shortcodes)), and the
+[weekly summary](#a-weekly-summary) gains a line with the week's kWh and cost and the
+sources that cost most, once anything reports power.
 
 ### Tabs — what's in the nav
 
@@ -748,6 +798,7 @@ their own; a few mark the edges of a section.
 | `{{button: NAS / restart}}` | one of the connection's own action buttons, by key or label; `label="Restart the NAS"` renames it |
 | `{{today}}` | the date, "Tuesday, 29 September 2026"; `format=short`, `date`, `iso`, `day`, `time`, `datetime`, or your own from `d M y H h m s t f`, separators and `'quoted words'` — `format="dddd d MMM"` |
 | `{{countdown: 2026-12-25}}` | "in 87 days", "tomorrow", "today", "yesterday", "3 days ago"; with a time, `{{countdown: 2026-12-25 18:00}}`, the last day counts down in hours and minutes. `label="Renewal"` puts a word in front. Dates are written year first |
+| `{{power}}` | what the electricity [measured on the Power page](#what-the-electricity-costs) has cost this month so far, `$4.12`, linking to the page. `{{power: "NAS plug"}}` for one source (its name there, or its connection's) or `{{power: Plex}}` for a service a plug is split between; `period=today`, `week`, `month`, `30d` or `projected`; `show=kwh` or `show=watts` (the average) instead of the cost |
 
 **Cards and lists** — each on a line of its own (a list item or a quote holding nothing
 else counts):

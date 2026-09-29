@@ -95,6 +95,7 @@ public sealed record MetricSpec(string Key, string Label, string Unit = "", int 
         ("_kbps", " kbps", 0),
         ("_rpm", " rpm", 0),
         ("_watts", " W", 0),
+        ("_kwh", " kWh", 2),
         ("_volts", " V", 1),
         ("_gb", " GB", 1),
         ("_mb", " MB", 0),
