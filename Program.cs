@@ -197,6 +197,13 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<IncidentTracker>()
 builder.Services.AddSingleton<FamilyReportStore>();
 builder.Services.AddSingleton<FamilyStatus>();
 builder.Services.AddSingleton<FamilyThrottle>();
+// Self-healing: the automatic action attached to an alert rule or a connection going down.
+// Runs after every alert pass, off the same ledger escalation reads, and writes every run
+// to the change feed above — which is how it lands on an incident's timeline.
+builder.Services.AddSingleton<RemediationStore>();
+builder.Services.AddSingleton<IRemediationActions, RemediationActions>();
+builder.Services.AddSingleton<RemediationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RemediationService>());
 
 // Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
 // plugin's nightly tidy-up cannot hang startup or take the process down with it.

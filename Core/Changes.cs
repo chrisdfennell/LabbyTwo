@@ -52,7 +52,11 @@ public sealed record Change(
     /// </summary>
     public string Dot => IsTrouble ? "status-down"
         : IsRecovery ? "status-up"
-        : Action == ChangeActions.Restarted ? "status-flapping"
+        : Action is ChangeActions.Restarted or ChangeActions.Remediated ? "status-flapping"
+        // Self-healing's verdicts, which are neither a failure nor a recovery of the thing
+        // itself but say which way it went: red for "did not help", green for "fixed it".
+        : Action is ChangeActions.NotHelped or ChangeActions.Failed ? "status-down"
+        : Action == ChangeActions.Helped ? "status-up"
         : "status-unknown";
 }
 
@@ -69,6 +73,8 @@ public static class ChangeKinds
 
     /// <summary>Somebody pressed "Something's broken" on the family status page.</summary>
     public const string Report = "report";
+    /// <summary>Something LabbyTwo did by itself to fix an alert — see <see cref="LabbyTwo.Core.Remediation"/>.</summary>
+    public const string Remediation = "remediation";
 
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
     public static readonly IReadOnlyList<(string Key, string Label)> All =
@@ -81,6 +87,7 @@ public static class ChangeKinds
         (Device, "Devices on the network"),
         (Update, "LabbyTwo updates"),
         (Report, "Reports from the family"),
+        (Remediation, "Self-healing"),
     ];
 
     /// <summary>
@@ -101,6 +108,7 @@ public static class ChangeKinds
             "device" or "devices" or "lan" or "network" => Device,
             "update" or "updates" or "labbytwo" => Update,
             "report" or "reports" or "family" => Report,
+            "remediation" or "remediations" or "self-healing" or "selfhealing" or "healing" or "fixes" => Remediation,
             _ => null,
         };
     }
@@ -132,6 +140,14 @@ public static class ChangeActions
     public const string Appeared = "appeared";
     public const string Updated = "updated";
     public const string Reported = "reported";
+
+    // Self-healing. Kept apart from Restarted, which is Docker's word for something it
+    // saw happen, rather than something LabbyTwo chose to do.
+    public const string Remediated = "remediated";
+    public const string Helped = "helped";
+    public const string NotHelped = "not_helped";
+    public const string Failed = "failed";
+    public const string Skipped = "skipped";
 }
 
 /// <summary>
