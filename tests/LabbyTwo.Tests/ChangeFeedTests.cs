@@ -1,3 +1,4 @@
+#pragma warning disable BL0006 // The interactive test renderer is a Renderer, which is the whole point of it.
 using System.Net;
 using LabbyTwo.Core;
 using LabbyTwo.Services;
