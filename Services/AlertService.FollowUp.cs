@@ -77,9 +77,10 @@ public sealed partial class AlertService
 
             // Written before the send, as the rule evaluator writes its breach: anything that
             // looks while a slow webhook is being waited on must see the alert is out.
-            await firing.SaveAsync(new FiringAlert(
+            var entry = new FiringAlert(
                 key, ruleId, connection.Id, since, now, muting?.Name, null, 0, [],
-                alert.Title, alert.Body, alert.Link, value), ct);
+                alert.Title, alert.Body, alert.Link, value);
+            await firing.SaveAsync(entry, ct);
 
             if (await SuppressedAsync(connection, false, now, ct) is { } reason)
             {
@@ -94,6 +95,10 @@ public sealed partial class AlertService
                 return;
             }
 
+            // The note — "LabbyTwo will try: restart plex in 5 min" — goes on the notice
+            // only, not into the ledger's copy, which an escalation half an hour later sends
+            // again and by when it would no longer be true.
+            alert = await WithFiringNoteAsync(connection, entry, alert, now, ct);
             await BroadcastAsync(alert, channelId is { Length: > 0 } ? [channelId] : null, now, ct);
         }
         finally
@@ -116,6 +121,12 @@ public sealed partial class AlertService
             var key = alert.Tag ?? (ruleId is null ? FiringAlert.StatusKey(connection.Id) : FiringAlert.RuleKey(ruleId, connection.Id));
             var entry = firing.Get(key);
             await firing.RemoveAsync(key, ct);
+
+            // Asked before anything decides whether to send, because it is also how
+            // self-healing learns that what it did worked — which is true whether or not
+            // anybody is told.
+            if (await ClearedNoteAsync(connection, key, entry, now, ct) is { Length: > 0 } note)
+                alert = alert with { Body = $"{alert.Body} {note}".Trim() };
 
             if (entry?.HeldBy is { } window)
             {
@@ -282,6 +293,7 @@ public sealed partial class AlertService
             Tag = entry.Key,
             Link = entry.Link,
         };
+        alert = await WithFiringNoteAsync(connection, entry with { HeldBy = null, ClockFrom = now }, alert, now, ct);
         await BroadcastAsync(alert, rule?.ChannelId is { Length: > 0 } channel ? [channel] : null, now, ct);
     }
 }

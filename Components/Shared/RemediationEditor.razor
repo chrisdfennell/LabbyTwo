@@ -1,0 +1,201 @@
+@inject ConfigStore Config
+@inject ActionRunner Runner
+@inject Offload Offload
+@* "When this is down…" / "When this fires…": the self-healing section of a rule or a
+   connection. Edits a draft only — the page it sits in saves it along with everything
+   else, so Cancel means cancel. Null is "do nothing", which is the default and what most
+   things should stay at. *@
+
+<fieldset class="border rounded p-2 mb-3">
+    <legend class="form-label float-none w-auto px-1 mb-0 small">@Heading</legend>
+
+    <select class="form-select form-select-sm" aria-label="@Heading" value="@Mode"
+            @onchange="e => SetMode(e.Value?.ToString())">
+        <option value="none">Just tell me — do nothing automatically</option>
+        <option value="restart">Restart a Docker container</option>
+        <option value="action" disabled="@(_withActions.Count == 0)">
+            Run one of a connection's actions@(_withActions.Count == 0 ? " (none has any)" : "")
+        </option>
+    </select>
+
+    @if (Value is { } fix)
+    {
+        <div class="row g-2 mt-1">
+            @if (fix.Kind == RemediationKind.RestartContainer)
+            {
+                <div class="col-6">
+                    <label class="form-label small" for="@($"{Id}-docker")">On</label>
+                    <select id="@($"{Id}-docker")" class="form-select form-select-sm" value="@fix.TargetConnectionId"
+                            @onchange="e => Set(fix with { TargetConnectionId = e.Value?.ToString() ?? string.Empty })">
+                        <option value="">Choose a Docker connection…</option>
+                        @foreach (var docker in _dockers)
+                        {
+                            <option value="@docker.Id">@docker.Icon @docker.Name</option>
+                        }
+                    </select>
+                    @if (_dockers.Count == 0)
+                    {
+                        <div class="form-text">Add a Docker connection first.</div>
+                    }
+                </div>
+                <div class="col-6">
+                    <label class="form-label small" for="@($"{Id}-container")">Container</label>
+                    <input id="@($"{Id}-container")" class="form-control form-control-sm" value="@fix.Container"
+                           placeholder="plex"
+                           @onchange="e => Set(fix with { Container = e.Value?.ToString()?.Trim() ?? string.Empty })" />
+                    <div class="form-text">Its name, or its Compose service.</div>
+                </div>
+            }
+            else
+            {
+                var chosen = _withActions.FirstOrDefault(c => c.Id == fix.TargetConnectionId);
+                <div class="col-6">
+                    <label class="form-label small" for="@($"{Id}-target")">Connection</label>
+                    <select id="@($"{Id}-target")" class="form-select form-select-sm" value="@fix.TargetConnectionId"
+                            @onchange="e => Set(fix with { TargetConnectionId = e.Value?.ToString() ?? string.Empty, ActionId = string.Empty })">
+                        <option value="">Choose…</option>
+                        @foreach (var connection in _withActions)
+                        {
+                            <option value="@connection.Id">@connection.Icon @connection.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-6">
+                    <label class="form-label small" for="@($"{Id}-action")">Action</label>
+                    <select id="@($"{Id}-action")" class="form-select form-select-sm" value="@fix.ActionId" disabled="@(chosen is null)"
+                            @onchange="e => Set(fix with { ActionId = e.Value?.ToString() ?? string.Empty })">
+                        <option value="">Choose…</option>
+                        @if (chosen is not null)
+                        {
+                            @foreach (var action in Runner.ActionsFor(chosen))
+                            {
+                                <option value="@action.Id">@action.Label@(action.Dangerous ? " (dangerous)" : "")</option>
+                            }
+                        }
+                    </select>
+                    <div class="form-text">The same buttons the Controls card and a runbook's <code>{{button}}</code> offer.</div>
+                </div>
+            }
+
+            <div class="col-6 col-md-3">
+                <label class="form-label small" for="@($"{Id}-after")">After (minutes)</label>
+                <input id="@($"{Id}-after")" type="number" min="0" class="form-control form-control-sm" value="@fix.AfterMinutes"
+                       @onchange="e => Set(fix with { AfterMinutes = Int(e.Value, 5) })" />
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small" for="@($"{Id}-tries")">Tries per outage</label>
+                <input id="@($"{Id}-tries")" type="number" min="1" max="@Remediation.MaxAttemptsLimit" class="form-control form-control-sm"
+                       value="@fix.MaxAttempts" @onchange="e => Set(fix with { MaxAttempts = Int(e.Value, 1) })" />
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small" for="@($"{Id}-cooldown")">Wait between (minutes)</label>
+                <input id="@($"{Id}-cooldown")" type="number" min="1" class="form-control form-control-sm" value="@fix.CooldownMinutes"
+                       @onchange="e => Set(fix with { CooldownMinutes = Int(e.Value, 30) })" />
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small" for="@($"{Id}-check")">Judge after (minutes)</label>
+                <input id="@($"{Id}-check")" type="number" min="1" class="form-control form-control-sm" value="@fix.CheckAfterMinutes"
+                       @onchange="e => Set(fix with { CheckAfterMinutes = Int(e.Value, 5) })" />
+            </div>
+
+            <div class="col-12 col-md-6">
+                <label class="form-label small" for="@($"{Id}-then")">If it didn't fix it</label>
+                <select id="@($"{Id}-then")" class="form-select form-select-sm" value="@(fix.IfNotFixed == IfNotFixed.Escalate ? "escalate" : "notify")"
+                        @onchange='e => Set(fix with { IfNotFixed = e.Value?.ToString() == "escalate" ? IfNotFixed.Escalate : IfNotFixed.Notify })'>
+                    <option value="notify">Tell me, where this alert goes</option>
+                    <option value="escalate">Escalate it now</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-6 d-flex flex-column justify-content-end">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="@($"{Id}-protected")" checked="@fix.AllowProtected"
+                           @onchange="e => Set(fix with { AllowProtected = e.Value is true })" />
+                    <label class="form-check-label small" for="@($"{Id}-protected")">Allow protected containers and dangerous actions</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="@($"{Id}-enabled")" checked="@fix.Enabled"
+                           @onchange="e => Set(fix with { Enabled = e.Value is true })" />
+                    <label class="form-check-label small" for="@($"{Id}-enabled")">On</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-text mt-2">
+            @if (!fix.IsComplete)
+            {
+                <span class="text-warning">Choose what to act on, or it will not run.</span>
+            }
+            else
+            {
+                @RemediationRules.Describe(fix, Doing(fix))
+            }
+            An alert that comes back within the wait of the last try counts as the same outage, so a
+            restart that knocks it over again cannot start another. Never during maintenance or a
+            mute window, and never on LabbyTwo's own container.
+        </div>
+    }
+</fieldset>
+
+@code {
+    /// <summary>The draft; null for "do nothing".</summary>
+    [Parameter] public Remediation? Value { get; set; }
+    [Parameter] public EventCallback<Remediation?> ValueChanged { get; set; }
+
+    /// <summary>What the section is called: "When this is down…", "When this fires…".</summary>
+    [Parameter] public string Heading { get; set; } = "When this fires…";
+
+    /// <summary>The trigger a new remediation is for.</summary>
+    [Parameter, EditorRequired] public string Trigger { get; set; } = "";
+
+    /// <summary>A container name to start from — a connection called Plex is usually a container called plex.</summary>
+    [Parameter] public string? SuggestedContainer { get; set; }
+
+    /// <summary>For element ids, so two editors on one page do not share labels.</summary>
+    [Parameter] public string Id { get; set; } = "fix";
+
+    private IReadOnlyList<Connection> _dockers = [];
+    private IReadOnlyList<Connection> _withActions = [];
+
+    private string Mode => Value is null ? "none" : Value.Kind == RemediationKind.RestartContainer ? "restart" : "action";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var connections = await Offload.Run(ct => Config.ConnectionsAsync(ct));
+        _dockers = [.. connections.Where(c => c.Provider == "docker")];
+        _withActions = [.. connections.Where(c => Runner.ActionsFor(c).Count > 0)];
+    }
+
+    private Task SetMode(string? mode) => mode switch
+    {
+        "restart" => Set((Value ?? Fresh()) with
+        {
+            Kind = RemediationKind.RestartContainer,
+            TargetConnectionId = Value is { Kind: RemediationKind.RestartContainer } same ? same.TargetConnectionId
+                : _dockers.Count == 1 ? _dockers[0].Id : "",
+            Container = Value is { Kind: RemediationKind.RestartContainer, Container.Length: > 0 } had ? had.Container
+                : SuggestedContainer ?? "",
+        }),
+        "action" => Set((Value ?? Fresh()) with { Kind = RemediationKind.ProviderAction, TargetConnectionId = "", ActionId = "" }),
+        _ => Set(null),
+    };
+
+    private Remediation Fresh() => new() { Trigger = Trigger };
+
+    private Task Set(Remediation? value)
+    {
+        Value = value;
+        return ValueChanged.InvokeAsync(value);
+    }
+
+    private string Doing(Remediation fix)
+    {
+        if (fix.Kind == RemediationKind.RestartContainer)
+            return $"restart {fix.Container}";
+        var connection = _withActions.FirstOrDefault(c => c.Id == fix.TargetConnectionId);
+        var label = connection is null ? fix.ActionId : Runner.ActionsFor(connection).FirstOrDefault(a => a.Id == fix.ActionId)?.Label ?? fix.ActionId;
+        return $"run “{label}” on {connection?.Name ?? "?"}";
+    }
+
+    private static int Int(object? value, int fallback) =>
+        int.TryParse(value?.ToString(), out var parsed) ? parsed : fallback;
+}

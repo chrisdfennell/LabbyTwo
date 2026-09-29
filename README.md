@@ -469,6 +469,49 @@ the rule editor a rule can follow the default, never escalate, or escalate its o
   due while LabbyTwo was stopped is sent once when it starts — never a burst of the repeats
   it missed.
 
+#### Self-healing
+
+Most three-in-the-morning outages are fixed by what you would do half asleep: restart the
+container. LabbyTwo can do that for you, and only wake you if it did not work. In a rule's
+editor under **When this fires…**, or on a connection under **When this is down…**, choose
+what to do:
+
+- **Restart a Docker container** — by name or Compose service, on one of your Docker
+  connections.
+- **Run one of a connection's actions** — the same buttons the Controls card and a runbook's
+  `{{button: NAS / restart}}` offer, run through the same code with the same timeout.
+
+Then say how long to wait first (5 minutes by default), how many tries per outage (1), how long
+between tries (30 minutes), how long after a try to judge it (5 minutes), and whether to just
+tell you or escalate straight away if it did not help. For *"if Plex is down for 5 minutes,
+restart the plex container once; if it is still down 5 minutes later, tell me"*, those
+defaults are already it.
+
+The alert says what is coming — *"NAS is down … LabbyTwo will try: restart plex in 5 min"* —
+and what happened follows: the recovery says *"Restarted plex at 02:14 — it recovered"*, or a
+second notice says *"Restarted plex at 02:14 — it didn't help"* and that it will not try again.
+Every run, verdict and hold-up is in **What changed** (kind *Self-healing*) against the
+connection that alerted, so it also shows on that incident's timeline. **Settings → Alerts →
+Self-healing** lists the recent ones.
+
+The guardrails:
+
+- **Never while you are working on it.** Maintenance mode, a silence, a mute window, or a
+  parent connection being down all hold it back, the way they hold an alert.
+- **Never on LabbyTwo's own container**, whatever you tick — the thing deciding whether a
+  restart helped cannot be the thing restarted.
+- **Protected containers need an explicit opt-in.** Anything on a Containers page's protected
+  list (the tunnel, the reverse proxy) is refused unless that remediation ticks *Allow
+  protected containers and dangerous actions*; the same tick is needed for an action the
+  integration marks dangerous. An action that asks for input never runs automatically.
+- **No loops.** An alert that fires again within the wait of the last try is the same outage,
+  so a restart that knocks the service over again cannot buy itself another restart.
+- **A cap for the whole install** — 5 automatic actions an hour by default, counted from the
+  change feed so a restart does not reset it — and a switch that turns every one of them off.
+- **Restarts remember.** Tries per outage, and a check that was waiting, are kept in the
+  database, so an update in the middle neither restarts plex twice nor forgets to say whether
+  it worked.
+
 Alert channels are connections too. Add a webhook or Pushover channel and both kinds start
 being delivered — there is no separate notification settings screen.
 

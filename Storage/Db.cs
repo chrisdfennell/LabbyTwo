@@ -467,6 +467,37 @@ public sealed class Db
             seq           INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
+
+        // 24 — self-healing: the automatic action attached to an alert rule or to a
+        // connection going down, one per trigger, and what each has done about the alert
+        // it is answering — one row per firing key, so a restart of LabbyTwo neither runs
+        // it again nor loses the check it was waiting on. The runs themselves are in the
+        // change feed, which is what the page lists and the hourly cap counts.
+        """
+        CREATE TABLE IF NOT EXISTS remediations (
+            trigger              TEXT    PRIMARY KEY,
+            enabled              INTEGER NOT NULL DEFAULT 1,
+            after_minutes        INTEGER NOT NULL DEFAULT 5,
+            kind                 TEXT    NOT NULL,
+            target_connection_id TEXT    NOT NULL DEFAULT '',
+            container            TEXT    NOT NULL DEFAULT '',
+            action_id            TEXT    NOT NULL DEFAULT '',
+            max_attempts         INTEGER NOT NULL DEFAULT 1,
+            cooldown_minutes     INTEGER NOT NULL DEFAULT 30,
+            check_minutes        INTEGER NOT NULL DEFAULT 5,
+            allow_protected      INTEGER NOT NULL DEFAULT 0,
+            if_not_fixed         TEXT    NOT NULL DEFAULT 'notify') WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS remediation_state (
+            alert_key     TEXT    PRIMARY KEY,
+            episode_start INTEGER NOT NULL,
+            attempts      INTEGER NOT NULL DEFAULT 0,
+            last_run      INTEGER,
+            check_at      INTEGER,
+            did           TEXT    NOT NULL DEFAULT '',
+            outcome       TEXT    NOT NULL DEFAULT '',
+            note          TEXT    NOT NULL DEFAULT '',
+            gave_up       INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
