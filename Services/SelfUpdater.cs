@@ -104,16 +104,14 @@ public sealed class SelfUpdater(
     /// <summary>
     /// The container's own inspect payload, or null if this process cannot be placed.
     ///
-    /// Asking for /containers/{hostname}/json is the cheap path and works whenever the
-    /// hostname is still the short id Docker assigned. It is not always: Compose and
-    /// Watchtower both create containers, a hostname can be set in the compose file, and a
-    /// name that matches no container 404s — which is what produced "could not work out
-    /// which container it is running in" on a box where the socket was mounted perfectly
-    /// well, and sent the reader off to fix the one thing that was not wrong.
+    /// The id from /proc is asked for first, because it is the one that stays true: after
+    /// Watchtower recreates the container, the hostname is still the *old* container's id,
+    /// and asking for that 404s — which is why "Update now" worked once and then said it
+    /// could not work out which container it was, until the container was recreated by hand.
+    /// The hostname is kept as the second try for hosts where /proc does not name the id.
     ///
-    /// So when the cheap path misses, the list is read and the container whose id *starts
-    /// with* the hostname is taken. That is the same match Docker itself does for a short
-    /// id, and it costs one extra call on the only path that was already failing.
+    /// Each is tried as a name first, then as an id prefix against the list — the same match
+    /// Docker itself does for a short id, for a hostname that is one.
     ///
     /// A socket proxy refusing the call is let through rather than read as "not found": the
     /// fix for that is a flag on the proxy, and hiding it behind "could not work out which
@@ -121,14 +119,18 @@ public sealed class SelfUpdater(
     /// </summary>
     private static async Task<string?> InspectAsync(string endpoint, CancellationToken ct)
     {
-        var hostname = Environment.MachineName;
+        string[] hints = [.. new[] { SelfContainer.Id, Environment.MachineName }
+            .OfType<string>().Where(hint => hint.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)];
 
-        try
+        foreach (var hint in hints)
         {
-            return await DockerSocket.GetAsync(endpoint, Timeout, $"/containers/{hostname}/json", ct);
-        }
-        catch (InvalidOperationException ex) when (ex is not DockerProxyDeniedException)
-        {
+            try
+            {
+                return await DockerSocket.GetAsync(endpoint, Timeout, $"/containers/{hint}/json", ct);
+            }
+            catch (InvalidOperationException ex) when (ex is not DockerProxyDeniedException)
+            {
+            }
         }
 
         try
@@ -138,10 +140,11 @@ public sealed class SelfUpdater(
             if (containers.RootElement.ValueKind != JsonValueKind.Array)
                 return null;
 
+            foreach (var hint in hints)
             foreach (var entry in containers.RootElement.EnumerateArray())
             {
                 var id = entry.TryGetProperty("Id", out var raw) ? raw.GetString() ?? "" : "";
-                if (id.Length == 0 || !id.StartsWith(hostname, StringComparison.OrdinalIgnoreCase))
+                if (id.Length == 0 || !id.StartsWith(hint, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 return await DockerSocket.GetAsync(endpoint, Timeout, $"/containers/{id}/json", ct);
@@ -209,7 +212,7 @@ public sealed class SelfUpdater(
                         "to: it updates whatever it was started watching.", mode)
                     : new Status(false, false, null,
                         "LabbyTwo could not work out which container it is running in. That happens outside " +
-                        "Docker, or when the container's hostname has been overridden.");
+                        "Docker, or when neither /proc nor the hostname names a container Docker still has.");
             }
 
             if (self.Digest is null)
@@ -264,8 +267,8 @@ public sealed class SelfUpdater(
         first is null ? second : second is null ? first : $"{first} {second}";
 
     /// <summary>
-    /// Which container this process is. Inside Docker the hostname is the container's short
-    /// id unless somebody overrode it, which is what makes this possible without being told.
+    /// Which container this process is, found from the id /proc names or the hostname — see
+    /// <see cref="SelfContainer"/> for why the hostname alone stops being enough.
     /// </summary>
     private static async Task<Self?> IdentifyAsync(string endpoint, CancellationToken ct)
     {

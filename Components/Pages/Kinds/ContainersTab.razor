@@ -559,7 +559,7 @@
                 _collapsed.Add(group.Key);
     }
 
-    private bool IsSelf(ContainerRow row) => ContainerSafety.IsSelf(row, Environment.MachineName);
+    private bool IsSelf(ContainerRow row) => ContainerSafety.IsSelf(row, SelfContainer.Hint);
 
     private bool IsListed(ContainerRow row) => ContainerSafety.IsListed(row, _protected);
 
@@ -588,7 +588,7 @@
 
     private void AskBulk(ContainerGroup group, ContainerAction action)
     {
-        var (act, skip) = ContainerSafety.PlanBulk(action, group.Containers, Environment.MachineName, _protected);
+        var (act, skip) = ContainerSafety.PlanBulk(action, group.Containers, SelfContainer.Hint, _protected);
         var verb = DockerContainers.Verb(action).ToLowerInvariant();
         var plan = act.Select(c => new PlanLine(c.Name, verb, true))
             .Concat(skip.Select(s => new PlanLine(s.Container.Name, "left alone: " + s.Why, false)))

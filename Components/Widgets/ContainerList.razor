@@ -73,12 +73,12 @@ else
 
     /// <summary>
     /// LabbyTwo's own container gets a different sentence, because the consequence is
-    /// different: the page goes away. Matched on the hostname, which inside Docker is the
-    /// container's own short id.
+    /// different: the page goes away. Matched on the id /proc names, or the hostname where it
+    /// names none — see SelfContainer for why the hostname alone goes stale after an update.
     /// </summary>
     private static bool IsSelf(DockerProvider.ContainerInfo container) =>
-        container.Id.StartsWith(Environment.MachineName, StringComparison.OrdinalIgnoreCase)
-        || container.Name.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+        container.Id.StartsWith(SelfContainer.Hint, StringComparison.OrdinalIgnoreCase)
+        || container.Name.Equals(SelfContainer.Hint, StringComparison.OrdinalIgnoreCase);
 
     private static string ConfirmMessage(DockerProvider.ContainerInfo container) =>
         IsSelf(container)
