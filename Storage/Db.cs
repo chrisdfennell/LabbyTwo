@@ -468,6 +468,22 @@ public sealed class Db
             PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
 
+        // 24 — "something's broken" reports from the family status page. One row per
+        // report, read newest first; dismissing one deletes it, because the change feed
+        // already keeps the history. item_name is what the family saw at the time, kept
+        // because the owner may rename or remove the item before reading the report.
+        """
+        CREATE TABLE IF NOT EXISTS family_reports (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            INTEGER NOT NULL,
+            item_id       TEXT    NOT NULL DEFAULT '',
+            connection_id TEXT,
+            item_name     TEXT    NOT NULL,
+            message       TEXT    NOT NULL DEFAULT '',
+            reporter      TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_family_reports_ts ON family_reports (ts);
+        """,
+
         // 24 — self-healing: the automatic action attached to an alert rule or to a
         // connection going down, one per trigger, and what each has done about the alert
         // it is answering — one row per firing key, so a restart of LabbyTwo neither runs

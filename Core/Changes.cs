@@ -71,6 +71,8 @@ public static class ChangeKinds
     public const string Device = "device";
     public const string Update = "update";
 
+    /// <summary>Somebody pressed "Something's broken" on the family status page.</summary>
+    public const string Report = "report";
     /// <summary>Something LabbyTwo did by itself to fix an alert — see <see cref="LabbyTwo.Core.Remediation"/>.</summary>
     public const string Remediation = "remediation";
 
@@ -84,6 +86,7 @@ public static class ChangeKinds
         (Dns, "DNS answers"),
         (Device, "Devices on the network"),
         (Update, "LabbyTwo updates"),
+        (Report, "Reports from the family"),
         (Remediation, "Self-healing"),
     ];
 
@@ -104,6 +107,7 @@ public static class ChangeKinds
             "dns" => Dns,
             "device" or "devices" or "lan" or "network" => Device,
             "update" or "updates" or "labbytwo" => Update,
+            "report" or "reports" or "family" => Report,
             "remediation" or "remediations" or "self-healing" or "selfhealing" or "healing" or "fixes" => Remediation,
             _ => null,
         };
@@ -135,6 +139,7 @@ public static class ChangeActions
     public const string Changed = "changed";
     public const string Appeared = "appeared";
     public const string Updated = "updated";
+    public const string Reported = "reported";
 
     // Self-healing. Kept apart from Restarted, which is Docker's word for something it
     // saw happen, rather than something LabbyTwo chose to do.
