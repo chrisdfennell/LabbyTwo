@@ -502,10 +502,16 @@ greys out the rest with the reason.
 
 Rearranging works three ways, because no one gesture reaches every input: **drag** a card —
 anywhere on it with a mouse, by its **⠿** handle with a finger or a pen — and the others
-slide out of the way to show you where it will land; tap **⠿** to pick one up and then
-choose where it lands; or use the **↑↓** arrows. The last two are ordinary buttons, so they
-work from a keyboard, which a drag still cannot. A wall-mounted tablet gets the same
+slide out of the way to show you where it will land; press **⇄ Move to…** to pick one up
+and then choose where it lands; or use the **↑↓** arrows. The last two are ordinary buttons,
+so they work from a keyboard, which a drag still cannot. A wall-mounted tablet gets the same
 editing as a laptop.
+
+Each card's width is a row of buttons under it — **⅙ ¼ ⅓ ½ ⅔ ¾ Full** — with the current one
+lit; a custom page adds a height, **Auto** or a number of rows. The sizes are parts of a row
+on an ordinary monitor. A wider screen adds columns so cards keep their size rather than
+stretching, and a narrow one widens small cards, so while you edit, the label on each card
+says how much of *this* screen's row it takes: a "½" card on a 5K monitor reads "¼ of the row".
 
 **Every chart reads back.** Point at a sparkline, a metric chart, the speed test trend or
 the compare card and a crosshair snaps to the nearest real reading, with the time, the

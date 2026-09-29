@@ -29,12 +29,6 @@ public static class PageBlocks
     /// <summary>The tallest a block can be made, in row units.</summary>
     public const int MaxRows = 12;
 
-    /// <summary>
-    /// The widths the stepper walks through. The same ones a grid tab uses, because they
-    /// are the ones that tile evenly into twelve columns.
-    /// </summary>
-    public static readonly IReadOnlyList<int> WidthSteps = [2, 3, 4, 6, 8, 12];
-
     public static bool IsBlock(string? type) => type is Section or Heading or Divider;
 
     /// <summary>
@@ -50,27 +44,11 @@ public static class PageBlocks
     /// <summary>Zero is "as tall as its content"; anything else is rows, up to <see cref="MaxRows"/>.</summary>
     public static int ClampRows(int rows) => Math.Clamp(rows, 0, MaxRows);
 
-    /// <summary>One step wider or narrower, snapping an odd width onto the steps first.</summary>
-    public static int StepWidth(int width, int step)
-    {
-        var index = -1;
-        for (var i = 0; i < WidthSteps.Count; i++)
-        {
-            if (WidthSteps[i] >= width)
-            {
-                index = i;
-                break;
-            }
-        }
-        if (index < 0)
-            index = WidthSteps.Count - 1;
-        return WidthSteps[Math.Clamp(index + step, 0, WidthSteps.Count - 1)];
-    }
-
     /// <summary>
-    /// One row taller or shorter. Every row is a step here, unlike width, because a height
-    /// has nothing it has to tile into — and shrinking past one row goes back to auto
-    /// rather than stopping, so "fit the content" is reachable from the stepper too.
+    /// One row taller or shorter, for the height stepper. Width is chosen from presets
+    /// instead (see <see cref="CardSizes.Presets"/>) because a width has to tile into the
+    /// row and a height has nothing it has to tile into. Shrinking past one row goes back
+    /// to auto rather than stopping, so "fit the content" is reachable from the stepper too.
     /// </summary>
     public static int StepRows(int rows, int step) => ClampRows(ClampRows(rows) + step);
 
@@ -93,23 +71,6 @@ public static class PageBlocks
     /// <summary>The inline style that carries a fixed height, or null for an auto one.</summary>
     public static string? Style(Widget widget) =>
         ClampRows(widget.Height) is > 0 and var rows ? $"--rows: {rows}" : null;
-
-    /// <summary>How a block's size reads in the edit bar: "½ · auto", "⅓ · 4 rows".</summary>
-    public static string Describe(Widget widget)
-    {
-        var width = ClampWidth(widget.Width) switch
-        {
-            12 => "full",
-            8 => "⅔",
-            6 => "½",
-            4 => "⅓",
-            3 => "¼",
-            2 => "⅙",
-            var other => $"{other}/12",
-        };
-        var rows = ClampRows(widget.Height);
-        return $"{width} · {(rows == 0 ? "auto" : rows == 1 ? "1 row" : $"{rows} rows")}";
-    }
 
     // ---- sections ----------------------------------------------------------------------
 

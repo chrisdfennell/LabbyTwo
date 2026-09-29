@@ -1,0 +1,26 @@
+@* How big a card is, shown on the card itself while its page is being arranged: how much
+   of the row it takes on this screen, and on a custom page how tall it is.
+
+   One span per layout the grid has, each switched on by the same breakpoint that switches
+   the grid (see .size-share in app.css). The server cannot know the screen's width, and
+   the page can change width under it without a render, so the browser picks. *@
+
+<span class="size-label" title="How much of the row this @Noun takes on this screen">
+    <span class="size-share">
+        @foreach (var share in CardSizes.Shares(Width))
+        {
+            <span class="@($"at-{share.Layout.ToString().ToLowerInvariant()}")">@share.Text</span>
+        }
+    </span>
+    @if (ShowHeight)
+    {
+        <span class="size-height"> · @CardSizes.Height(Height)</span>
+    }
+</span>
+
+@code {
+    [Parameter] public int Width { get; set; }
+    [Parameter] public int Height { get; set; }
+    [Parameter] public bool ShowHeight { get; set; }
+    [Parameter] public string Noun { get; set; } = "card";
+}

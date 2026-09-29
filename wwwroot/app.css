@@ -487,23 +487,297 @@ h1[tabindex]:focus { outline: none; }
     object-fit: contain;
 }
 
-/* Wraps, because a card cannot get wider to fit its own toolbar. This is the opposite of
-   the connections table, where the actions cell asks the table for the width it needs and
-   must not wrap — same principle, different container. Nine controls do not fit across a
-   three-column card, and without this they spill out over the card beside it. */
-.widget-edit-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: .25rem;
-    margin-top: .75rem;
-    padding-top: .5rem;
-    border-top: 1px dashed var(--edge);
+/* ---------- arranging a page (edit mode) ----------
+
+   Everything here is for somebody arranging cards, and none of it is seen otherwise. The
+   aim is that nothing needs discovering: each card says how big it is, the tools under it
+   are grouped and labelled, and the card being worked on is outlined so it is plain which
+   card a toolbar belongs to.
+
+   The toolbar is always there in edit mode rather than appearing on hover. Hiding it was
+   the obvious way to keep a page of cards calm, but "you did not know you could widen a
+   note" is exactly what hiding things causes, and a touchscreen has no hover to reveal
+   them with. So the tools stay put and go quiet instead: at rest the buttons lose their
+   borders and read as a row of labels, and the card under the pointer or the keyboard gets
+   its outline, its borders and its size label lit. */
+
+.widget-grid.is-editing > .widget {
+    transition: border-color .12s ease, box-shadow .12s ease;
 }
 
-/* Keeps the right-hand group together on whichever line it lands on. Without it, ms-auto
-   on a wrapped row throws Export to one end and leaves Edit and ✕ stranded at the other. */
-.widget-edit-bar > .ms-auto {
-    margin-left: auto;
+.widget-grid.is-editing > .widget:hover,
+.widget-grid.is-editing > .widget:focus-within {
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 1px var(--accent-line);
+}
+
+/* A bare block (a heading, a divider, a section) is outlined by a dashed edge in edit mode;
+   the doubled class matches the rule that draws that edge, so this one wins by order. */
+.widget-grid.custom-grid.is-editing > .widget.is-bare:hover,
+.widget-grid.custom-grid.is-editing > .widget.is-bare:focus-within {
+    border-color: var(--accent-line);
+}
+
+/* Wraps, because a card cannot get wider to fit its own toolbar. This is the opposite of
+   the connections table, where the actions cell asks the table for the width it needs and
+   must not wrap — same principle, different container. */
+.widget-edit-bar {
+    margin-top: .75rem;
+    padding-top: .6rem;
+    border-top: 1px solid color-mix(in srgb, var(--edge) 70%, transparent);
+}
+
+/* A container of its own, so a toolbar on a narrow card can drop its words and keep its
+   icons (see the query below) without the card having to know how wide it is. */
+.card-tools {
+    container: card-tools / inline-size;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem 1rem;
+}
+
+/* Each group stays together when the bar wraps, as far as the card allows. Groups are
+   split by space rather than by rules, because a divider at the start of a wrapped line
+   points at nothing. A group may still wrap inside itself: on a phone the width presets
+   are wider than the card beside their label, and would otherwise run off its edge. */
+.tool-group {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    flex-wrap: wrap;
+}
+
+/* The card's own tools sit at the far end, on whichever line they land on. */
+.tool-actions { margin-left: auto; }
+
+.tool-label {
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+    margin-right: .2rem;
+    cursor: help;
+}
+
+/* 36px square at the least: a finger on a wall tablet has to be able to hit one without
+   hitting the one beside it. */
+.tool-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .3rem;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0 .6rem;
+    border: 1px solid var(--edge);
+    border-radius: .5rem;
+    background: transparent;
+    color: var(--muted);
+    font-size: .8rem;
+    line-height: 1;
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: pointer;
+}
+.tool-btn:hover {
+    color: var(--text);
+    background: var(--panel-2);
+    border-color: var(--accent-line);
+}
+.tool-btn:disabled {
+    opacity: .4;
+    cursor: default;
+    background: transparent;
+    border-color: var(--edge);
+}
+
+/* Removing a card is the one tool that loses something, so it is the one in a colour. */
+.tool-btn.tool-danger { color: var(--down); }
+.tool-btn.tool-danger:hover {
+    background: var(--down-soft);
+    border-color: var(--down-line);
+}
+
+.tool-btn:focus-visible,
+.seg-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    position: relative;
+    z-index: 1;
+}
+
+/* Doubled so it outweighs .drag-handle, which comes later in the file. */
+.drag-handle.tool-grip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    min-height: 36px;
+    border: 1px dashed var(--edge);
+    border-radius: .5rem;
+    font-size: 1rem;
+}
+
+.tool-readout {
+    min-width: 4.25rem;
+    text-align: center;
+    font-size: .8rem;
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.tool-note { font-size: .72rem; color: var(--muted); margin-left: .25rem; white-space: nowrap; }
+
+/* The width presets: one control, so it reads as "pick one of these", with the one the
+   card has filled in the accent. */
+.size-seg {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    border: 1px solid var(--edge);
+    border-radius: .6rem;
+    background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+}
+
+.seg-btn {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0 .4rem;
+    border: 0;
+    border-radius: .45rem;
+    background: transparent;
+    color: var(--muted);
+    font-size: .85rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.seg-btn:hover { color: var(--text); background: var(--accent-soft); }
+.seg-btn.is-on,
+.seg-btn.is-on:hover {
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+    cursor: default;
+}
+
+/* At rest, the tools of every card but the one being worked on lose their borders, so a
+   page in edit mode is a page of cards with captions rather than a wall of buttons. The
+   width control keeps its frame and its lit choice: that is the thing people did not find. */
+.widget-grid.is-editing > .widget:not(:hover):not(:focus-within) .tool-btn:not(:disabled) {
+    border-color: transparent;
+}
+
+/* No hover on a touchscreen, so nothing would ever light up: every card is drawn as the
+   active one. */
+@media (hover: none) {
+    .widget-grid.is-editing > .widget:not(:hover):not(:focus-within) .tool-btn:not(:disabled) {
+        border-color: var(--edge);
+    }
+}
+
+/* A toolbar narrower than its words keeps the icons. Every button still carries its name
+   for a tooltip and a screen reader, so nothing turns into a mystery glyph. */
+@container card-tools (max-width: 17rem) {
+    .tool-text { display: none; }
+}
+
+/* ---- the card's size, shown in its head ---- */
+
+.edit-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    min-width: 0;
+}
+
+.size-label {
+    font-size: .72rem;
+    line-height: 1.4;
+    padding: .1rem .55rem;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--muted);
+    white-space: nowrap;
+    cursor: help;
+}
+
+.widget-grid.is-editing > .widget:hover .size-label,
+.widget-grid.is-editing > .widget:focus-within .size-label {
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+    color: var(--text);
+}
+
+/* One share per layout, and the same breakpoints as the grid pick which one shows. These
+   must move with the span rules above and with CardSizes.SpanIn, which works the shares
+   out: a label that disagreed with the grid would be worse than none. */
+.size-share > span { display: none; }
+.size-share > .at-standard { display: inline; }
+
+@media (max-width: 1100px) {
+    .size-share > .at-standard { display: none; }
+    .size-share > .at-laptop { display: inline; }
+}
+
+@media (max-width: 900px) {
+    .size-share > .at-laptop { display: none; }
+    .size-share > .at-tablet { display: inline; }
+}
+
+/* A phone also lets every block fit its content (see the custom page rules), so a height
+   there would be a number that is not true either. */
+@media (max-width: 768px) {
+    .size-share > .at-tablet { display: none; }
+    .size-share > .at-phone { display: inline; }
+    .size-label .size-height { display: none; }
+}
+
+@container page (min-width: 2400px) {
+    :root:not([data-wide]) .size-share > .at-standard { display: none; }
+    :root:not([data-wide]) .size-share > .at-wide24 { display: inline; }
+}
+
+@container page (min-width: 3600px) {
+    :root:not([data-wide]) .size-share > .at-wide24 { display: none; }
+    :root:not([data-wide]) .size-share > .at-wide36 { display: inline; }
+}
+
+@container page (min-width: 6000px) {
+    :root:not([data-wide]) .size-share > .at-wide36 { display: none; }
+    :root:not([data-wide]) .size-share > .at-wide48 { display: inline; }
+}
+
+/* ---- the hint at the top ---- */
+
+.edit-hint {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .5rem .75rem;
+    margin-bottom: var(--gap);
+    padding: .45rem .5rem .45rem .85rem;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius);
+    background: var(--accent-soft);
+    color: var(--text);
+    font-size: .85rem;
+}
+.edit-hint-mark { color: var(--accent); }
+.edit-hint-text { flex: 1 1 16rem; }
+.edit-hint-dot { color: var(--muted); margin: 0 .2rem; }
+.edit-hint-grip {
+    display: inline-block;
+    padding: 0 .3rem;
+    border: 1px dashed var(--accent-line);
+    border-radius: .3rem;
+}
+.edit-hint-close { margin-left: auto; color: var(--text); border-color: var(--accent-line); }
+
+@media (prefers-reduced-motion: reduce) {
+    .widget-grid.is-editing > .widget { transition: none; }
 }
 
 /* ---------- drag to rearrange ---------- */
@@ -644,6 +918,15 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     align-self: start;
 }
 
+/* While the page is being arranged, a fixed height is a least height instead. The
+   toolbar is drawn inside the block, and a block two rows tall has no room for it: its
+   tools would spill out over the block below. So the block is never shorter than it was
+   made, and grows by what its tools need; Done puts the exact height back. */
+.custom-grid.is-editing > .has-rows {
+    height: auto;
+    min-height: calc(var(--rows) * var(--block-row) + (var(--rows) - 1) * var(--gap));
+}
+
 /* Whatever does not fit scrolls inside the block, not out over the next one. */
 .custom-grid > .has-rows > .widget-body {
     min-height: 0;
@@ -717,10 +1000,6 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 }
 .section-placeholder strong { color: var(--text); font-weight: 600; }
 
-/* The size steppers stay together when the edit bar wraps, with the size between them. */
-.block-size { display: inline-flex; align-items: center; gap: .25rem; }
-.block-size-label { min-width: 5.5rem; text-align: center; white-space: nowrap; }
-
 /* A phone is one column, and a fixed height there is a small window onto a block that
    could simply be as tall as it needs — the page scrolls anyway. So every block fits its
    content, and nothing scrolls inside anything. */
@@ -729,6 +1008,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
         grid-row: auto;
         height: auto;
     }
+    .custom-grid.is-editing > .has-rows { min-height: 0; }
     .custom-grid > .has-rows > .widget-body { overflow: visible; }
 }
 

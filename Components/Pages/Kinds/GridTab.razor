@@ -14,16 +14,21 @@
         }
     </div>
     <div class="d-flex gap-2">
-        <button class="btn btn-sm @(_editing ? "btn-primary" : "btn-outline-secondary")"
-                @onclick="ToggleEditing">
-            @(_editing ? "Done" : "Edit layout")
-        </button>
         @if (_editing)
         {
-            <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add widget</button>
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => _picking = true">+ Add widget</button>
         }
+        <button class="btn btn-sm @(_editing ? "btn-primary" : "btn-outline-secondary")"
+                aria-pressed="@(_editing ? "true" : "false")" @onclick="ToggleEditing">
+            @(_editing ? "✓ Done" : "✎ Edit layout")
+        </button>
     </div>
 </div>
+
+@if (_editing && _moving is null && _widgets.Count > 0)
+{
+    <EditLayoutHint Noun="card" />
+}
 
 @if (_moving is { } moving)
 {
@@ -44,7 +49,7 @@
 }
 else
 {
-    <div class="widget-grid">
+    <div class="widget-grid @(_editing ? "is-editing" : "")">
         @foreach (var widget in _widgets)
         {
             var type = Registry.WidgetType(widget.Type);
@@ -65,14 +70,13 @@ else
                 @if (widget.Title is { Length: > 0 } || _editing)
                 {
                     <div class="widget-head">
-                        @if (_editing)
-                        {
-                            <span class="drag-handle flex-none" title="Drag to rearrange">⠿</span>
-                        }
                         <h2 class="widget-title text-truncate">@widget.Title</h2>
                         @if (_editing)
                         {
-                            <span class="tile-meta flex-none">@(type?.DisplayName ?? widget.Type)</span>
+                            <span class="edit-meta flex-none">
+                                <span class="tile-meta">@(type?.DisplayName ?? widget.Type)</span>
+                                <CardSizeLabel Width="widget.Width" Noun="card" />
+                            </span>
                         }
                     </div>
                 }
@@ -138,27 +142,13 @@ else
                 else if (_editing)
                 {
                     <div class="widget-edit-bar">
-                        <button class="btn btn-sm btn-outline-secondary" title="Move this card"
-                                @onclick="() => _moving = current">⠿</button>
-                        <button class="btn btn-sm btn-outline-secondary" title="Move up"
-                                @onclick="() => MoveAsync(widget, -1)">↑</button>
-                        <button class="btn btn-sm btn-outline-secondary" title="Move down"
-                                @onclick="() => MoveAsync(widget, 1)">↓</button>
-                        <button class="btn btn-sm btn-outline-secondary" title="Narrower"
-                                @onclick="() => ResizeAsync(widget, -1)">−</button>
-                        <button class="btn btn-sm btn-outline-secondary" title="Wider"
-                                @onclick="() => ResizeAsync(widget, 1)">+</button>
-                        @* One card, as a file. Sits in edit mode with the other card tools
-                           rather than on the card itself, so a dashboard nobody is editing
-                           stays a dashboard. *@
-                        <a class="btn btn-sm btn-outline-secondary ms-auto" title="Export this card to share it"
-                           href="@($"api/share/widget?id={widget.Id}")">Export</a>
-                        <button class="btn btn-sm btn-outline-secondary" title="Another one like this, on this tab"
-                                @onclick="() => DuplicateAsync(widget)">Duplicate</button>
-                        <button class="btn btn-sm btn-outline-secondary"
-                                @onclick="() => _editingWidget = widget">Edit</button>
-                        <button class="btn btn-sm btn-outline-danger"
-                                @onclick="() => _confirmDelete = widget">✕</button>
+                        <CardEditToolbar Widget="current" Name="@Describe(current)" Noun="card"
+                                         OnMove="step => MoveAsync(current, step)"
+                                         OnPickUp="() => _moving = current"
+                                         OnWidth="span => SetWidthAsync(current, span)"
+                                         OnEdit="() => _editingWidget = current"
+                                         OnDuplicate="() => DuplicateAsync(current)"
+                                         OnDelete="() => _confirmDelete = current" />
                     </div>
                 }
             </div>
@@ -287,15 +277,13 @@ else
         }
     }
 
-    private async Task ResizeAsync(Widget widget, int step)
-    {
-        // Widths step through the sizes that tile evenly into a 12-column grid, so a
-        // dashboard cannot end up with a 5-wide card leaving a ragged gap.
-        int[] steps = [2, 3, 4, 6, 8, 12];
-        var index = Array.FindIndex(steps, w => w >= widget.Width);
-        var next = Math.Clamp((index < 0 ? 2 : index) + step, 0, steps.Length - 1);
-        await Config.SaveWidgetAsync(widget with { Width = steps[next] });
-    }
+    /// <summary>
+    /// A width chosen from the toolbar's presets, which are all widths that tile evenly
+    /// into twelve columns, so a dashboard cannot end up with a 5-wide card leaving a
+    /// ragged gap.
+    /// </summary>
+    private async Task SetWidthAsync(Widget widget, int span) =>
+        await Config.SaveWidgetAsync(widget with { Width = PageBlocks.ClampWidth(span) });
 
     private string Describe(Widget widget) => widget.Title is { Length: > 0 }
         ? widget.Title

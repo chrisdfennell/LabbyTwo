@@ -1,0 +1,67 @@
+@inject IJSRuntime JS
+
+@* One line at the top of a page being arranged, saying what can be done to it. Shown until
+   somebody says they have got it, and then not again in that browser: it is for finding
+   out, and a hint that came back every time would become the thing people learn to skip.
+
+   Remembered in localStorage rather than in the settings, because it is about this person
+   on this device, not about the dashboard. Every read and write is allowed to fail — a
+   private window, or storage switched off — and a failure only means the hint shows. *@
+
+@if (_show)
+{
+    <div class="edit-hint" role="note">
+        <span class="edit-hint-mark" aria-hidden="true">✎</span>
+        <span class="edit-hint-text">
+            Drag a @Noun by <span class="edit-hint-grip" aria-hidden="true">⠿</span> to reorder
+            <span class="edit-hint-dot" aria-hidden="true">·</span> choose a width under each @Noun
+            <span class="edit-hint-dot" aria-hidden="true">·</span> <strong>Done</strong> when finished
+        </span>
+        <button type="button" class="tool-btn edit-hint-close" @onclick="DismissAsync"
+                aria-label="Hide this hint">Got it</button>
+    </div>
+}
+
+@code {
+    /// <summary>"card" on a dashboard, "block" on a custom page.</summary>
+    [Parameter] public string Noun { get; set; } = "card";
+
+    internal const string StorageKey = "labby.editHintDismissed";
+
+    // Hidden until the browser has been asked, so somebody who dismissed it does not see
+    // it flash up and vanish again each time they start editing.
+    private bool _show;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        string? dismissed = null;
+        try
+        {
+            dismissed = await JS.InvokeAsync<string?>("localStorage.getItem", StorageKey);
+        }
+        catch (Exception)
+        {
+            // Storage refused (or the circuit is going): show the hint, which is harmless.
+        }
+        if (dismissed != "1")
+        {
+            _show = true;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DismissAsync()
+    {
+        _show = false;
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", StorageKey, "1");
+        }
+        catch (Exception)
+        {
+            // Not remembered, so it comes back next time. Nothing worse.
+        }
+    }
+}

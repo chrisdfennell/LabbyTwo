@@ -75,15 +75,6 @@ public sealed class CustomPageTests : IDisposable
     public void HeightsAreAutoOrAWholeNumberOfRows(int rows, int expected) =>
         Assert.Equal(expected, PageBlocks.ClampRows(rows));
 
-    [Theory]
-    [InlineData(4, 1, 6)]
-    [InlineData(4, -1, 3)]
-    [InlineData(5, 1, 8)]      // an odd width snaps onto the steps before it moves
-    [InlineData(12, 1, 12)]
-    [InlineData(2, -1, 2)]
-    public void WidthStepsTileIntoTwelve(int width, int step, int expected) =>
-        Assert.Equal(expected, PageBlocks.StepWidth(width, step));
-
     [Fact]
     public void HeightStepsGoThroughAutoAndStopAtTheTop()
     {
@@ -99,12 +90,10 @@ public sealed class CustomPageTests : IDisposable
         var fixedHeight = new Widget { Type = "clock", Width = 6, Height = 4 };
         Assert.Equal("w-6 has-rows", PageBlocks.Classes(fixedHeight));
         Assert.Equal("--rows: 4", PageBlocks.Style(fixedHeight));
-        Assert.Equal("½ · 4 rows", PageBlocks.Describe(fixedHeight));
 
         var auto = new Widget { Type = PageBlocks.Heading, Width = 30, Height = 0 };
         Assert.Equal("w-12 is-bare", PageBlocks.Classes(auto));
         Assert.Null(PageBlocks.Style(auto));
-        Assert.Equal("full · auto", PageBlocks.Describe(auto));
     }
 
     /// <summary>

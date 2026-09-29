@@ -1,0 +1,123 @@
+@* The tools under a card while its page is being arranged, shared by dashboards and custom
+   pages so the two cannot drift apart.
+
+   Grouped by what they change — where the card is, how wide, how tall, and the card
+   itself — and every control says what it does in words, or carries a name a tooltip and
+   a screen reader can both use. The width used to be a − and a + with "½ · auto" between
+   them, and people did not find out a note could be made full width; a row of named
+   sizes with the current one lit is something you can see the whole of at a glance.
+
+   This only raises events. The page that owns the card does the saving, exactly as it
+   did before, so persistence, undo and the Changed event are all untouched. *@
+
+<div class="card-tools" role="group" aria-label="Arrange @Name">
+    <div class="tool-group">
+        @* The grip is where a finger starts a drag (widget-drag.js only lifts a card from
+           here on a touchscreen, so a page in edit mode can still be scrolled). It is not
+           a button: the drag script ignores presses that start on anything clickable. *@
+        <span class="drag-handle tool-grip" title="Drag to move this @Noun" aria-hidden="true">⠿</span>
+        <button type="button" class="tool-btn" title="Move earlier" aria-label="Move @Name earlier"
+                @onclick="() => OnMove.InvokeAsync(-1)">↑</button>
+        <button type="button" class="tool-btn" title="Move later" aria-label="Move @Name later"
+                @onclick="() => OnMove.InvokeAsync(1)">↓</button>
+        @* Pick it up and choose where it goes: the way to move a card a long way without a
+           pointer at all. *@
+        <button type="button" class="tool-btn" title="Pick this @Noun up, then choose where it goes"
+                aria-label="Move @Name to another place" @onclick="OnPickUp">
+            <span aria-hidden="true">⇄</span><span class="tool-text"> Move to…</span>
+        </button>
+    </div>
+
+    <div class="tool-group" role="group" aria-labelledby="@($"width-{Widget.Id}")">
+        <span class="tool-label" id="@($"width-{Widget.Id}")"
+              title="Sizes are parts of a row on an ordinary monitor. A wider screen adds columns so the @Noun keeps its size; the label on the @Noun says how much of this screen's row it takes.">Width</span>
+        <span class="size-seg">
+            @foreach (var preset in CardSizes.Presets)
+            {
+                var chosen = preset.Span == _span;
+                <button type="button" class="seg-btn @(chosen ? "is-on" : "")"
+                        aria-pressed="@(chosen ? "true" : "false")"
+                        aria-label="@preset.Name"
+                        title="@($"{preset.Name} — {preset.Span} of 12 columns on an ordinary screen")"
+                        @onclick="() => Choose(preset.Span)">@preset.Symbol</button>
+            }
+        </span>
+        @if (CardSizes.PresetFor(Widget.Width) is null)
+        {
+            @* A width none of the buttons is (an old import's 5, say) still has to read as
+               something, or the card looks as though it has no width at all. *@
+            <span class="tool-note">now @PageBlocks.ClampWidth(Widget.Width)/12</span>
+        }
+    </div>
+
+    @if (ShowHeight)
+    {
+        <div class="tool-group" role="group" aria-labelledby="@($"height-{Widget.Id}")">
+            <span class="tool-label" id="@($"height-{Widget.Id}")"
+                  title="Auto fits the content. A number of rows fixes the height, and whatever does not fit scrolls inside.">Height</span>
+            <button type="button" class="tool-btn" title="Shorter" aria-label="Make @Name shorter"
+                    disabled="@(_rows == 0)" @onclick="() => OnHeightStep.InvokeAsync(-1)">−</button>
+            <span class="tool-readout" aria-live="polite">@CardSizes.Height(_rows)</span>
+            <button type="button" class="tool-btn" title="Taller" aria-label="Make @Name taller"
+                    disabled="@(_rows >= PageBlocks.MaxRows)" @onclick="() => OnHeightStep.InvokeAsync(1)">+</button>
+        </div>
+    }
+
+    <div class="tool-group tool-actions">
+        <button type="button" class="tool-btn" title="Change what this @Noun shows" aria-label="Edit @Name"
+                @onclick="OnEdit">
+            <span aria-hidden="true">✎</span><span class="tool-text"> Edit</span>
+        </button>
+        <button type="button" class="tool-btn" title="Another one like this, on this page" aria-label="Duplicate @Name"
+                @onclick="OnDuplicate">
+            <span aria-hidden="true">⧉</span><span class="tool-text"> Duplicate</span>
+        </button>
+        @* One card, as a file. Here with the other card tools rather than on the card, so a
+           dashboard nobody is editing stays a dashboard. *@
+        <a class="tool-btn" href="@($"api/share/widget?id={Widget.Id}")"
+           title="Export this @Noun as a file to share it" aria-label="Export @Name">
+            <span aria-hidden="true">⤓</span><span class="tool-text"> Export</span>
+        </a>
+        <button type="button" class="tool-btn tool-danger" title="Remove this @Noun" aria-label="Remove @Name"
+                @onclick="OnDelete">
+            <span aria-hidden="true">✕</span><span class="tool-text"> Remove</span>
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Widget Widget { get; set; } = default!;
+
+    /// <summary>What the card is called, for screen readers: "Move Notes earlier".</summary>
+    [Parameter] public string Name { get; set; } = "";
+
+    /// <summary>"card" on a dashboard, "block" on a custom page.</summary>
+    [Parameter] public string Noun { get; set; } = "card";
+
+    /// <summary>Custom pages have a height; a dashboard's cards are as tall as they are.</summary>
+    [Parameter] public bool ShowHeight { get; set; }
+
+    [Parameter] public EventCallback<int> OnMove { get; set; }
+    [Parameter] public EventCallback OnPickUp { get; set; }
+
+    /// <summary>A preset was chosen: the new width, in twelfths.</summary>
+    [Parameter] public EventCallback<int> OnWidth { get; set; }
+
+    [Parameter] public EventCallback<int> OnHeightStep { get; set; }
+    [Parameter] public EventCallback OnEdit { get; set; }
+    [Parameter] public EventCallback OnDuplicate { get; set; }
+    [Parameter] public EventCallback OnDelete { get; set; }
+
+    private int _span;
+    private int _rows;
+
+    protected override void OnParametersSet()
+    {
+        _span = PageBlocks.ClampWidth(Widget.Width);
+        _rows = PageBlocks.ClampRows(Widget.Height);
+    }
+
+    // Choosing the width it already has would save an identical row and redraw the page
+    // for nothing.
+    private Task Choose(int span) => span == _span ? Task.CompletedTask : OnWidth.InvokeAsync(span);
+}
