@@ -51,7 +51,12 @@ public sealed class ContainersTabKind : ITabKind
 
         new("update_hint", "Point out containers running an older image", FieldKind.Bool, Default: "true",
             Help: "When a newer image with the same tag has been pulled but the container was not recreated. " +
-                  "Compares local images only — no registry is contacted.") { Advanced = true },
+                  "Compares local images only — no registry is contacted. Also shows how old each image is.") { Advanced = true },
+
+        new("registry_check", "Offer to check registries for updates", FieldKind.Bool, Default: "true",
+            Help: "A Check for updates button that asks each image's registry (Docker Hub, ghcr.io, lscr.io…) " +
+                  "whether its tag now points at something newer, and an Update button for those that are behind. " +
+                  "Nothing is asked until the button is pressed.") { Advanced = true },
 
         new("log_lines", "Log lines to load", FieldKind.Number, Default: "200") { Advanced = true },
     ];

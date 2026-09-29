@@ -1,0 +1,128 @@
+@implements IDisposable
+@inject ContainerUpdates Updates
+
+@* {{updates}}: the containers on a Docker connection whose registry has a newer image, as
+   the last "Check for updates" found them. Only ever the last check — pressed on the
+   Containers tab, in Settings, or run by the schedule somebody chose. Drawing a runbook
+   never asks a registry anything: a page opened forty times a day would otherwise be forty
+   anonymous calls to Docker Hub, and LabbyTwo does not phone home because a page opened.
+
+   Redraws when a check finishes (ContainerUpdates.Changed), so a runbook left open on a
+   wall picks up the scheduled check without a reload. *@
+
+@if (_problem is not null)
+{
+    <div class="md-down" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_problem} ({Code.Source})")" aria-label="@_problem">?</span>
+            <span class="tile-meta md-up-error">@_problem</span>
+        </div>
+    </div>
+}
+else if (_docker is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else if (Updates.Last(_docker.Id) is not { } review)
+{
+    <div class="md-down" role="note">
+        <div class="md-down-row">
+            <span class="status-dot status-unknown" aria-hidden="true"></span>
+            <span class="tile-meta">
+                @_docker.Name has not been checked for updates yet — press <em>Check for updates</em> on the Containers
+                tab, or choose a schedule in Settings → Updates.
+            </span>
+        </div>
+    </div>
+}
+else if (review.Error is { } error)
+{
+    <div class="md-down" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_docker.Name}: {error}")" aria-label="@error">?</span>
+            <span class="tile-meta md-up-error">@_docker.Name: @error</span>
+        </div>
+    </div>
+}
+else
+{
+    var behind = review.Behind;
+    var shown = behind.Take(Limit).ToList();
+    <div class="md-down md-up" role="list" aria-label="@($"Containers with an update on {_docker.Name}")">
+        @if (behind.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>Nothing behind on @_docker.Name <span class="tile-meta">· checked @Ago.Since(review.CheckedAt)</span></span>
+            </div>
+        }
+        @foreach (var line in shown)
+        {
+            <div class="md-down-row" role="listitem" @key="line.Id">
+                <span class="status-dot status-flapping" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div class="md-up-head">
+                        <strong class="text-truncate">@line.Name</strong>
+                        @if (line.Excluded)
+                        {
+                            <span class="md-up-badge" title="Labelled com.centurylinklabs.watchtower.enable=false">excluded</span>
+                        }
+                    </div>
+                    <div class="tile-meta md-up-meta">
+                        <span class="text-truncate" title="@line.Reference">@line.Reference</span>
+                        @if (line.Published is { } published)
+                        {
+                            <span>· newer published @ContainerUpdates.Age(published) ago</span>
+                        }
+                        @if (line.ImageCreated is { } built)
+                        {
+                            <span>· running image @ContainerUpdates.Age(built) old</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+        @if (behind.Count > shown.Count)
+        {
+            <div class="md-down-row tile-meta" role="listitem">…and @(behind.Count - shown.Count) more</div>
+        }
+        @if (behind.Count > 0)
+        {
+            <div class="md-down-row tile-meta" role="listitem">Checked @Ago.Since(review.CheckedAt).</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private string? _problem;
+    private Connection? _docker;
+
+    private int Limit => Math.Clamp(int.TryParse(Code.Option("limit"), out var limit) ? limit : 25, 1, 200);
+
+    protected override void OnInitialized() => Updates.Changed += OnChecked;
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        _docker = null;
+        if (Scope is null)
+            return;
+
+        var docker = MarkdownLists.Docker(Code, Scope.Connections, out var noDocker);
+        if (docker is null)
+        {
+            _problem = noDocker;
+            return;
+        }
+        _docker = docker;
+    }
+
+    private void OnChecked() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Updates.Changed -= OnChecked;
+}

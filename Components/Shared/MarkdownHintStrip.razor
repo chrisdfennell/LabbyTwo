@@ -93,6 +93,7 @@
                             <option value="ago">When it was last checked</option>
                             <option value="alerts">Alerts firing now</option>
                             <option value="containers">Docker containers</option>
+                            <option value="updates">Containers with an update</option>
                             <option value="renewals">What’s due to expire</option>
                             <option value="today">Today’s date</option>
                             <option value="countdown">Days until a date</option>
@@ -111,6 +112,13 @@
                     {
                         <div class="col-sm-8 tile-meta">
                             Every alert rule firing now, with its reading and how long — or “No alerts firing”.
+                        </div>
+                    }
+                    else if (_kind == "updates")
+                    {
+                        <div class="col-sm-8 tile-meta">
+                            Containers whose registry has a newer image, from the last Check for updates — this never
+                            asks a registry itself.
                         </div>
                     }
                     else if (_kind == "renewals")
@@ -294,7 +302,7 @@
     /// <summary>The shortcode the form describes, or null until it describes one.</summary>
     private string? Preview => _kind switch
     {
-        "down" or "alerts" or "renewals" or "today" => Shortcodes.Write(_kind, []),
+        "down" or "alerts" or "renewals" or "today" or "updates" => Shortcodes.Write(_kind, []),
         "widget" => _widgetTitle.Length > 0 ? Shortcodes.Write("widget", [_widgetTitle]) : null,
         "containers" => Shortcodes.Write("containers", [_state]),
         "countdown" => _date is { } date
@@ -369,7 +377,7 @@
         var last = text[(text.LastIndexOf('\n') + 1)..].TrimStart();
         var structural = last.Length > 0
             && (last[0] is '#' or '-' or '*' or '+' or '>' or '|' || System.Text.RegularExpressions.Regex.IsMatch(last, @"^\d+[.)]\s"));
-        var block = _kind is "widget" or "gauge" or "down" or "if-down" or "alerts" or "containers" or "renewals" or "details" or "callout";
+        var block = _kind is "widget" or "gauge" or "down" or "if-down" or "alerts" or "containers" or "updates" or "renewals" or "details" or "callout";
         var joined = text.Length == 0 ? code : text + (block || structural ? "\n\n" : " ") + code;
         Value = joined;
         OnParametersSet();

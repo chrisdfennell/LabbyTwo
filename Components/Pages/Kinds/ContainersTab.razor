@@ -4,6 +4,8 @@
 @inject Offload Offload
 @inject IJSRuntime JS
 @inject IOptions<LabbyOptions> Options
+@inject ContainerUpdates Updates
+@inject SelfUpdater Updater
 @using Microsoft.Extensions.Options
 
 @* Every container on one Docker host. Written to stand on its own or inside another page:
@@ -60,9 +62,11 @@
                 Through linuxserver/socket-proxy: the list, stats and inspect need <code>CONTAINERS=1</code>; logs
                 <code>ALLOW_LOGS=1</code>; restart <code>ALLOW_RESTARTS=1</code>; stop <code>ALLOW_STOP=1</code> (or
                 <code>ALLOW_RESTARTS=1</code>); start <code>ALLOW_START=1</code>; pause and unpause
-                <code>ALLOW_PAUSE=1</code> and <code>ALLOW_UNPAUSE=1</code>; the newer-image hint <code>IMAGES=1</code>.
+                <code>ALLOW_PAUSE=1</code> and <code>ALLOW_UNPAUSE=1</code>; the newer-image hint, image ages and
+                <em>Check for updates</em> <code>IMAGES=1</code>.
                 All of those work with <code>POST=0</code>. Remove needs <code>POST=1</code>, which also allows
-                creating containers — root on the host — so it is usually better left refused.
+                creating containers — root on the host — so it is usually better left refused. <em>Update</em> needs
+                the same unless <code>Labby__Watchtower__Url</code> points at a Watchtower that does it instead.
             </p>
         </details>
 
@@ -110,6 +114,37 @@
             </button>
         </div>
 
+        @if (RegistryCheck)
+        {
+            <div class="ct-updates">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-action="check-updates"
+                        disabled="@Checking" @onclick="CheckForUpdatesAsync"
+                        title="Asks each image's registry which image its tag points at now. Nothing is asked until you press this.">
+                    @(Checking ? "Checking…" : "Check for updates")
+                </button>
+                <span class="tile-meta" data-updates-summary>@UpdateSummary</span>
+                @if (AllowActions && _review is { } behind && behind.Behind.Any(b => b.CanUpdate))
+                {
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-action="update-all"
+                            disabled="@(_busy is not null)" @onclick="AskUpdateAll">
+                        Update all that are behind
+                    </button>
+                }
+            </div>
+            @if (_review is { } checkedReview && checkedReview.Containers.Where(c => c.State == UpdateState.Unknown).ToList() is { Count: > 0 } unknown)
+            {
+                <details class="ct-denied mb-2">
+                    <summary class="tile-meta">@unknown.Count could not be checked</summary>
+                    <ul class="tile-meta mb-1">
+                        @foreach (var line in unknown)
+                        {
+                            <li><strong>@line.Name</strong> — @line.Note</li>
+                        }
+                    </ul>
+                </details>
+            }
+        }
+
         @if (_result is { Length: > 0 })
         {
             <div class="ct-result @(_resultFailed ? "text-danger" : "text-success")" role="status">@_result</div>
@@ -142,6 +177,9 @@
                                     OnToggle="() => Toggle(group.Key)"
                                     Stats="_stats"
                                     Stale="_stale"
+                                    Updates="UpdateView"
+                                    Checked="_review is { Error: null }"
+                                    OnUpdate="AskUpdate"
                                     Capabilities="_capabilities"
                                     AllowActions="AllowActions"
                                     ShowStats="ShowStats && _capabilities.Allows(DockerCapabilities.Stats)"
@@ -244,6 +282,13 @@
     private IReadOnlyDictionary<string, string> _stale = new Dictionary<string, string>();
     private string? _error;
 
+    /// <summary>Image ages, local builds and the exclusion label: what Docker alone says, by container id.</summary>
+    private IReadOnlyDictionary<string, ContainerUpdate> _local = new Dictionary<string, ContainerUpdate>();
+
+    /// <summary>The last registry check of this connection — pressed here, in Settings, or by the schedule.</summary>
+    private UpdateReview? _review;
+    private bool _checking;
+
     private IReadOnlyList<string> _protected = [];
     private bool _terminalInstalled;
     private Tab? _terminalTab;
@@ -286,6 +331,8 @@
     private bool AllowActions => Tab.Settings.GetBool("allow_actions", true);
     private bool ShowStats => Tab.Settings.GetBool("stats", true);
     private bool UpdateHint => Tab.Settings.GetBool("update_hint", true);
+    private bool RegistryCheck => Tab.Settings.GetBool("registry_check", true);
+    private bool Checking => _checking || (_docker is not null && Updates.IsChecking(_docker.Id));
     private int LogLines => Math.Clamp(Tab.Settings.GetInt("log_lines", 200), 10, 5000);
 
     private string Subtitle
@@ -303,6 +350,8 @@
                 text += $" · {unhealthy} unhealthy";
             if (_stale.Count > 0)
                 text += $" · {_stale.Count} on an older image";
+            if (_review is { Error: null } review && review.Behind.Count > 0)
+                text += $" · {review.Behind.Count} with an update";
             return text;
         }
     }
@@ -311,6 +360,7 @@
     {
         _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Config.Changed += OnConfigChanged;
+        Updates.Changed += OnUpdatesChanged;
     }
 
     protected override async Task OnParametersSetAsync()
@@ -324,6 +374,9 @@
             : connections.FirstOrDefault(c => c.Provider == "docker" && c.Enabled);
 
         _protected = ContainerSafety.ParseList(Tab.Settings.Get("protected"));
+
+        // Only what is already known: a check made elsewhere is shown, none is started.
+        _review = _docker is null ? null : Updates.Last(_docker.Id);
 
         // The Terminal plugin is linked to, never depended on: if it is installed and a
         // Terminal tab exists, a running container gets a button that opens a shell there.
@@ -342,6 +395,7 @@
             _rows = [];
             _stats = new Dictionary<string, ContainerStats>();
             _stale = new Dictionary<string, string>();
+            _local = new Dictionary<string, ContainerUpdate>();
             _error = null;
             if (_docker is null)
                 _load.Cancel();
@@ -389,7 +443,8 @@
     }
 
     private sealed record Snapshot(
-        IReadOnlyList<ContainerRow> Rows, DockerCapabilities Capabilities, IReadOnlyDictionary<string, string> Stale, string? Error);
+        IReadOnlyList<ContainerRow> Rows, DockerCapabilities Capabilities, IReadOnlyDictionary<string, string> Stale, string? Error,
+        IReadOnlyDictionary<string, ContainerUpdate>? Local = null);
 
     private Task RefreshAsync(bool freshCapabilities) => Load(freshCapabilities, refresh: true);
 
@@ -421,6 +476,7 @@
             }
 
             IReadOnlyDictionary<string, string> stale = new Dictionary<string, string>();
+            IReadOnlyDictionary<string, ContainerUpdate> local = new Dictionary<string, ContainerUpdate>();
             if (hint && capabilities.Allows(DockerCapabilities.Images))
             {
                 try
@@ -431,8 +487,21 @@
                 {
                     // Only a hint. A proxy without IMAGES=1 costs the hint, not the page.
                 }
+
+                try
+                {
+                    // Docker only — no registry. An image id names content that cannot
+                    // change, so after the first load this is answered from memory.
+                    var images = await ContainerUpdates.LocalAsync(endpoint, timeout, rows, ct);
+                    local = rows.Where(r => images.ContainsKey(r.Id))
+                        .ToDictionary(r => r.Id, r => ContainerUpdates.Classify(r, images[r.Id], null, checkedRegistry: false));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Ages are a nicety too; "Check for updates" says what the proxy refuses.
+                }
             }
-            return new Snapshot(rows, capabilities, stale, null);
+            return new Snapshot(rows, capabilities, stale, null, local);
         }
 
         void Apply(Snapshot snapshot)
@@ -443,6 +512,7 @@
             {
                 _rows = snapshot.Rows;
                 _stale = snapshot.Stale;
+                _local = snapshot.Local ?? new Dictionary<string, ContainerUpdate>();
                 var ids = snapshot.Rows.Where(r => r.IsRunning).Select(r => r.Id).ToHashSet();
                 var first = _stats.Count == 0;
                 _stats = _stats.Where(s => ids.Contains(s.Key)).ToDictionary();
@@ -718,6 +788,162 @@
         }
     }
 
+    // ---- updates ------------------------------------------------------------------
+
+    /// <summary>
+    /// What each row shows: the registry's verdict where a check has one for that container
+    /// id, what Docker alone says otherwise. A container recreated since the check has a new
+    /// id, so it falls back to local facts rather than wearing its predecessor's verdict.
+    /// </summary>
+    private IReadOnlyDictionary<string, ContainerUpdate> UpdateView
+    {
+        get
+        {
+            if (_review is not { Error: null } review)
+                return _local;
+
+            var merged = new Dictionary<string, ContainerUpdate>(_local);
+            foreach (var line in review.Containers)
+                merged[line.Id] = line;
+            return merged;
+        }
+    }
+
+    private ContainerUpdate? UpdateFor(ContainerRow row) => UpdateView.TryGetValue(row.Id, out var update) ? update : null;
+
+    private string UpdateSummary =>
+        _review is null
+            ? "Nothing is asked of any registry until you press this."
+            : _review.Error is { Length: > 0 } error
+                ? error
+                : $"Checked {Ago.Since(_review.CheckedAt)}: {_review.Summary}.";
+
+    private async Task CheckForUpdatesAsync()
+    {
+        if (_docker is not { } docker)
+            return;
+
+        _checking = true;
+        _result = "";
+        try
+        {
+            // On the pool inside CheckAsync; two presses, or a press and the schedule, share one check.
+            _review = await Updates.CheckAsync(docker);
+        }
+        catch (Exception ex)
+        {
+            _resultFailed = true;
+            _result = $"Check for updates: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            _checking = false;
+        }
+    }
+
+    private string HowUpdatesRun => Updater.ContainerMode == SelfUpdater.UpdateMode.WatchtowerApi
+        ? "Your Watchtower is asked to update just these images, through its HTTP API."
+        : "A one-shot Watchtower is started through the Docker API, told just these names.";
+
+    private void AskUpdate(ContainerRow row)
+    {
+        if (UpdateFor(row) is not { CanUpdate: true } update)
+            return;
+
+        var self = IsSelf(row);
+        var listed = IsListed(row);
+        _typed = "";
+        _result = "";
+        _pending = new Pending(
+            $"Update {row.Name}?",
+            ContainerSafety.UpdateWarning(row, self, listed, Updater.ContainerMode),
+            "Update",
+            self || listed,
+            ContainerSafety.NeedsTypedNameToUpdate(self, listed) ? row.Name : null,
+            [],
+            () => RunUpdateAsync([(row, update)]));
+    }
+
+    private void AskUpdateAll()
+    {
+        var behind = _rows
+            .Select(row => (Row: row, Update: UpdateFor(row)))
+            .Where(pair => pair.Update is { IsBehind: true })
+            .Select(pair => (pair.Row, pair.Update!))
+            .ToList();
+
+        var (act, skip) = ContainerSafety.PlanUpdates(behind, SelfContainer.Hint, _protected);
+        var plan = act.Select(c => new PlanLine(c.Name, "update to the newer image", true))
+            .Concat(skip.Select(s => new PlanLine(s.Container.Name, "left alone: " + s.Why, false)))
+            .ToList();
+        var targets = act.Select(update => (_rows.First(r => r.Id == update.Id), update)).ToList();
+
+        _typed = "";
+        _result = "";
+        _pending = new Pending(
+            "Update everything that is behind?",
+            act.Count == 0
+                ? "Nothing that is behind can be updated in one go."
+                : $"{act.Count} container{(act.Count == 1 ? "" : "s")} on {_docker?.Name}, each down for a moment while it is " +
+                  $"recreated. {HowUpdatesRun}",
+            act.Count == 0 ? "Nothing to do" : $"Update {act.Count}",
+            true,
+            null,
+            plan,
+            () => RunUpdateAsync(targets));
+    }
+
+    private async Task RunUpdateAsync(IReadOnlyList<(ContainerRow Row, ContainerUpdate Update)> targets)
+    {
+        if (_docker is not { } docker || targets.Count == 0)
+            return;
+
+        var endpoint = Endpoint;
+        var names = string.Join(", ", targets.Select(t => t.Row.Name));
+        var includesSelf = targets.Any(t => IsSelf(t.Row));
+        var list = targets.Select(t => new SelfUpdater.Target(t.Row.Name, t.Update.WatchtowerImage)).ToList();
+
+        _busy = targets.Count == 1 ? targets[0].Row.Id : "updates";
+        _resultFailed = false;
+        _result = $"Starting the update of {names}…";
+        StateHasChanged();
+
+        // Recreating is a restart as far as anything watching it can tell.
+        foreach (var (row, _) in targets)
+            await SilenceDependentsAsync(row);
+
+        try
+        {
+            var answer = await Task.Run(() => Updater.UpdateContainersAsync(endpoint, list));
+            Updates.MarkStarted(docker.Id, targets.Select(t => t.Row.Id).ToList());
+            _resultFailed = false;
+            _result = includesSelf
+                ? "Updating LabbyTwo — this page will go away and reconnect on its own."
+                : answer ?? $"Watchtower is updating {names} in the background; each is down for a moment while it is " +
+                  "recreated. Check for updates again in a minute or two to see it done.";
+        }
+        catch (Exception ex)
+        {
+            _resultFailed = true;
+            _result = $"Update {names}: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            _busy = null;
+        }
+
+        DockerContainers.ForgetSharedLists();
+        await RefreshAsync(freshCapabilities: false);
+    }
+
+    private void OnUpdatesChanged() => _ = InvokeAsync(() =>
+    {
+        if (_disposed || _docker is null)
+            return;
+        _review = Updates.Last(_docker.Id);
+        StateHasChanged();
+    });
+
     // ---- inspect ------------------------------------------------------------------
 
     private async Task InspectAsync(ContainerRow row)
@@ -761,6 +987,7 @@
     {
         _disposed = true;
         Config.Changed -= OnConfigChanged;
+        Updates.Changed -= OnUpdatesChanged;
         _poll?.Cancel();
         _poll?.Dispose();
         _load.Dispose();

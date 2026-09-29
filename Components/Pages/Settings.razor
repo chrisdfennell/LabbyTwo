@@ -11,6 +11,7 @@
 @inject NavigationManager Nav
 @inject UpdateChecker Updates
 @inject SelfUpdater Updater
+@inject ContainerUpdates ContainerReviews
 @inject ModuleCatalog Catalog
 @inject DashboardImportService Imports
 @inject ShareTransfer Share
@@ -343,6 +344,64 @@
                         while LabbyTwo is starting.
                     </div>
                 }
+
+                @* Every other container. The check is the same kind of promise as the one above:
+                   no registry is asked until the button is pressed, or until somebody picks a
+                   schedule — which is off unless they do. *@
+                <hr class="my-3" />
+                <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+                    <strong>Every other container.</strong>
+                    <button class="btn btn-sm btn-outline-secondary" data-action="check-containers"
+                            disabled="@(_checkingContainers || !_hasDocker)" @onclick="CheckContainersAsync">
+                        @(_checkingContainers ? "Checking…" : "Check containers")
+                    </button>
+                    @if (_containersTab is { } tab)
+                    {
+                        <a class="btn btn-sm btn-outline-secondary" href="@($"t/{Uri.EscapeDataString(tab.Slug)}")">Open @tab.Name</a>
+                    }
+                </div>
+                @if (!_hasDocker)
+                {
+                    <p class="tile-meta mb-2">Needs a Docker connection — the socket, a named pipe or a socket proxy.</p>
+                }
+                else if (ContainerReviews.All is { Count: > 0 } reviews)
+                {
+                    <ul class="tile-meta mb-2">
+                        @foreach (var review in reviews)
+                        {
+                            <li>
+                                <strong>@review.ConnectionName</strong>, checked @Ago.Since(review.CheckedAt): @review.Summary.
+                                @if (review.Behind.Count > 0)
+                                {
+                                    <span class="text-warning">@string.Join(", ", review.Behind.Take(8).Select(b => b.Name))@(review.Behind.Count > 8 ? $" and {review.Behind.Count - 8} more" : "")</span>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+                    <p class="tile-meta mb-2">
+                        Asks each container's registry — Docker Hub, ghcr.io, lscr.io and the rest — whether its tag
+                        now points at a newer image than the one running. Nothing is asked until you press the button.
+                        The Containers tab shows the answer on each row, with an Update button for the ones behind.
+                    </p>
+                }
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <label class="form-label mb-0 tile-meta" for="container-schedule">Check on their own</label>
+                    <select id="container-schedule" class="form-select form-select-sm" style="width: auto"
+                            value="@_containerSchedule" @onchange="SaveContainerScheduleAsync">
+                        @foreach (var (hours, label) in ContainerUpdates.Schedules)
+                        {
+                            <option value="@hours">@label</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-text">
+                    Off unless you choose otherwise: a schedule means LabbyTwo contacts those registries by itself.
+                    Docker Hub limits anonymous requests, so a few are asked at a time and each answer is reused for
+                    ten minutes. Checking never updates anything — that is always a button.
+                </div>
             </div>
         </div>
     </div>
@@ -1006,13 +1065,40 @@ docker compose restart labbytwo</code></pre>
 
     protected override async Task OnInitializedAsync()
     {
-        _pluginAuto = (await AppSettings.AllAsync()).GetBool(PluginUpdater.EnabledKey);
+        var settings = await AppSettings.AllAsync();
+        _pluginAuto = settings.GetBool(PluginUpdater.EnabledKey);
+        _containerSchedule = settings.GetInt(ContainerUpdates.ScheduleKey, 0);
 
         await LoadAsync();
 
         // Local only: which container this is and whether the socket is there. Nothing
         // leaves the machine until the user asks for a check.
         _self = await Updater.StatusAsync();
+    }
+
+    private bool _checkingContainers, _hasDocker;
+    private int _containerSchedule;
+    private Tab? _containersTab;
+
+    /// <summary>Every enabled Docker connection, now. Runs on the pool: it reads the connection list.</summary>
+    private async Task CheckContainersAsync()
+    {
+        _checkingContainers = true;
+        try
+        {
+            await Task.Run(() => ContainerReviews.CheckDueAsync(TimeSpan.Zero));
+        }
+        finally
+        {
+            _checkingContainers = false;
+        }
+    }
+
+    private async Task SaveContainerScheduleAsync(ChangeEventArgs args)
+    {
+        _containerSchedule = int.TryParse(args.Value?.ToString(), out var hours) ? Math.Max(0, hours) : 0;
+        var value = _containerSchedule.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await Task.Run(() => AppSettings.SaveAsync(ContainerUpdates.ScheduleKey, value));
     }
 
     private async Task StartUpdateAsync()
@@ -1044,7 +1130,10 @@ docker compose restart labbytwo</code></pre>
     private async Task LoadAsync()
     {
         _connectionCount = (await Config.ConnectionsAsync()).Count;
-        _tabCount = (await Config.TabsAsync()).Count;
+        var tabs = await Config.TabsAsync();
+        _tabCount = tabs.Count;
+        _containersTab = tabs.FirstOrDefault(t => t.Kind == "containers" && t.Enabled);
+        _hasDocker = (await Config.ConnectionsAsync()).Any(c => c.Provider == "docker" && c.Enabled);
         _widgetCount = (await Config.WidgetsAsync()).Count;
         _channelCount = (await Alerts.ChannelsAsync()).Count;
         _statusToken = await AppSettings.GetAsync(PublicStatus.PublicStatusToken);
