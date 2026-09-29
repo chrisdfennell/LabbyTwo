@@ -69,7 +69,7 @@ public static class Shortcodes
     public static readonly IReadOnlyList<string> InlineKinds =
     [
         "status", "metric", "forecast", "uptime", "since", "button",
-        "sparkline", "uptimebar", "link", "today", "countdown", "ago",
+        "sparkline", "uptimebar", "link", "today", "countdown", "ago", "power",
     ];
 
     /// <summary>A whole card or list, on a line of its own.</summary>
@@ -87,7 +87,7 @@ public static class Shortcodes
     /// few words — the colon still has to be there for anything else, so a Go template's
     /// <c>{{ .Name }}</c> stays text.
     /// </summary>
-    public static readonly IReadOnlyList<string> BareKinds = ["down", "else", "end", "alerts", "containers", "updates", "renewals", "changes", "incidents", "backups", "today"];
+    public static readonly IReadOnlyList<string> BareKinds = ["down", "else", "end", "alerts", "containers", "updates", "renewals", "changes", "incidents", "backups", "today", "power"];
 
     /// <summary>Where a shortcode sits in the text it was found in.</summary>
     public sealed record Found(int Index, int Length, Shortcode Code);

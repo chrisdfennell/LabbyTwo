@@ -23,6 +23,37 @@ public sealed class NotesStore(Db db)
         return list;
     }
 
+    /// <summary>
+    /// The notes with these ids, whichever tab they are on — for the incidents that link to
+    /// their write-ups. Each is a primary-key lookup; ids that are gone are simply missing.
+    /// </summary>
+    public async Task<IReadOnlyList<Note>> ByIdsAsync(IReadOnlyCollection<string> ids, CancellationToken ct = default)
+    {
+        var distinct = ids.Where(id => id.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+        if (distinct.Count == 0)
+            return [];
+
+        await using var connection = await db.OpenAsync(ct);
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = ByIdSql;
+        var id = cmd.Parameters.Add("$id", Microsoft.Data.Sqlite.SqliteType.Text);
+        var list = new List<Note>();
+        foreach (var each in distinct)
+        {
+            id.Value = each;
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                list.Add(new Note(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    reader.GetInt32(4), DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)).ToLocalTime()));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>One note by its id; public for the query-plan test.</summary>
+    public const string ByIdSql = "SELECT id, tab_id, title, content, sort, updated_at FROM notes WHERE id = $id";
+
     public async Task<string> SaveAsync(string? id, string tabId, string title, string content, CancellationToken ct = default)
     {
         id ??= Ids.New();

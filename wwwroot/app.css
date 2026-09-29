@@ -1536,6 +1536,11 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .incident-members { list-style: none; padding: 0; display: grid; gap: .15rem; }
 .incident-members .status-dot { width: .45rem; height: .45rem; margin-right: .25rem; }
 .incident-timeline { border-top: 1px solid var(--edge); padding-top: .75rem; }
+/* "Probably caused by": the change a cause rests on, marked in the timeline, and flashed
+   when its link in the causes list is followed. */
+.incident-causes { border-top: 1px solid var(--edge); padding-top: .75rem; }
+.change-row.is-evidence { box-shadow: inset 3px 0 0 var(--warn); padding-left: .4rem; }
+.change-row:target { background: color-mix(in srgb, var(--warn) 18%, transparent); border-radius: .25rem; }
 
 /* The Backups page: a late backup is the row to look at, so it carries the red edge an
    open incident does; one that cannot be proven, or whose restore test is overdue, amber. */

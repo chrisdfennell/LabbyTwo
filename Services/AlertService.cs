@@ -30,6 +30,15 @@ public sealed partial class AlertService(
     /// </summary>
     public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Local;
 
+    /// <summary>
+    /// Says what most likely took a connection down, for its down notification — or null.
+    /// Set by <see cref="ProbableCauses"/> when it starts, rather than injected, so the
+    /// alerting has no dependency on the change feed and works, and is tested, without it.
+    /// Whatever it is given is bounded by its own time budget; a notification is never
+    /// held up for long waiting on an explanation.
+    /// </summary>
+    public Func<Connection, DateTimeOffset, CancellationToken, Task<string?>>? ExplainDown { get; set; }
+
     public Task StartAsync(CancellationToken ct)
     {
         monitor.StatusChanged += OnStatusChangedAsync;
@@ -53,7 +62,7 @@ public sealed partial class AlertService(
                 change.PreviousDuration is { } down
                     ? $"Recovered after {Humanise(down)} down."
                     : "Recovered.")
-            : new Alert(AlertLevel.Down, $"{change.Connection.Name} is down", change.Message);
+            : new Alert(AlertLevel.Down, $"{change.Connection.Name} is down", await DownBodyAsync(change, now));
 
         // Down and back share a tag, so a channel that can replace a notification shows
         // whichever is true now rather than both.
@@ -63,6 +72,28 @@ public sealed partial class AlertService(
             await ClearedAsync(change.Connection, null, alert, null, now, CancellationToken.None);
         else
             await FiredAsync(change.Connection, null, alert, null, now, 0, now, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// What a down notification says: the probe's message, and under it the likely cause
+    /// when one is found in time — "Probably: plex went down 2 minutes after it got a new
+    /// image." The cause is a line of its own so the probe's words stay first.
+    /// </summary>
+    private async Task<string> DownBodyAsync(HealthMonitor.StatusChange change, DateTimeOffset now)
+    {
+        if (ExplainDown is not { } explain)
+            return change.Message;
+        try
+        {
+            return await explain(change.Connection, now, CancellationToken.None) is { Length: > 0 } cause
+                ? $"{change.Message}\nProbably: {cause}"
+                : change.Message;
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Could not explain why {Connection} went down", change.Connection.Name);
+            return change.Message;
+        }
     }
 
     /// <summary>

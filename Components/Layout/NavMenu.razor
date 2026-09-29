@@ -3,6 +3,8 @@
 @inject HealthMonitor Health
 @inject NavigationManager Nav
 @inject AppSettingsStore AppSettings
+@inject FamilyReportStore FamilyReports
+@inject Offload Offload
 
 <nav class="app-nav">
     <a class="nav-brand" href="/">
@@ -14,6 +16,15 @@
     {
         <a class="nav-alert" href="/settings/connections">
             @_downCount @(_downCount == 1 ? "service is" : "services are") down
+        </a>
+    }
+
+    @* Beside the outage count because it is the same kind of news: somebody in the house
+       says something is broken, and the place to read what they said is one tap away. *@
+    @if (_familyReports > 0)
+    {
+        <a class="nav-alert" href="settings#family">
+            @FamilyPageSettings.ReportsText(_familyReports) from the family
         </a>
     }
 
@@ -44,6 +55,9 @@
         <NavLink class="nav-item-link" href="incidents">
             <span class="nav-icon">🔥</span><span class="nav-text">Incidents</span>
         </NavLink>
+        <NavLink class="nav-item-link" href="power">
+            <span class="nav-icon">⚡</span><span class="nav-text">Power</span>
+        </NavLink>
         <NavLink class="nav-item-link" href="backups">
             <span class="nav-icon">🛟</span><span class="nav-text">Backups</span>
         </NavLink>
@@ -68,6 +82,7 @@
 @code {
     private IReadOnlyList<Tab> _tabs = [];
     private int _downCount;
+    private int _familyReports;
     private string _brand = Appearance.Default.BrandName;
 
     protected override async Task OnInitializedAsync()
@@ -75,6 +90,7 @@
         Config.Changed += OnChanged;
         Health.Updated += OnHealthUpdated;
         AppSettings.Changed += OnChanged;
+        FamilyReports.Changed += OnChanged;
         await LoadAsync();
     }
 
@@ -83,6 +99,7 @@
         _tabs = [.. (await Config.TabsAsync()).Where(t => t.Enabled)];
         _downCount = Health.Snapshot.Count(s => s.IsUp == false);
         _brand = (await AppSettings.AllAsync()).Get(Appearance.BrandKey, Appearance.Default.BrandName);
+        _familyReports = await Offload.Run(ct => FamilyReports.CountAsync(ct));
     }
 
     private void OnChanged() => _ = InvokeAsync(async () =>
@@ -105,5 +122,6 @@
         Config.Changed -= OnChanged;
         Health.Updated -= OnHealthUpdated;
         AppSettings.Changed -= OnChanged;
+        FamilyReports.Changed -= OnChanged;
     }
 }

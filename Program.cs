@@ -170,6 +170,7 @@ builder.Services.AddSingleton<MediaStack>();
 
 // What the weekly summary says. The job that sends it is an IBackgroundJob and is
 // discovered; this is the part it and the Settings preview share.
+builder.Services.AddSingleton<PowerCosts>();
 builder.Services.AddSingleton<WeeklySummaryGatherer>();
 
 // Web Push: the devices that asked for notifications, this install's signing key, and the
@@ -195,6 +196,25 @@ builder.Services.AddSingleton<ChangeWatcher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChangeWatcher>());
 builder.Services.AddSingleton<IncidentTracker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IncidentTracker>());
+// "Probably caused by" for each incident, read from the feed and the lab's shape, and the
+// one-click write-up that turns an incident into a note.
+builder.Services.AddSingleton<ProbableCauses>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProbableCauses>());
+builder.Services.AddSingleton<IncidentWriteUps>();
+
+// The family status page: a read-only "is Plex working?" for the household, reachable by a
+// share link without signing in, and the "something's broken" reports it sends. The
+// throttle is its own, not the login's: page loads and reports are budgeted, not failures.
+builder.Services.AddSingleton<FamilyReportStore>();
+builder.Services.AddSingleton<FamilyStatus>();
+builder.Services.AddSingleton<FamilyThrottle>();
+// Self-healing: the automatic action attached to an alert rule or a connection going down.
+// Runs after every alert pass, off the same ledger escalation reads, and writes every run
+// to the change feed above — which is how it lands on an incident's timeline.
+builder.Services.AddSingleton<RemediationStore>();
+builder.Services.AddSingleton<IRemediationActions, RemediationActions>();
+builder.Services.AddSingleton<RemediationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RemediationService>());
 
 // Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
 // plugin's nightly tidy-up cannot hang startup or take the process down with it.
@@ -384,6 +404,10 @@ app.MapPost("/logout", async (HttpContext context, IAntiforgery antiforgery) =>
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.LocalRedirect("/login");
 });
+
+// The family status page, at /family/{token} and optionally /family on the home network.
+// Anonymous by design and checked inside: see FamilyEndpoints.
+app.MapFamilyStatus();
 
 // Routes contributed by extensions, the app's own and any plugin's. A component can
 // render a listing; only an endpoint can hand the browser a file with Range honoured, so

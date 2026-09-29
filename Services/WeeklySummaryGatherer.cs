@@ -30,6 +30,7 @@ public sealed class WeeklySummaryGatherer(
     UpdateChecker updates,
     AppSettingsStore settings,
     ILogger<WeeklySummaryGatherer> log,
+    PowerCosts? power = null,
     BackupProof? backups = null)
 {
     /// <summary>The connections, by id and name, as of the last scheduled summary — what "now watching" is measured against.</summary>
@@ -114,6 +115,7 @@ public sealed class WeeklySummaryGatherer(
             Capacity = Capacity(monitored),
             Expiries = expiries,
             Speed = speed,
+            Power = await PowerAsync(now, zone, ct),
             Backups = backupLines,
             Added = added,
             Removed = removed,
@@ -124,6 +126,34 @@ public sealed class WeeklySummaryGatherer(
             UpdateAvailable = updates.Last is { Behind: true, Latest: { Length: > 0 } latestVersion } ? latestVersion : null,
             Units = Units.Preferences.From(await settings.AllAsync(ct)),
         };
+    }
+
+    /// <summary>
+    /// The week's electricity from the Power page's own sums — the last seven days, not
+    /// cached, at this summary's moment and zone. Null when nothing reports power, and when
+    /// it cannot be worked out: a summary without its power line is still worth sending.
+    /// </summary>
+    private async Task<PowerWeek?> PowerAsync(DateTimeOffset now, TimeZoneInfo zone, CancellationToken ct)
+    {
+        if (power is null)
+            return null;
+        try
+        {
+            var snapshot = await power.GetAsync(now, zone, ct);
+            if (snapshot.Reports.Count == 0)
+                return null;
+            return new PowerWeek(
+                snapshot.LastWeek.Kwh,
+                snapshot.LastWeek.Cost,
+                snapshot.Tariff.Currency,
+                [.. snapshot.Reports.OrderByDescending(r => r.LastWeek.Cost).Select(r => (r.Name, r.LastWeek.Cost))],
+                snapshot.ProjectedMonthCost + snapshot.Tariff.MonthlyFee);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Could not work out the week's electricity for the weekly summary");
+            return null;
+        }
     }
 
     /// <summary>

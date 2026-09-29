@@ -27,6 +27,9 @@ public sealed class NutProvider : IConnectionProvider
             Help: "As named in ups.conf — the bit in [brackets]. Usually just \"ups\"."),
         new("username", "Username", FieldKind.Text, Help: "Only if upsd.users requires one."),
         new("password", "Password", FieldKind.Password),
+        new("rated_watts", "Rated output (watts)", FieldKind.Number,
+            Help: "Only for a UPS that reports its load as a percentage and nothing else — the watts on its label, " +
+                  "so the Power page can turn the percentage into watts. Leave empty if it reports its own wattage."),
     ];
 
     public IReadOnlyList<MetricSpec> Metrics =>
@@ -34,6 +37,7 @@ public sealed class NutProvider : IConnectionProvider
         new("battery_percent", "Battery charge", "%"),
         new("battery_runtime_minutes", "Runtime left", " min"),
         new("load_percent", "Load", "%"),
+        new("load_watts", "Power drawn", " W"),
         new("input_volts", "Input voltage", " V", 1),
         new("on_battery", "Running on battery"),
         new("latency_ms", "Response time", " ms"),
@@ -113,6 +117,8 @@ public sealed class NutProvider : IConnectionProvider
             Copy(variables, "battery.runtime", metrics, "battery_runtime_minutes", seconds => seconds / 60);
             Copy(variables, "ups.load", metrics, "load_percent");
             Copy(variables, "input.voltage", metrics, "input_volts");
+            if (LoadWatts(variables, connection.Settings.Get("rated_watts")) is { } watts)
+                metrics["load_watts"] = watts;
 
             var status = variables.GetValueOrDefault("ups.status", "");
             var onBattery = status.Contains("OB", StringComparison.Ordinal);
@@ -143,6 +149,35 @@ public sealed class NutProvider : IConnectionProvider
             stopwatch.Stop();
             return ProbeResult.Down(stopwatch.Elapsed, ex.GetBaseException().Message);
         }
+    }
+
+    /// <summary>
+    /// What the UPS is delivering, in watts, for the Power page. Most UPSes report it as
+    /// <c>ups.realpower</c>; many only report <c>ups.load</c>, a percentage of their rated
+    /// output, and then that rating is needed — from <c>ups.realpower.nominal</c> when the
+    /// driver knows it, else from the "Rated output" setting. Null when neither is there:
+    /// a load percentage alone is not watts, and guessing the rating would be making a
+    /// number up.
+    /// </summary>
+    public static double? LoadWatts(IReadOnlyDictionary<string, string> variables, string ratedSetting)
+    {
+        static double? Read(IReadOnlyDictionary<string, string> v, string key) =>
+            v.TryGetValue(key, out var raw)
+            && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                ? value
+                : null;
+
+        if (Read(variables, "ups.realpower") is { } real)
+            return real;
+
+        if (Read(variables, "ups.load") is not { } load)
+            return null;
+
+        var rated = Read(variables, "ups.realpower.nominal");
+        if (rated is null && double.TryParse(ratedSetting, NumberStyles.Float, CultureInfo.InvariantCulture, out var setting) && setting > 0)
+            rated = setting;
+
+        return rated is { } nominal ? load / 100 * nominal : null;
     }
 
     /// <summary>NUT's error codes are terse; say what to do about the common ones.</summary>
