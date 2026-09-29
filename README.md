@@ -480,6 +480,65 @@ and follows quiet hours like any other. Browsers only allow this over HTTPS (you
 or reverse-proxy address, not `http://nas:5150`), and on iPhone and iPad only for LabbyTwo
 added to the Home Screen.
 
+### If everything goes dark
+
+Every alert above needs LabbyTwo running and the house online. A power cut, a tripped breaker
+or a dead router takes both away at once, and nothing inside the house can tell you. So
+**Settings → Outside alarm** turns it round: LabbyTwo checks in with a service *outside* the
+house every minute, and when the check-ins stop, that service alerts you.
+
+It is a Settings section rather than a connection on purpose. A connection is something
+LabbyTwo polls and draws — it would be a tile, count towards "12 up", and send a "down"
+notice through your alert channels every time the internet dropped, which is the one moment
+they cannot deliver. This only talks outwards, and a failed ping goes to the log and the
+Settings card, never to your channels.
+
+The check-in means something. LabbyTwo only says "up" while its own monitoring is working —
+sweeps finishing on time, by the same measure as the health page. If the monitor hangs,
+Healthchecks is sent `/fail` and Uptime Kuma `status=down`, each with the reason, so the
+alarm goes off straight away; a plain heartbeat URL, which has no way to say "bad", is simply
+not pinged, and its own timeout goes off. Either way a hung LabbyTwo trips it just as a dark
+house does.
+
+Nothing is sent until you paste an address in. The address *is* the credential — anybody with
+it can report the check as fine — so it is stored encrypted with the same keyring as
+connection passwords, and shown masked (`https://hc-ping.com/••••90ab`) from then on. With
+**Include a count** on (the default), Healthchecks gets a body like `12 up, 1 down` and Kuma
+the same as its message — counts only, never names, addresses or anything a probe said.
+**Send test ping** tries the address in the box before you save it.
+
+**Healthchecks.io** (the free tier is plenty):
+
+1. Sign up at [healthchecks.io](https://healthchecks.io), **Add Check**, and name it "LabbyTwo".
+2. Set **Period** to your check-in interval (1 minute) and **Grace** to 5 minutes.
+3. Add an integration for how you want to hear — email is built in; SMS, Signal, ntfy,
+   Pushover and Telegram are there too. It must not depend on your house.
+4. Copy the ping URL (`https://hc-ping.com/<uuid>`) into **Settings → Outside alarm**, save,
+   and press **Send test ping**. The check turns green.
+
+A self-hosted Healthchecks works the same with its own `https://hc.example.com/ping/<uuid>`
+address — as long as it runs somewhere other than your house.
+
+**Uptime Kuma**, running on a cloud VM, a friend's server or anywhere off your network:
+
+1. **Add New Monitor → Push**. Kuma shows a push URL like
+   `https://kuma.example.com/api/push/AbCdEf1234?status=up&msg=OK&ping=`.
+2. Set **Heartbeat Interval** to 60 seconds and **Retries** to 3 or so.
+3. Paste the whole URL, query string and all — LabbyTwo sets `status` and `msg` itself.
+
+**Anything else** — Better Stack heartbeats, Cronitor, a cron monitor of your own — gets a
+plain GET on the address you paste. Choose **Any other heartbeat URL** if the guess is wrong.
+
+**Grace periods.** Allow two or three missed check-ins before the alarm: with pings every
+minute, 3–5 minutes. Shorter pages you when the router reboots for an update; much longer and
+you hear about the freezer an hour late. Updating LabbyTwo restarts it, and the first check-in
+waits for the first sweep, so allow for a couple of minutes of that inside the grace.
+
+**Why not report "the internet is down"?** When the line is out, LabbyTwo cannot reach the
+outside service to say so — and whenever it can, the internet is not down. So there is no such
+signal: the missing check-ins *are* the report, and the first ping once the line is back is
+the recovery.
+
 ### What changed, and incidents
 
 When something breaks, the first question is *what changed?* **What changed** in the nav
