@@ -75,12 +75,12 @@ else
         {
             // Only a line of its own is taken as the edge of a section; one inside a
             // sentence, a list item or a quote would cut that block in half.
-            _problem = $"{{{{if …}}}}, {{{{else}}}} and {{{{end}}}} each go on a line of their own, around whole paragraphs, lists and tables. ({Code.Source})";
+            _problem = $"{{{{if …}}}}, {{{{details: …}}}}, {{{{else}}}} and {{{{end}}}} each go on a line of their own, around whole paragraphs, lists and tables. ({Code.Source})";
             return;
         }
         if (Code.IsBlock)
         {
-            _problem = $"A {Code.Kind} goes on a line of its own. ({Code.Source})";
+            _problem = $"{{{{{Code.Kind}}}}} goes on a line of its own, not inside a sentence. ({Code.Source})";
             return;
         }
         if (Scope is null)

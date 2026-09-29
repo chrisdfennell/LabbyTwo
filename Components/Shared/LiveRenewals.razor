@@ -1,0 +1,87 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+
+@* {{renewals}}: what is next to expire — certificates, Tailscale keys, the renewals list —
+   soonest first, overdue and expired at the top in red. Read the way the weekly summary
+   reads it: from countdown metrics and the renewals connection's own probe message, never
+   from the renewals plugin itself, so the host still knows nothing about the plugin and
+   works the same with it uninstalled. All from memory; redrawn on every sweep. *@
+
+@if (Scope is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else
+{
+    var only = MarkdownLists.Only(Code, Scope.Connections, out var problem);
+    var lines = MarkdownLists.Renewals(Scope.Connections, id => Latest.Get(id, MarkdownLists.RenewalWindow), Health.State, Days, Limit, only);
+    <div class="md-down md-renewals" role="list" aria-label="What is due to expire">
+        @if (problem is not null)
+        {
+            <div class="md-down-row" role="listitem">
+                <span class="sc-problem" tabindex="0" role="note" title="@($"{problem} ({Code.Source})")" aria-label="@problem">?</span>
+                <span class="tile-meta">@problem</span>
+            </div>
+        }
+        @if (lines.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>Nothing due in the next @Days days</span>
+            </div>
+        }
+        @foreach (var line in lines)
+        {
+            <div class="md-down-row @(line.IsOverdue ? "is-overdue" : "")" role="listitem" @key="(line.Connection.Id, line.What, line.Overdue)">
+                <span class="status-dot @Dot(line)" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div class="md-renewal-head">
+                        <strong>@line.Connection.Name</strong>
+                        @if (line.What.Length > 0)
+                        {
+                            <span class="tile-meta">@line.What</span>
+                        }
+                        <span class="md-renewal-when">@MarkdownLists.RenewalWhen(line)</span>
+                    </div>
+                    @if (line.Detail is { Length: > 0 } detail)
+                    {
+                        <div class="tile-meta md-down-message">@detail</div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>How far ahead to look. Two months is long enough to renew a domain without rushing.</summary>
+    private int Days => Math.Clamp(int.TryParse(Code.Option("days"), out var days) ? days : 60, 1, 3650);
+
+    private int Limit => Math.Clamp(int.TryParse(Code.Option("limit"), out var limit) ? limit : 5, 1, 50);
+
+    /// <summary>Red once it has gone, amber inside a fortnight — the renewals list's own suggested rule — green otherwise.</summary>
+    private static string Dot(RenewalLine line) =>
+        line.IsOverdue ? "status-down" : line.DaysLeft <= 14 ? "status-flapping" : "status-up";
+
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnChanged;
+        Latest.Changed += OnReadings;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnReadings(string connectionId) => OnChanged();
+
+    public void Dispose()
+    {
+        Health.Updated -= OnChanged;
+        Latest.Changed -= OnReadings;
+    }
+}

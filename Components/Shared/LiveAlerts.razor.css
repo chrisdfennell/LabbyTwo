@@ -1,0 +1,10 @@
+/* The frame and rows are {{down}}'s (md-down in app.css), so every list in a runbook
+   looks like one family; only the reading is this list's own. */
+
+.md-alert-reading { overflow-wrap: anywhere; }
+
+.md-alert-value {
+    color: var(--down);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}

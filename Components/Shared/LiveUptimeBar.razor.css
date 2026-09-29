@@ -1,0 +1,17 @@
+/* The status page's strip (uptime-day in app.css gives the colours), shrunk to the height
+   of a line of text: thin cells, a hairline apart, sitting on the baseline. */
+
+.md-uptimebar {
+    display: inline-flex;
+    gap: 1px;
+    height: .95em;
+    vertical-align: -.12em;
+}
+
+.md-uptimebar .uptime-day {
+    flex: none;
+    width: .3em;
+    min-width: 2px;
+    height: 100%;
+    border-radius: 1px;
+}

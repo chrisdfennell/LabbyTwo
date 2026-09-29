@@ -457,10 +457,7 @@
         return refresh ? _load.Refresh(key, Fetch, Apply) : _load.Load(key, Fetch, Apply);
     }
 
-    private static string Explain(Exception ex, string endpoint) =>
-        ex.GetBaseException() is DockerProxyDeniedException denied
-            ? denied.Message
-            : ProbeError.Describe(ex, endpoint);
+    private static string Explain(Exception ex, string endpoint) => DockerContainers.Explain(ex, endpoint);
 
     /// <summary>
     /// Stats every tick and the list every other, only while the page can be seen. One
@@ -688,6 +685,9 @@
         try
         {
             await Task.Run(() => DockerContainers.RunAsync(endpoint, action, row.Id, CancellationToken.None));
+            // A runbook listing stopped containers should not go on listing this one for
+            // the few seconds a shared list is otherwise reused.
+            DockerContainers.ForgetSharedLists();
             return null;
         }
         catch (Exception ex)

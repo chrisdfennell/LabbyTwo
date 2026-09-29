@@ -1,0 +1,148 @@
+@implements IDisposable
+@inject HealthMonitor Health
+
+@* {{today}}, {{countdown: 2026-12-25}} and {{ago: NAS}} — words about time, worked out by
+   LiveTime from "now" and nothing else. Nothing here reads the database.
+
+   Each redraws only when its words change. {{today}} and {{countdown}} look again on every
+   sweep, which is often enough to turn over at midnight. {{ago}} is the one that moves by
+   the second, so it has a one-second timer of its own — and it only asks for a redraw
+   when the text is different, so a page of them costs a string comparison a second. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_text is null)
+{
+    <span class="sc-value is-waiting" title="Loading…">…</span>
+}
+else
+{
+    <span class="sc-value md-clock" title="@_title">@_text</span>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>What names can refer to. Null while it is being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>"Now", replaceable so a test can stand on a chosen day.</summary>
+    [Parameter] public Func<DateTimeOffset>? Clock { get; set; }
+
+    private string? _problem;
+    private string? _text;
+    private string? _title;
+    private Timer? _tick;
+    private bool _disposed;
+
+    private DateTimeOffset Now => Clock?.Invoke() ?? DateTimeOffset.Now;
+
+    protected override void OnInitialized() => Health.Updated += OnSweep;
+
+    protected override void OnParametersSet() => Show();
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // Only a live page ticks; a prerendered one is thrown away before a second is up.
+        if (firstRender && Code.Kind == "ago" && RendererInfo.IsInteractive)
+            _tick = new Timer(_ => OnTick(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private void Show()
+    {
+        _problem = _title = null;
+        _text = null;
+        switch (Code.Kind)
+        {
+            case "today":
+                ShowToday();
+                break;
+            case "countdown":
+                ShowCountdown();
+                break;
+            case "ago":
+                ShowAgo();
+                break;
+        }
+    }
+
+    private void ShowToday()
+    {
+        if (LiveTime.Format(Code.Option("format", Code.Part(0)), out var why) is not { } format)
+        {
+            _problem = $"{why} ({Code.Source})";
+            return;
+        }
+        var now = Now;
+        _text = LiveTime.Today(now, format);
+        _title = now.ToString("dddd d MMMM yyyy");
+    }
+
+    private void ShowCountdown()
+    {
+        var written = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("date");
+        if (!LiveTime.TryParseMoment(written, out var target, out var hasTime))
+        {
+            _problem = written.Length == 0
+                ? $"Say which date: {{{{countdown: 2026-12-25}}}}, or with a time, {{{{countdown: 2026-12-25 18:00}}}}. ({Code.Source})"
+                : $"“{written}” is not a date. Write it year first — 2026-12-25, or 2026-12-25 18:00. ({Code.Source})";
+            return;
+        }
+        var words = LiveTime.Countdown(target, hasTime, Now.LocalDateTime);
+        var label = Code.Option("label");
+        _text = label.Length > 0 ? $"{label} {words}" : words;
+        _title = hasTime ? target.ToString("dddd d MMMM yyyy HH:mm") : target.ToString("dddd d MMMM yyyy");
+    }
+
+    private void ShowAgo()
+    {
+        if (Scope is null)
+            return;
+        var name = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("connection");
+        if (name.Length == 0)
+        {
+            _problem = $"Say which connection: {{{{ago: NAS}}}}. ({Code.Source})";
+            return;
+        }
+        if (ShortcodeLookup.Connection(Scope.Connections, name) is not { } connection)
+        {
+            _problem = $"No connection called “{name}”. ({Code.Source})";
+            return;
+        }
+        if (Health.State(connection.Id) is not { } state)
+        {
+            _text = "—";
+            _title = $"{connection.Name}: not checked yet";
+            return;
+        }
+        _text = LiveTime.Probed(state.At, Now);
+        _title = $"{connection.Name} was last checked at {state.At.ToLocalTime():HH:mm:ss}";
+    }
+
+    /// <summary>Recomputed off the renderer; a redraw is asked for only when the words moved.</summary>
+    private void OnTick()
+    {
+        if (_disposed)
+            return;
+        _ = InvokeAsync(() =>
+        {
+            if (_disposed)
+                return;
+            var before = (_text, _problem);
+            Show();
+            if (before != (_text, _problem))
+                StateHasChanged();
+        });
+    }
+
+    private void OnSweep() => OnTick();
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Health.Updated -= OnSweep;
+        _tick?.Dispose();
+    }
+}

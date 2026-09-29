@@ -1,0 +1,14 @@
+/* A link out of the app: underlined like the note's other links, with a small arrow so
+   it is plain before clicking that it opens somewhere else. */
+
+/* On one line, so the arrow never wraps away from the name it belongs to. */
+.md-link { text-decoration: underline; white-space: nowrap; }
+
+.md-link::after {
+    content: "↗";
+    display: inline-block;
+    margin-left: .15em;
+    font-size: .8em;
+    text-decoration: none;
+    color: var(--muted);
+}

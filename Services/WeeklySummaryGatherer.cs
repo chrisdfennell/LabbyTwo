@@ -52,7 +52,7 @@ public sealed class WeeklySummaryGatherer(
     /// Tailscale and the renewals plugin all land here without the host knowing any of
     /// them — and a plugin that reports one of these names later gets it for free.
     /// </summary>
-    private static readonly (string Metric, string What)[] Countdowns =
+    public static readonly IReadOnlyList<(string Metric, string What)> Countdowns =
     [
         ("cert_days_left", "certificate"),
         ("certs_expiring_days", "certificate"),
@@ -158,7 +158,7 @@ public sealed class WeeklySummaryGatherer(
         return week with { AverageLatencyMs = latency?.Average };
     }
 
-    private IEnumerable<ExpiryLine> Expiries(Connection connection, IReadOnlyDictionary<string, double> latest)
+    public static IEnumerable<ExpiryLine> Expiries(Connection connection, IReadOnlyDictionary<string, double> latest)
     {
         foreach (var (metric, what) in Countdowns)
         {

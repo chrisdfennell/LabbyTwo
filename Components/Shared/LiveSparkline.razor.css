@@ -1,0 +1,16 @@
+/* A sparkline the size of a word: it sits on the text's baseline and scales with the
+   text around it, so it reads as part of the sentence in a heading or a footnote alike.
+   The line takes the accent colour through currentColor, which follows the theme. */
+
+.md-spark {
+    display: inline-block;
+    width: 5em;
+    height: 1.1em;
+    vertical-align: -.2em;
+    color: var(--accent);
+}
+
+.md-spark ::deep svg.sparkline {
+    width: 100%;
+    height: 100%;
+}

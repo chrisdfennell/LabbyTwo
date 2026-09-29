@@ -1,0 +1,55 @@
+@* {{link: Plex Media Server}}: a link to the connection's own web page, wherever it lives
+   now — the address the service tile opens (ShortcodeLookup.WebAddress: "Link opens",
+   then the URL, then the host), so a runbook's link follows the connection when it moves
+   instead of going stale in the text. Opens in a new tab, and tells the new tab nothing
+   about this one. A connection with no web address is a "?" saying so. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_href is null)
+{
+    <span class="sc-value is-waiting" title="Loading…">…</span>
+}
+else
+{
+    <a class="md-link" href="@_href" target="_blank" rel="noopener noreferrer" title="@_href">@_text</a>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>What names can refer to. Null while it is being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private string? _problem;
+    private string? _href;
+    private string _text = "";
+
+    protected override void OnParametersSet()
+    {
+        _problem = _href = null;
+        if (Scope is null)
+            return;
+
+        var name = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("connection");
+        if (name.Length == 0)
+        {
+            _problem = $"Say which connection: {{{{link: Plex}}}}. ({Code.Source})";
+            return;
+        }
+        if (ShortcodeLookup.Connection(Scope.Connections, name) is not { } connection)
+        {
+            _problem = $"No connection called “{name}”. ({Code.Source})";
+            return;
+        }
+        if (ShortcodeLookup.WebAddress(connection, out var why) is not { } href)
+        {
+            _problem = $"{why} ({Code.Source})";
+            return;
+        }
+        _href = href;
+        _text = Code.Option("label", connection.Name);
+    }
+}

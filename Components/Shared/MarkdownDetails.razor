@@ -1,0 +1,26 @@
+@* {{details: Full restart procedure}} … {{end}}: the browser's own fold. A native details
+   element rather than a script-driven one, so it opens with the keyboard, is announced as
+   a disclosure by screen readers, and works before the circuit has started.
+
+   What is inside was cut out of the source and rendered as a piece of its own (see
+   Runbook), so it may hold anything a page can: cards, buttons, {{if}} sections. Those keep
+   updating while the fold is closed — they are in the page, only not shown — which is what
+   lets a fold be opened on an answer that is already current.
+
+   The open attribute is written only from the shortcode. A render that does not change it
+   leaves the element alone, so a fold somebody opened stays open through every sweep. *@
+
+<details class="md-details" open="@Open">
+    <summary class="md-details-summary">@Title</summary>
+    <div class="md-details-body">@ChildContent</div>
+</details>
+
+@code {
+    /// <summary>What the fold says while it is closed. Drawn as text.</summary>
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>Whether it starts open, from <c>open=true</c>.</summary>
+    [Parameter] public bool Open { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

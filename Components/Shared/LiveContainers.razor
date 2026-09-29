@@ -1,0 +1,173 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject Offload Offload
+
+@* {{containers: stopped}}: a Docker connection's containers, read-only — the Containers
+   tab's list without its buttons. The same calls and the same words for a failure, a
+   socket proxy's refusal naming the flag that fixes it included (DockerContainers.Explain).
+
+   The list comes from DockerContainers.SharedListAsync, so however many pages and runbooks
+   show it, one endpoint is asked at most once every few seconds. It is started off the
+   render thread and never waited for: the list shows "…" until it lands, and asks again
+   when a sweep does. *@
+
+@if (_problem is not null)
+{
+    <div class="md-down" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_problem} ({Code.Source})")" aria-label="@_problem">?</span>
+            <span class="tile-meta md-ct-error">@_problem</span>
+        </div>
+    </div>
+}
+else if (_docker is null || !_load.Ready || _snapshot is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else if (_snapshot.Error is { } error)
+{
+    <div class="md-down" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_docker.Name}: {error}")" aria-label="@error">?</span>
+            <span class="tile-meta md-ct-error">@_docker.Name: @error</span>
+        </div>
+    </div>
+}
+else
+{
+    var rows = MarkdownLists.Containers(_snapshot.Rows, _filter);
+    var shown = rows.Take(Limit).ToList();
+    <div class="md-down md-ct" role="list" aria-label="@($"{Describe(_filter)} on {_docker.Name}")">
+        @if (rows.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot @(_filter is "stopped" or "unhealthy" or "restarting" ? "status-up" : "status-unknown")" aria-hidden="true"></span>
+                <span>No @Describe(_filter).ToLowerInvariant() on @_docker.Name</span>
+            </div>
+        }
+        @foreach (var row in shown)
+        {
+            <div class="md-down-row md-ct-row" role="listitem" @key="row.Id">
+                <span class="status-dot @MarkdownLists.ContainerDot(row)" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div class="md-ct-head">
+                        <strong class="text-truncate">@row.Name</strong>
+                        @if (row.Health == ContainerHealth.Unhealthy)
+                        {
+                            <span class="md-ct-badge is-bad">unhealthy</span>
+                        }
+                        @if (row.Project is { } project)
+                        {
+                            <span class="md-ct-badge" title="Compose project">@project</span>
+                        }
+                    </div>
+                    <div class="tile-meta md-ct-meta">
+                        <span class="text-truncate" title="@row.Image">@(row.ImageIsId ? row.Image[..Math.Min(row.Image.Length, 19)] : row.Image)</span>
+                        <span>· @row.Uptime</span>
+                    </div>
+                </div>
+            </div>
+        }
+        @if (rows.Count > shown.Count)
+        {
+            <div class="md-down-row tile-meta" role="listitem">…and @(rows.Count - shown.Count) more</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private sealed record Snapshot(IReadOnlyList<ContainerRow> Rows, string? Error);
+
+    private BackgroundLoad _load = default!;
+    private string? _problem;
+    private Connection? _docker;
+    private string _filter = "all";
+    private Snapshot? _snapshot;
+    private string _endpoint = "";
+    private TimeSpan _timeout;
+
+    private int Limit => Math.Clamp(int.TryParse(Code.Option("limit"), out var limit) ? limit : 25, 1, 200);
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnSweep;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        if (Scope is null)
+            return;
+
+        if (MarkdownLists.ContainerFilter(Code, out var badFilter) is not { } filter)
+        {
+            _problem = badFilter;
+            return;
+        }
+        _filter = filter;
+
+        var docker = MarkdownLists.Docker(Code, Scope.Connections, out var noDocker);
+        if (docker is null)
+        {
+            _problem = noDocker;
+            _load.Cancel();
+            return;
+        }
+        _docker = docker;
+        _endpoint = docker.Settings.Get("endpoint", DockerSocket.EnvironmentEndpoint);
+        _timeout = TimeSpan.FromSeconds(Math.Clamp(docker.Settings.GetInt("timeout", 10), 1, 120));
+        Load(refresh: false);
+    }
+
+    private void Load(bool refresh)
+    {
+        var endpoint = _endpoint;
+        var timeout = _timeout;
+        var key = $"{_docker?.Id}|{endpoint}";
+
+        async Task<Snapshot> Fetch(CancellationToken ct)
+        {
+            try
+            {
+                return new Snapshot(await DockerContainers.SharedListAsync(endpoint, timeout, ct), null);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                return new Snapshot([], DockerContainers.Explain(ex, endpoint));
+            }
+        }
+
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, snapshot => _snapshot = snapshot);
+        else
+            _ = _load.Load(key, Fetch, snapshot => _snapshot = snapshot);
+    }
+
+    private void OnSweep()
+    {
+        if (_docker is not null && _problem is null)
+            _ = InvokeAsync(() => Load(refresh: true));
+    }
+
+    private static string Describe(string filter) => filter switch
+    {
+        "running" => "Running containers",
+        "stopped" => "Stopped containers",
+        "unhealthy" => "Unhealthy containers",
+        "paused" => "Paused containers",
+        "restarting" => "Restarting containers",
+        _ => "Containers",
+    };
+
+    public void Dispose()
+    {
+        Health.Updated -= OnSweep;
+        _load.Dispose();
+    }
+}

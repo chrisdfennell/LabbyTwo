@@ -83,6 +83,15 @@ public sealed record RunbookIf(
     IReadOnlyList<string> Notes) : RunbookPart;
 
 /// <summary>
+/// <c>{{details: Title}}</c> … <c>{{end}}</c>: a part folded away under a title until
+/// somebody opens it — the long restart procedure under the short "what to check first".
+/// </summary>
+/// <param name="Source">The <c>{{details: …}}</c> line as written, for messages.</param>
+/// <param name="Title">What the fold says when it is closed. Text, never markup.</param>
+/// <param name="Open">Whether it starts open, from <c>open=true</c>.</param>
+public sealed record RunbookDetails(string Source, string Title, bool Open, IReadOnlyList<RunbookPart> Body) : RunbookPart;
+
+/// <summary>
 /// Turns Markdown with <c>{{if …}}</c> / <c>{{else}}</c> / <c>{{end}}</c> lines into
 /// sections, before any of it is rendered.
 ///
@@ -96,6 +105,11 @@ public sealed record RunbookIf(
 /// Nothing here throws, and nothing is hidden by a typo: an <c>{{if}}</c> never closed shows
 /// everything after it with a note saying so, and an <c>{{end}}</c> or <c>{{else}}</c> with
 /// nothing to belong to is a note where it stands.
+///
+/// <c>{{details: …}}</c> is cut out the same way and for the same reason — a fold has to
+/// hold whole blocks — and shares <c>{{end}}</c> with <c>{{if}}</c>. An <c>{{end}}</c> closes
+/// whichever of the two was opened last, the way a closing bracket does, so an
+/// <c>{{if}}</c> inside a fold and a fold inside an <c>{{if}}</c> both read as written.
 /// </summary>
 public static partial class Runbook
 {
@@ -131,7 +145,7 @@ public static partial class Runbook
     public static bool MayHaveSections(string? markdown) =>
         markdown is not null && markdown.Contains("{{", StringComparison.Ordinal) && SectionWord().IsMatch(markdown);
 
-    [GeneratedRegex(@"\{\{\s*(?:if\s|else\s*\}\}|end\s*\}\})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\{\{\s*(?:if\s|details\s*:|else\s*\}\}|end\s*\}\})", RegexOptions.IgnoreCase)]
     private static partial Regex SectionWord();
 
     /// <summary>
@@ -244,13 +258,33 @@ public static partial class Runbook
                             if (problem is not null)
                                 problem += $" ({source})";
                         }
-                        open.Push(new Section(source, condition, problem, lineNumber));
+                        open.Push(Section.If(source, condition, problem, lineNumber));
+                        break;
+                    }
+
+                    case "details":
+                    {
+                        var source = directive.Source.Trim();
+                        var title = string.Join(" / ", directive.Target);
+                        // Too deep is not a reason to hide anything: a fold is only a
+                        // convenience, so its contents are shown unfolded with a note.
+                        var problem = open.Count >= MaxDepth
+                            ? $"Sections nested more than {MaxDepth} deep are not folded. ({source})"
+                            : null;
+                        open.Push(Section.Details(source, title.Length > 0 ? title : "Details",
+                            IsYes(directive.Option("open")), problem, lineNumber));
                         break;
                     }
 
                     case "else":
                         if (open.Count == 0)
                             root.Add(new RunbookProblem($"{{{{else}}}} on line {lineNumber} has no {{{{if …}}}} above it."));
+                        else if (open.Peek().IsDetails)
+                            // Said inside the fold, where it was written. Taking it as the
+                            // "otherwise" of an {{if}} further out would quietly move the
+                            // fold's end to wherever that guess put it.
+                            Current().Add(new RunbookProblem(
+                                $"{{{{else}}}} on line {lineNumber} is inside {open.Peek().Source}, which has no “otherwise” — close the fold with {{{{end}}}} first."));
                         else if (open.Peek().InElse)
                             open.Peek().Notes.Add($"A second {{{{else}}}} on line {lineNumber}; everything after the first is the “otherwise” part.");
                         else
@@ -260,12 +294,12 @@ public static partial class Runbook
                     case "end":
                         if (open.Count == 0)
                         {
-                            root.Add(new RunbookProblem($"{{{{end}}}} on line {lineNumber} has no {{{{if …}}}} to end."));
+                            root.Add(new RunbookProblem($"{{{{end}}}} on line {lineNumber} has no {{{{if …}}}} or {{{{details: …}}}} to end."));
                         }
                         else
                         {
                             var closed = open.Pop();
-                            Current().Add(closed.ToPart());
+                            Current().AddRange(closed.ToParts());
                         }
                         break;
                 }
@@ -293,8 +327,12 @@ public static partial class Runbook
         return root;
     }
 
+    /// <summary>"true", "yes", "1", "on" or "open", as an option that switches something on.</summary>
+    public static bool IsYes(string value) =>
+        value.Trim().ToLowerInvariant() is "true" or "yes" or "1" or "open" or "on";
+
     /// <summary>
-    /// The shortcode a line consists of, if it is a section line: one of if / else / end,
+    /// The shortcode a line consists of, if it is a section line: one of if / details / else / end,
     /// alone on the line apart from spaces, not indented into code, not inside a code block.
     /// </summary>
     private static Shortcode? Directive(string line, int offset, IReadOnlyList<(int Start, int End)> code)
@@ -311,16 +349,47 @@ public static partial class Runbook
         return only.Code;
     }
 
-    private sealed class Section(string source, RunbookCondition? condition, string? problem, int line)
+    /// <summary>An <c>{{if}}</c> or a <c>{{details}}</c> still waiting for its <c>{{end}}</c>.</summary>
+    private sealed class Section
     {
-        public string Source { get; } = source;
-        public int Line { get; } = line;
+        private RunbookCondition? _condition;
+        private string? _problem;
+        private string _title = "";
+        private bool _open;
+
+        private Section(string source, int line, bool isDetails)
+        {
+            Source = source;
+            Line = line;
+            IsDetails = isDetails;
+        }
+
+        public static Section If(string source, RunbookCondition? condition, string? problem, int line) =>
+            new(source, line, isDetails: false) { _condition = condition, _problem = problem };
+
+        public static Section Details(string source, string title, bool open, string? problem, int line) =>
+            new(source, line, isDetails: true) { _title = title, _open = open, _problem = problem };
+
+        public string Source { get; }
+        public int Line { get; }
+        public bool IsDetails { get; }
         public List<RunbookPart> Then { get; } = [];
         public List<RunbookPart> Else { get; } = [];
         public List<string> Notes { get; } = [];
         public bool InElse { get; set; }
         public List<RunbookPart> Branch => InElse ? Else : Then;
 
-        public RunbookIf ToPart() => new(Source, condition, problem, Then, Else, Notes);
+        /// <summary>
+        /// What the closed section becomes in its parent: one part, except a fold nested too
+        /// deep to fold, which is its note followed by its contents.
+        /// </summary>
+        public IEnumerable<RunbookPart> ToParts()
+        {
+            if (!IsDetails)
+                return [new RunbookIf(Source, _condition, _problem, Then, Else, Notes)];
+            if (_problem is not null)
+                return [new RunbookProblem(_problem), .. Then];
+            return [new RunbookDetails(Source, _title, _open, Then)];
+        }
     }
 }

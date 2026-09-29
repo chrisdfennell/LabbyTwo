@@ -59,6 +59,34 @@ public static class ShortcodeLookup
     }
 
     /// <summary>
+    /// The address a browser opens for a connection — the service tile's rule, so a link in a
+    /// runbook goes where clicking the tile goes: <c>open_url</c> ("Link opens") first, since
+    /// that is the browser-reachable one when the probe uses a name only Docker can resolve;
+    /// then <c>url</c>; then <c>http://</c> and the host. Only http and https come back — a
+    /// <c>javascript:</c> or <c>file:</c> address in a setting must not become a link — and
+    /// otherwise null, with why.
+    /// </summary>
+    public static string? WebAddress(Connection connection, out string? problem)
+    {
+        problem = null;
+        var settings = connection.Settings;
+        var written = settings.Get("open_url", settings.Get("url")).Trim();
+        if (written.Length == 0 && settings.Get("host").Trim() is { Length: > 0 } host)
+            written = "http://" + host;
+        if (written.Length == 0)
+        {
+            problem = $"{connection.Name} has no web address. Set its URL, or “Link opens”, on the Connections page.";
+            return null;
+        }
+        if (!Uri.TryCreate(written, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+        {
+            problem = $"{connection.Name}’s address, “{written}”, is not a web page a browser can open.";
+            return null;
+        }
+        return written;
+    }
+
+    /// <summary>
     /// A metric on a connection by key or by label, as its key. Keys first, from what the
     /// provider declares and what the connection has actually reported; then labels, so
     /// "Disk used" works as well as disk_percent. Null when neither matches.

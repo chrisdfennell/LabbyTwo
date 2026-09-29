@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LabbyTwo.Core;
 
 namespace LabbyTwo.Services;
 
@@ -205,6 +206,60 @@ public static class DockerContainers
         var payload = await DockerSocket.GetAsync(endpoint, timeout, "/containers/json?all=1", ct);
         return ParseList(payload);
     }
+
+    /// <summary>
+    /// How long one list answers every other reader of the same endpoint. The Containers tab
+    /// polls on its own, but a runbook's <c>{{containers}}</c> redraws on every sweep, on
+    /// every open page; ten pages must not mean ten requests to the NAS every thirty seconds.
+    /// </summary>
+    public static readonly TimeSpan SharedListReuse = TimeSpan.FromSeconds(10);
+
+    // A plain dictionary under a lock rather than a concurrent one: deciding to start a
+    // request is a side effect, and ConcurrentDictionary may run a factory twice for two
+    // callers arriving together — which would be two requests, the thing this prevents.
+    private static readonly Dictionary<string, (DateTimeOffset At, Task<IReadOnlyList<ContainerRow>> List)> SharedLists = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// <see cref="ListAsync"/>, shared: a request already running, or one that finished less
+    /// than <see cref="SharedListReuse"/> ago, answers instead of a new one. A failure is shared
+    /// for the same few seconds, so an endpoint that is down is not asked again by every page
+    /// the moment it said no. Runs on the pool whatever thread asks, and cancelling stops only
+    /// this caller waiting.
+    /// </summary>
+    public static Task<IReadOnlyList<ContainerRow>> SharedListAsync(string endpoint, TimeSpan timeout, CancellationToken ct = default)
+    {
+        Task<IReadOnlyList<ContainerRow>> list;
+        lock (SharedLists)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (SharedLists.TryGetValue(endpoint, out var existing) && (!existing.List.IsCompleted || now - existing.At < SharedListReuse))
+            {
+                list = existing.List;
+            }
+            else
+            {
+                list = Task.Run(() => ListAsync(endpoint, timeout, CancellationToken.None));
+                SharedLists[endpoint] = (now, list);
+            }
+        }
+        return list.WaitAsync(ct);
+    }
+
+    /// <summary>Forgets shared lists, so the next reader asks again. For tests, and after an action.</summary>
+    public static void ForgetSharedLists()
+    {
+        lock (SharedLists)
+            SharedLists.Clear();
+    }
+
+    /// <summary>
+    /// Why a Docker call failed, as the Containers tab says it: a socket proxy's refusal with
+    /// the flag that fixes it, or the connection error in words.
+    /// </summary>
+    public static string Explain(Exception ex, string endpoint) =>
+        ex.GetBaseException() is DockerProxyDeniedException denied
+            ? denied.Message
+            : ProbeError.Describe(ex, endpoint);
 
     public static IReadOnlyList<ContainerRow> ParseList(string payload)
     {

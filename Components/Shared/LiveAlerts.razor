@@ -1,0 +1,88 @@
+@implements IDisposable
+@inject MetricAlertService Evaluator
+@inject AlertRuleStore Rules
+@inject Registry Registry
+@inject Offload Offload
+
+@* {{alerts}}: the alert rules firing right now — threshold, unusual-for-the-time and
+   forecast rules alike, since one evaluator runs them all — with the connection, the
+   reading and how long. The same breaches the Active alerts card lists; which ones, and in
+   what order, is MarkdownLists.Alerts, where it is tested.
+
+   The breaches are in memory. The rules are cached by their store but may still be a
+   database read the first time, so they are loaded off the render thread and the list
+   shows "…" for that moment. *@
+
+@if (Scope is null || _rules is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else
+{
+    var only = MarkdownLists.Only(Code, Scope.Connections, out var problem);
+    var lines = MarkdownLists.Alerts(Evaluator.Firing, _rules, Scope.Connections, Registry, only);
+    <div class="md-down md-alerts" role="list" aria-label="Alerts firing">
+        @if (problem is not null)
+        {
+            <div class="md-down-row" role="listitem">
+                <span class="sc-problem" tabindex="0" role="note" title="@($"{problem} ({Code.Source})")" aria-label="@problem">?</span>
+                <span class="tile-meta">@problem</span>
+            </div>
+        }
+        @if (lines.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>No alerts firing</span>
+            </div>
+        }
+        @foreach (var line in lines)
+        {
+            <div class="md-down-row" role="listitem" @key="(line.RuleId, line.Connection.Id)">
+                <span class="status-dot status-down" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div>
+                        <strong>@line.Name</strong>
+                        <span class="tile-meta">@line.Connection.Name</span>
+                    </div>
+                    <div class="tile-meta md-alert-reading">
+                        @line.Metric is <span class="md-alert-value">@line.Value</span> — @(line.Limit)@if (line.Since is { } since)
+                        {
+                            <span title="@($"Firing since {since.ToLocalTime():d MMM yyyy HH:mm}")">, for @LiveText.Since(since, DateTimeOffset.Now) (since @since.ToLocalTime().ToString("HH:mm"))</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private IReadOnlyList<AlertRule>? _rules;
+    private BackgroundLoad _load = default!;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Evaluator.Updated += OnUpdated;
+        Rules.Changed += OnRulesChanged;
+        _load.Load("rules", ct => Offload.Run(c => Rules.AllAsync(c), ct), rules => _rules = rules);
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnRulesChanged() =>
+        _ = _load.Refresh("rules", ct => Offload.Run(c => Rules.AllAsync(c), ct), rules => _rules = rules);
+
+    public void Dispose()
+    {
+        Evaluator.Updated -= OnUpdated;
+        Rules.Changed -= OnRulesChanged;
+        _load.Dispose();
+    }
+}

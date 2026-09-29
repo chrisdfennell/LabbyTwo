@@ -216,7 +216,7 @@ public sealed class RunbookRenderTests : IAsyncDisposable
         var html = await WaitForAsync(root, "never closed");
 
         Assert.Contains("<p>First</p>", html);
-        Assert.Contains("{{end}} on line 3 has no {{if …}} to end.", html);
+        Assert.Contains("{{end}} on line 3 has no {{if …}} or {{details: …}} to end.", html);
         Assert.Contains("<p>Still shown</p>", html);
     }
 

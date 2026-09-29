@@ -18,6 +18,7 @@ public sealed partial class Markdown
 {
     private readonly MarkdownPipeline _pipeline = new MarkdownPipelineBuilder()
         .UseAdvancedExtensions()
+        .UseCallouts()
         .DisableHtml()
         .Build();
 
@@ -25,6 +26,7 @@ public sealed partial class Markdown
     // a shortcode written inside backticks stays an example rather than becoming live.
     private readonly MarkdownPipeline _positions = new MarkdownPipelineBuilder()
         .UseAdvancedExtensions()
+        .UseCallouts()
         .DisableHtml()
         .UsePreciseSourceLocation()
         .Build();
@@ -118,6 +120,10 @@ public sealed partial class Markdown
                         var at = ordinal++;
                         converted.Add(new LiveIf(section, Convert(section.Then), Convert(section.Else), at));
                         break;
+                    case RunbookDetails fold:
+                        var place = ordinal++;
+                        converted.Add(new LiveDetails(fold, Convert(fold.Body), place));
+                        break;
                 }
             }
             return converted;
@@ -191,10 +197,21 @@ public sealed record LivePage(IReadOnlyList<LivePart> Parts)
 
     private static IEnumerable<LiveIf> Walk(IEnumerable<LivePart> parts)
     {
-        foreach (var part in parts.OfType<LiveIf>())
+        foreach (var part in parts)
         {
-            yield return part;
-            foreach (var inner in Walk(part.Then.Concat(part.Else)))
+            // A fold is not a condition, but a condition can sit inside one, and a closed
+            // fold still has to know which branch to draw the moment it is opened.
+            var inside = part switch
+            {
+                LiveIf section => section.Then.Concat(section.Else),
+                LiveDetails fold => fold.Body,
+                _ => null,
+            };
+            if (part is LiveIf found)
+                yield return found;
+            if (inside is null)
+                continue;
+            foreach (var inner in Walk(inside))
                 yield return inner;
         }
     }
@@ -213,6 +230,15 @@ public sealed record LiveIf(RunbookIf Section, IReadOnlyList<LivePart> Then, IRe
 {
     /// <summary>Records compare by value; two sections with the same text are still two sections.</summary>
     public bool Equals(LiveIf? other) => ReferenceEquals(this, other);
+
+    public override int GetHashCode() => Ordinal;
+}
+
+/// <summary>A fold, with its contents already prepared; drawn as a native details element.</summary>
+public sealed record LiveDetails(RunbookDetails Fold, IReadOnlyList<LivePart> Body, int Ordinal) : LivePart(Ordinal)
+{
+    /// <summary>By reference, like <see cref="LiveIf"/>: two folds with the same title are still two folds.</summary>
+    public bool Equals(LiveDetails? other) => ReferenceEquals(this, other);
 
     public override int GetHashCode() => Ordinal;
 }

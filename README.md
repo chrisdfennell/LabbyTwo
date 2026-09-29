@@ -405,7 +405,8 @@ tab like this one, cards and bindings and all. Eight kinds ship:
 - **Dashboard** — a grid of widgets.
 - **Embedded page** — a full-height iframe of another app's web UI. One tab kind covers
   Portainer, code-server, a web terminal, whatever — no integration required.
-- **Notes** — markdown notes and runbooks with a live preview. It points out headings
+- **Notes** — markdown notes and runbooks with a live preview (everything Markdown can do
+  is in [Markdown: cards, notes and runbooks](#markdown-cards-notes-and-runbooks)). It points out headings
   written without their space — `##Wi-Fi` is a paragraph, not a heading, and CommonMark
   is right about that in a way that is baffling when you are staring at the preview.
 - **Git server** — a whole page for one Git server: counts, every repository with its
@@ -463,7 +464,7 @@ greys out the rest with the reason.
 | Search | nothing — a search box for any engine, or your own SearXNG |
 | Bookmarks | nothing — a list of links, with each site's own icon fetched for it |
 | Greeting | nothing — good morning, and the date. The wording of each part of the day is yours to change |
-| Text / Markdown | nothing |
+| Text / Markdown | nothing — formatting, live values, lists and runbook sections: see [Markdown](#markdown-cards-notes-and-runbooks) |
 | Embedded page | nothing — an iframe in a card |
 | Camera | nothing — a still image or MJPEG stream, loaded by your browser |
 | Action button | nothing — a button that calls a URL: an n8n flow, a Home Assistant scene |
@@ -531,99 +532,250 @@ LabbyTwo ships a web-app manifest and icons, so **Add to Home Screen** on a phon
 proper icon and a standalone window. A full PWA install needs HTTPS — put it behind a
 reverse proxy with a certificate if you want that.
 
-### Live values in Markdown
+### Markdown: cards, notes and runbooks
 
-A Markdown card or a note can quote the dashboard back to you, and keeps it current:
+Three places take Markdown, and all three draw it the same way:
+
+- a **Text / Markdown** card on a dashboard tab,
+- the same card used as a text block on a **custom page**,
+- a note on a **Notes** tab.
+
+A card or block is edited from **Edit layout** → the card's **Edit** → **Content**; a note in
+the Notes tab's own editor, beside a live preview. Under every Markdown box is a strip that
+points out lines that will not render the way they look (`##Wi-Fi` is a paragraph, not a
+heading), warns about a shortcode with a misspelt name, and has **Insert live value…** — a
+small form that writes any of the shortcodes below for you, quoted correctly, including the
+skeleton of a section, a fold and a callout.
+
+#### Formatting
+
+CommonMark with Markdig's advanced extensions. Raw HTML is switched off: `<b>` or
+`<script>` typed into a note shows as the text you typed.
+
+| Write | Get |
+|---|---|
+| `# Heading` … `###### Heading` | headings; each gets an anchor, so `[jump](#heading)` links to it |
+| `*italic*`, `**bold**`, `~~struck~~` | *italic*, **bold**, ~~struck~~ |
+| `==marked==`, `++inserted++` | highlighted and underlined text |
+| `H~2~O`, `2^10^` | subscript and superscript |
+| `- item`, `1. item`, indented for nesting | lists |
+| `- [ ] to do`, `- [x] done` | task lists — shown ticked or not, but display only: clicking does not save |
+| `> quoted` | a quote |
+| `` `code` ``, a fenced ```` ``` ```` block (with a language) or four-space indent | code, in a monospace box; not syntax-highlighted |
+| `[text](https://…)`, `<https://…>`, a bare `https://…` or `www.…` | links |
+| `![alt](https://…/picture.png)` | an image, loaded by the viewer's browser; `![](https://www.youtube.com/watch?v=…)` embeds the video |
+| pipe tables, with `:---:` alignment | tables |
+| `Text[^1]` and `[^1]: The note.` | footnotes, gathered at the bottom |
+| `Term` then `:   Definition` | a definition list |
+| `*[NAS]: Network-attached storage` | an abbreviation, explained on hover wherever `NAS` appears |
+| `---` | a rule |
+| two spaces at the end of a line | a line break inside a paragraph |
+
+#### Callouts
+
+A quote whose first line is one of GitHub's five markers becomes a coloured box with an
+icon and a title, in the theme's own colours:
 
 ```markdown
-NAS is {{status: NAS}} with {{metric: NAS / disk_percent}} used — full {{forecast: NAS}}.
-
-{{card: gauge connection="NAS" metric="Disk used" title="NAS disk"}}
+> [!WARNING]
+> Stop Plex before restarting the NAS, or the library database can corrupt.
+> - {{button: Plex / stop}}
 ```
+
+| Marker | Title | Colour |
+|---|---|---|
+| `> [!NOTE]` | Note | accent |
+| `> [!TIP]` | Tip | green |
+| `> [!IMPORTANT]` | Important | purple |
+| `> [!WARNING]` | Warning | amber |
+| `> [!CAUTION]` | Caution | red |
+
+The marker is case-blind and must be the quote's whole first line. Anything inside a
+callout works as it does elsewhere — lists, code, live values, buttons. Any other word in
+the brackets (`> [!FOO]`) leaves an ordinary quote, brackets and all. Callouts are
+top-level blocks, as on GitHub: a marker inside a list or inside another quote stays text.
+
+#### Shortcodes
+
+A shortcode is `{{kind: arguments}}`, all on one line, and is drawn by LabbyTwo itself
+after the Markdown is rendered — so it keeps up with the lab while the page is open, with
+no reload. Some sit inside a sentence; some are a whole card or list and go on a line of
+their own; a few mark the edges of a section.
+
+**Live values** — inside a sentence:
 
 | Shortcode | Shows |
 |---|---|
-| `{{status: NAS}}` | up / down / checking / paused, with the tile's coloured dot |
-| `{{metric: NAS / cpu_percent}}` | the value as the metric tile formats it; `decimals=` and `unit=` override |
-| `{{forecast: NAS}}` | "in about 6 weeks", "now" — the soonest to fill, or `{{forecast: NAS / disk_percent}}` |
-| `{{uptime: NAS}}` | uptime over 30 days, or `days=7` |
-| `{{since: NAS}}` | how long it has been up (or down), "3d 4h" |
-| `{{widget: CPU chart}}` | an existing card, by title or id, drawn read-only — on a line of its own |
-| `{{card: gauge connection="NAS" metric="cpu_percent"}}` | a card that exists only here, any type, settings as `key=value` |
+| `{{status: NAS}}` | up / down / checking / paused, with the service tile's coloured dot |
+| `{{metric: NAS / cpu_percent}}` | the latest reading as the metric tile formats it; `decimals=2` and `unit=" %"` override |
+| `{{forecast: NAS}}` | when it fills up — "in about 6 weeks", "now", "not at the current rate": the soonest to fill, or `{{forecast: NAS / disk_percent}}` for one |
+| `{{uptime: NAS}}` | uptime over the last 30 days, `99.8%`; `days=7` for another window (1–90) |
+| `{{since: NAS}}` | how long it has been as it is now, "3d 4h" — write "up for {{since: NAS}}" |
+| `{{ago: NAS}}` | how long since it was last checked — "12 s ago", "4 min ago" — counting up by the second |
+| `{{sparkline: NAS / cpu_percent 24h}}` | a trend line the size of a word; the newest value in its tooltip. The window is the last word, `1h` to `30d` (`90min`, `2w` work too); 24 hours if left off. With no metric, the response time |
+| `{{uptimebar: NAS}}` | the status page's daily strip in miniature, one cell per day, green / amber / red / hollow for no data; `days=14` (7–90, default 30) |
+| `{{link: Plex}}` | a link to the connection's own web page — the address its service tile opens (**Link opens**, else its URL, else its host) — in a new tab; `label="Open Plex"` for other words |
+| `{{button: NAS / restart}}` | one of the connection's own action buttons, by key or label; `label="Restart the NAS"` renames it |
+| `{{today}}` | the date, "Tuesday, 29 September 2026"; `format=short`, `date`, `iso`, `day`, `time`, `datetime`, or your own from `d M y H h m s t f`, separators and `'quoted words'` — `format="dddd d MMM"` |
+| `{{countdown: 2026-12-25}}` | "in 87 days", "tomorrow", "today", "yesterday", "3 days ago"; with a time, `{{countdown: 2026-12-25 18:00}}`, the last day counts down in hours and minutes. `label="Renewal"` puts a word in front. Dates are written year first |
 
-Connections are named by name (any case) or id, metrics by key or label. A name with a
-slash in it goes in quotes. Anything that names nothing shows a small **?** whose tooltip
-says why; `\{{` and code spans leave a shortcode as text. The editor's **Insert live
-value…** writes one for you. What you type is never turned into HTML — shortcodes are
-drawn by components after the Markdown is rendered and sanitised, so a shortcode cannot
-smuggle script in. None of this reaches anyone signed out: the public status page shows
-no cards or notes, and an exported tab or card carries the shortcodes as the text they are.
+**Cards and lists** — each on a line of its own (a list item or a quote holding nothing
+else counts):
 
-#### Runbooks
+| Shortcode | Draws |
+|---|---|
+| `{{widget: CPU chart}}` | an existing card, by title (any case) or id, read-only |
+| `{{card: gauge connection="NAS" metric="Disk used" title="NAS disk"}}` | a card that exists only here: any card type by key or name, its settings as `key=value` |
+| `{{down}}` | what is down right now — dot, name, "down for 12m" and what the probe said — or "Everything's up" |
+| `{{alerts}}` | the alert rules firing now — threshold, unusual-for-the-time and forecast rules — with the connection, the reading, the limit and how long; or "No alerts firing" |
+| `{{containers: stopped}}` | a Docker host's containers: `stopped`, `unhealthy`, `running`, `paused`, `restarting` or `all` (the default). Dot, name, image, uptime or exit code, health, Compose project. Read-only |
+| `{{renewals}}` | what expires next, soonest first: certificates, Tailscale keys, the Renewals list's next item and its overdue count; expired and overdue first, in red |
 
-Three more turn a note into the page you open when something breaks:
+Their options:
 
-```markdown
-{{down}}
+| Option | On | Does |
+|---|---|---|
+| `only="NAS, Plex"` | `down`, `alerts`, `renewals` | only those connections |
+| `include="checking"` | `down` | also lists what has not been checked yet |
+| `silenced="hide"` | `down` | leaves out silenced connections, which are otherwise listed and marked "silenced until 14:05" |
+| `connection="Docker"` | `containers` | which Docker connection; the first enabled one if left out |
+| `limit=10` | `containers` (default 25), `renewals` (default 5) | at most that many lines |
+| `days=30` | `renewals` | how far ahead to look; 60 days if left out. Overdue is always shown |
 
-{{if down: QNAP NAS}}
-### The NAS is down
-1. Check the power light…
-{{button: QNAP NAS / restart}}
-{{else}}
-The NAS is fine.
-{{end}}
-```
+`{{containers}}` uses the Containers tab's own calls, so a socket proxy that refuses the
+list shows a **?** naming the flag to set (`CONTAINERS=1`). However many pages show it,
+each Docker host is asked at most once every ten seconds. `{{renewals}}` reads the numbers
+certificates and the Renewals plugin already report (`cert_days_left`, `days_until_next`,
+`overdue` and friends), not the plugin itself, so it works the same with the plugin
+installed or not.
+
+**Sections and folds** — each marker on a line of its own:
 
 | Shortcode | Does |
 |---|---|
-| `{{down}}` | lists what is down right now — dot, name, "down for 12m", and what the probe said — or "Everything's up". On a line of its own |
-| `{{down: only="QNAP NAS, Plex"}}` | only those connections |
-| `{{down: include="checking"}}` | also lists what has not been checked yet |
-| `{{down: silenced="hide"}}` | leaves out silenced connections, which are otherwise listed and marked |
 | `{{if …}}` … `{{else}}` … `{{end}}` | shows what is between them only while the condition holds; `{{else}}` is optional |
-| `{{button: QNAP NAS / restart}}` | that connection's own action button, by key or label; `label="Restart the NAS"` renames it |
-
-Conditions:
+| `{{details: Full restart procedure}}` … `{{end}}` | folds what is between them under that title until clicked open; `open=true` starts it open |
 
 | Condition | Holds while |
 |---|---|
-| `down: QNAP NAS` | its last verdict is down |
-| `up: QNAP NAS` | its last verdict is up |
+| `down: NAS` | its last verdict is down |
+| `up: NAS` | its last verdict is up |
 | `any down` | anything monitored is down |
 | `all up` | everything monitored is up, and nothing is still being checked |
-| `metric: QNAP NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=` |
+| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=`, and a unit after the number is allowed if it is the metric's own |
 
-A few rules, all visible when broken rather than silently wrong:
+#### The rules
 
-- **Sections wrap whole blocks.** `{{if …}}`, `{{else}}` and `{{end}}` each go on a line of
-  their own, and the Markdown between them is rendered on its own — so a list or table
-  cannot start outside a section and end inside it (one cut in two becomes two lists).
-  They nest, up to eight deep. Headings inside keep their anchors.
+All of them visible when broken, rather than silently wrong:
+
+- **Names.** Connections are named by name (any case) or id; metrics by key (`disk_percent`)
+  or label (`Disk used`); cards by title or id. Spaces need no quotes —
+  `{{status: Home Assistant}}` — but a name with a slash in it does:
+  `{{status: "Living room / TV"}}`, since the slash separates a connection from its metric.
+  Option values with spaces go in quotes, `label="Restart the NAS"`; `\"` is a quote inside one.
+- **Writing a shortcode as text.** `\{{status: NAS}}` shows the braces; so does anything in
+  a code span or code block, which is how this README's examples survive being pasted in.
+- **Where each goes.** A value in a card's place is fine; a card or list in a sentence is a
+  **?** saying it goes on a line of its own. `{{if}}`, `{{details}}`, `{{else}}` and `{{end}}`
+  each take a whole line, and wrap whole paragraphs, lists and tables — the Markdown
+  between them is rendered on its own, so a list cannot start outside a section and end
+  inside it (one cut in two becomes two lists).
+- **Nesting.** Sections and folds nest in any order, up to eight deep. `{{end}}` closes
+  whichever was opened last, like a closing bracket, so an `{{if}}` inside a fold and a
+  fold inside an `{{if}}` both read as written. `{{else}}` belongs to an `{{if}}`: one met
+  inside a fold is a **?** there. Headings inside keep their anchors.
+- **What "?" means.** Something written cannot be shown — a connection that does not
+  exist, a metric it has never reported, a date that is not one, a window over 30 days.
+  Point at the **?** (or tab to it) and its tooltip says exactly what and why. It never
+  takes the rest of the page with it: a condition naming nothing shows a **?** and neither
+  part; an `{{end}}` or `{{else}}` with nothing to belong to is a **?** where it stands; an
+  `{{if}}` or `{{details}}` never closed is a **?** followed by everything after it, shown.
 - **A hidden part is not on the page at all**, not merely hidden, and the page switches by
-  itself as sweeps land and readings arrive — no reload.
+  itself as sweeps land and readings arrive. A closed fold's contents are on the page and
+  kept current, only folded.
 - **"Checking" is neither.** Just after a restart, before a connection's first probe,
-  `down:` and `up:` are both false for it, and `all up` is false.
+  `down:` and `up:` are both false for it, and `all up` is false — so a runbook does not
+  tell you to power-cycle the NAS because LabbyTwo restarted a second ago.
 - **Metrics are compared in their stored unit** — the unit the metric tile shows beside
   the number (%, ms, °C for temperatures whatever the display preference). A unit written
-  after the number must be that one, or is left off.
-- A condition naming no connection or metric shows a **?** and neither part. An `{{end}}`
-  or `{{else}}` with nothing to belong to shows a **?** where it is; an `{{if}}` never
-  closed shows a **?** and everything after it, rather than hiding the rest of the page.
+  after the number must be that one, or is left off: `> 90 %` is fine, `> 90 GB` on a
+  percentage is a **?**.
 - **Buttons are the real thing.** A `{{button}}` is the same button the Connections page and
   the Controls card draw, run by the same code — it asks for confirmation (a dangerous one
   always does), shows it is working, says what happened, and silences the connection
   across a reboot. An action the connection cannot offer yet (Wake on LAN with no MAC
   address, a Pi-hole with no API token) is not drawn; a **?** says why, and a misspelt one
-  lists what the connection can do. Whoever can see the note can press it, exactly as with
-  the Controls card — so a note is behind the same login as the rest of the dashboard, and
-  the public status page never shows one.
+  lists what the connection can do.
 - `{{down}}` counts what the dashboard counts: enabled connections that are monitored at
-  all (not alert channels). A silenced connection is still down, so it is listed, marked
-  "silenced until 14:05".
+  all (not alert channels). A silenced connection is still down, so it is listed and marked.
+- **Nothing you type becomes HTML.** Markdown is rendered with raw HTML off; each shortcode
+  is swapped for a placeholder first and drawn afterwards by a component that treats its
+  arguments as text. `{{link: NAS label="<script>…"}}` is a link whose words are
+  `<script>…`, and a `{{link}}` only ever goes to an http or https address.
+- **Nothing reaches anyone signed out.** Notes and cards are behind the login like the rest
+  of the dashboard — whoever can see a note can press its buttons, exactly as with the
+  Controls card — and the public status page shows neither. An exported tab or card
+  carries its shortcodes as the text they are.
+- **None of it slows the page.** Values come from what the monitor already holds in
+  memory; the few that need history (uptime, the sparkline, the uptime strip) or another
+  machine (containers) are fetched in the background and show `…` for the moment that
+  takes, sharing one query between every card and page asking the same thing.
 
-The editor's **Insert live value…** writes `{{down}}`, a section for when a chosen
-connection is down, and a button for one of its actions.
+#### A runbook, start to finish
+
+```markdown
+# When something breaks
+
+{{today}} · the NAS was checked {{ago: QNAP NAS}}
+
+{{down}}
+
+{{alerts}}
+
+{{if down: QNAP NAS}}
+## The NAS is down
+
+> [!CAUTION]
+> Plex and the backups live on it. Everything below assumes it is **off**, not just unreachable.
+
+1. Look at the power light. Amber means it is still booting — give it five minutes.
+2. Still nothing? {{button: QNAP NAS / wake}}
+3. Its page, if it answers: {{link: QNAP NAS}}
+
+{{details: Full restart procedure}}
+1. Stop what writes to it first:
+
+   {{containers: running connection="Docker"}}
+
+2. {{button: QNAP NAS / restart}}
+3. Watch it come back: {{status: QNAP NAS}}, checked {{ago: QNAP NAS}}.
+{{end}}
+{{else}}
+The NAS is {{status: QNAP NAS}} — {{metric: QNAP NAS / disk_percent}} used, full
+{{forecast: QNAP NAS}}. CPU {{sparkline: QNAP NAS / cpu_percent 24h}}, last month
+{{uptimebar: QNAP NAS}} ({{uptime: QNAP NAS}}).
+
+{{if metric: QNAP NAS / disk_percent > 90}}
+> [!WARNING]
+> Over 90% full. Clear the recycle bins before the nightly backup at 02:00.
+{{end}}
+{{end}}
+
+{{details: Anything stopped that should not be?}}
+{{containers: stopped}}
+{{end}}
+
+## Coming up
+
+{{renewals: days=45}}
+
+The domain renews {{countdown: 2026-12-01}}.
+```
+
+Open it while the NAS is fine and you see the date, "Everything's up", "No alerts firing",
+the NAS's numbers with a trend line and a month of green cells, and two closed folds; pull
+its plug and within a sweep the same note is the NAS-is-down page, with the wake and
+restart buttons and the list of containers to stop — and nothing about disk space.
 
 ### Weather and radar
 
