@@ -58,7 +58,8 @@
             Live values: <code>{{status: NAS}}</code>, <code>{{metric: NAS / cpu_percent}}</code>, <code>{{widget: card title}}</code>.
             Runbooks: <code>{{down}}</code>, <code>{{if down: NAS}}</code> … <code>{{end}}</code>, <code>{{button: NAS / restart}}</code>, <code>{{details: Title}}</code> … <code>{{end}}</code>, <code>&gt; [!WARNING]</code>.
             Lists: <code>{{alerts}}</code>, <code>{{containers: stopped}}</code>, <code>{{renewals}}</code>.
-            History: <code>{{changes: last=24h}}</code>, <code>{{incidents: open}}</code>.
+            History: <code>{{changes: last=24h}}</code>, <code>{{incidents: open}}</code>, <code>{{backups: late}}</code>.
+            Power: <code>{{power}}</code>, <code>{{power: "NAS plug" period=today}}</code>.
         </span>
         <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAsync" aria-expanded="@(_open ? "true" : "false")">
             @(_open ? "Close" : "Insert live value…")
@@ -98,8 +99,10 @@
                             <option value="renewals">What’s due to expire</option>
                             <option value="changes">What changed recently</option>
                             <option value="incidents">Recent incidents</option>
+                            <option value="backups">Backups and whether they are on time</option>
                             <option value="today">Today’s date</option>
                             <option value="countdown">Days until a date</option>
+                            <option value="power">What electricity costs</option>
                             <option value="details">A fold that opens (details)</option>
                             <option value="callout">A callout box</option>
                         </select>
@@ -163,6 +166,42 @@
                             </select>
                         </div>
                         <div class="col-sm-4 tile-meta">Each links to its timeline on the Incidents page.</div>
+                    }
+                    else if (_kind == "power")
+                    {
+                        <div class="col-sm-3">
+                            <label class="form-label small mb-1" for="@Id("power-source")">Source or service</label>
+                            <input id="@Id("power-source")" class="form-control form-control-sm" placeholder="everything" @bind="_powerSource" />
+                        </div>
+                        <div class="col-sm-3">
+                            <label class="form-label small mb-1" for="@Id("power-period")">Over</label>
+                            <select id="@Id("power-period")" class="form-select form-select-sm" @bind="_powerPeriod">
+                                <option value="month">This month so far</option>
+                                <option value="today">Today</option>
+                                <option value="week">Last 7 days</option>
+                                <option value="30d">Last 30 days</option>
+                                <option value="projected">This month, projected</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small mb-1" for="@Id("power-show")">Show</label>
+                            <select id="@Id("power-show")" class="form-select form-select-sm" @bind="_powerShow">
+                                <option value="cost">Cost</option>
+                                <option value="kwh">kWh</option>
+                                <option value="watts">Average watts</option>
+                            </select>
+                        </div>
+                    }
+                    else if (_kind == "backups")
+                    {
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("backup-show")">Which</label>
+                            <select id="@Id("backup-show")" class="form-select form-select-sm" @bind="_backupShow">
+                                <option value="">All of them</option>
+                                <option value="late">Only late ones, and restore tests due</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-4 tile-meta">From the Backups page: when each last was, late ones first. Ten at most; <code>limit=</code> for more.</div>
                     }
                     else if (_kind == "today")
                     {
@@ -313,6 +352,10 @@
     private string _callout = "note";
     private string _changeKind = "";
     private string _incidentShow = "";
+    private string _powerSource = "";
+    private string _powerPeriod = "month";
+    private string _powerShow = "cost";
+    private string _backupShow = "";
 
     // Recomputed when the text changes rather than in the markup, so a long note is not
     // re-scanned on every unrelated render of the form around it.
@@ -345,6 +388,10 @@
         // The default window is left unwritten, so the note reads {{changes}} rather than {{changes: last="24h"}}.
         "changes" => Shortcodes.Write("changes", [_changeKind], [new("last", _window == "24h" ? "" : _window)]),
         "incidents" => Shortcodes.Write("incidents", [_incidentShow]),
+        // The defaults are left unwritten, so the note reads {{power}} rather than {{power: period="month" show="cost"}}.
+        "power" => Shortcodes.Write("power", [_powerSource.Trim()],
+            [new("period", _powerPeriod == "month" ? "" : _powerPeriod), new("show", _powerShow == "cost" ? "" : _powerShow)]),
+        "backups" => Shortcodes.Write("backups", [_backupShow]),
         "widget" => _widgetTitle.Length > 0 ? Shortcodes.Write("widget", [_widgetTitle]) : null,
         "containers" => Shortcodes.Write("containers", [_state]),
         "countdown" => _date is { } date
@@ -420,7 +467,7 @@
         var structural = last.Length > 0
             && (last[0] is '#' or '-' or '*' or '+' or '>' or '|' || System.Text.RegularExpressions.Regex.IsMatch(last, @"^\d+[.)]\s"));
         var block = _kind is "widget" or "gauge" or "down" or "if-down" or "alerts" or "containers" or "updates" or "renewals"
-            or "changes" or "incidents" or "details" or "callout";
+            or "changes" or "incidents" or "backups" or "details" or "callout";
         var joined = text.Length == 0 ? code : text + (block || structural ? "\n\n" : " ") + code;
         Value = joined;
         OnParametersSet();

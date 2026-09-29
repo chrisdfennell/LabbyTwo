@@ -40,10 +40,12 @@ public sealed record Change(
     public long Id { get; init; }
 
     /// <summary>Something breaking — the red end of the feed.</summary>
-    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped or ChangeActions.Failed;
+    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped or ChangeActions.Late
+        or ChangeActions.Failed;
 
     /// <summary>Something coming back — the green end.</summary>
-    public bool IsRecovery => Action is ChangeActions.Up or ChangeActions.Cleared or ChangeActions.Started or ChangeActions.Passed;
+    public bool IsRecovery => Action is ChangeActions.Up or ChangeActions.Cleared or ChangeActions.Started
+        or ChangeActions.Completed or ChangeActions.Tested or ChangeActions.Passed;
 
     /// <summary>
     /// The status dot a change is drawn with: red for trouble, green for recovery, amber for
@@ -52,7 +54,11 @@ public sealed record Change(
     /// </summary>
     public string Dot => IsTrouble ? "status-down"
         : IsRecovery ? "status-up"
-        : Action is ChangeActions.Restarted or ChangeActions.RolledBack ? "status-flapping"
+        : Action is ChangeActions.Restarted or ChangeActions.Remediated or ChangeActions.RolledBack ? "status-flapping"
+        // Self-healing's verdicts, which are neither a failure nor a recovery of the thing
+        // itself but say which way it went: red for "did not help", green for "fixed it".
+        : Action is ChangeActions.NotHelped or ChangeActions.Failed ? "status-down"
+        : Action == ChangeActions.Helped ? "status-up"
         : "status-unknown";
 }
 
@@ -66,6 +72,12 @@ public static class ChangeKinds
     public const string Dns = "dns";
     public const string Device = "device";
     public const string Update = "update";
+    public const string Backup = "backup";
+
+    /// <summary>Somebody pressed "Something's broken" on the family status page.</summary>
+    public const string Report = "report";
+    /// <summary>Something LabbyTwo did by itself to fix an alert — see <see cref="LabbyTwo.Core.Remediation"/>.</summary>
+    public const string Remediation = "remediation";
 
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
     public static readonly IReadOnlyList<(string Key, string Label)> All =
@@ -77,6 +89,9 @@ public static class ChangeKinds
         (Dns, "DNS answers"),
         (Device, "Devices on the network"),
         (Update, "LabbyTwo updates"),
+        (Report, "Reports from the family"),
+        (Remediation, "Self-healing"),
+        (Backup, "Backups and restore tests"),
     ];
 
     /// <summary>
@@ -96,6 +111,9 @@ public static class ChangeKinds
             "dns" => Dns,
             "device" or "devices" or "lan" or "network" => Device,
             "update" or "updates" or "labbytwo" => Update,
+            "report" or "reports" or "family" => Report,
+            "remediation" or "remediations" or "self-healing" or "selfhealing" or "healing" or "fixes" => Remediation,
+            "backup" or "backups" or "restore" or "restores" => Backup,
             _ => null,
         };
     }
@@ -126,6 +144,24 @@ public static class ChangeActions
     public const string Changed = "changed";
     public const string Appeared = "appeared";
     public const string Updated = "updated";
+    public const string Reported = "reported";
+
+    // Self-healing. Kept apart from Restarted, which is Docker's word for something it
+    // saw happen, rather than something LabbyTwo chose to do.
+    public const string Remediated = "remediated";
+    public const string Helped = "helped";
+    public const string NotHelped = "not_helped";
+    public const string Failed = "failed";
+    public const string Skipped = "skipped";
+
+    /// <summary>A backup was proven to have finished — by its source, or ticked by hand.</summary>
+    public const string Completed = "completed";
+
+    /// <summary>A backup went past its due time with nothing newer to prove it.</summary>
+    public const string Late = "late";
+
+    /// <summary>Somebody recorded that they tried restoring it.</summary>
+    public const string Tested = "tested";
 
     /// <summary>A container updated from the Containers tab, now being watched (see <see cref="SafeUpdateRules"/>).</summary>
     public const string Watching = "watching";
@@ -133,8 +169,8 @@ public static class ChangeActions
     /// <summary>A safe update's watch ended with nothing wrong.</summary>
     public const string Passed = "passed";
 
-    /// <summary>A safe update's watch found something wrong, or a roll-back could not be done.</summary>
-    public const string Failed = "failed";
+    // Failed, above, is shared: self-healing's action that could not run, and a safe
+    // update's watch that found something wrong or a roll-back that could not be done.
 
     /// <summary>A container put back on the image it ran before an update.</summary>
     public const string RolledBack = "rolled-back";

@@ -468,7 +468,93 @@ public sealed class Db
             PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
 
-        // 24 — each container's configuration, one row per version, written only when a
+        // 24 — "something's broken" reports from the family status page. One row per
+        // report, read newest first; dismissing one deletes it, because the change feed
+        // already keeps the history. item_name is what the family saw at the time, kept
+        // because the owner may rename or remove the item before reading the report.
+        """
+        CREATE TABLE IF NOT EXISTS family_reports (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            INTEGER NOT NULL,
+            item_id       TEXT    NOT NULL DEFAULT '',
+            connection_id TEXT,
+            item_name     TEXT    NOT NULL,
+            message       TEXT    NOT NULL DEFAULT '',
+            reporter      TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_family_reports_ts ON family_reports (ts);
+        """,
+
+        // 25 — self-healing: the automatic action attached to an alert rule or to a
+        // connection going down, one per trigger, and what each has done about the alert
+        // it is answering — one row per firing key, so a restart of LabbyTwo neither runs
+        // it again nor loses the check it was waiting on. The runs themselves are in the
+        // change feed, which is what the page lists and the hourly cap counts.
+        """
+        CREATE TABLE IF NOT EXISTS remediations (
+            trigger              TEXT    PRIMARY KEY,
+            enabled              INTEGER NOT NULL DEFAULT 1,
+            after_minutes        INTEGER NOT NULL DEFAULT 5,
+            kind                 TEXT    NOT NULL,
+            target_connection_id TEXT    NOT NULL DEFAULT '',
+            container            TEXT    NOT NULL DEFAULT '',
+            action_id            TEXT    NOT NULL DEFAULT '',
+            max_attempts         INTEGER NOT NULL DEFAULT 1,
+            cooldown_minutes     INTEGER NOT NULL DEFAULT 30,
+            check_minutes        INTEGER NOT NULL DEFAULT 5,
+            allow_protected      INTEGER NOT NULL DEFAULT 0,
+            if_not_fixed         TEXT    NOT NULL DEFAULT 'notify') WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS remediation_state (
+            alert_key     TEXT    PRIMARY KEY,
+            episode_start INTEGER NOT NULL,
+            attempts      INTEGER NOT NULL DEFAULT 0,
+            last_run      INTEGER,
+            check_at      INTEGER,
+            did           TEXT    NOT NULL DEFAULT '',
+            outcome       TEXT    NOT NULL DEFAULT '',
+            note          TEXT    NOT NULL DEFAULT '',
+            gave_up       INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+        """,
+
+        // 26 — an incident's write-up: the id of the note written about it, so the incident
+        // can link to the note as the note links back to it. A column rather than a table:
+        // an incident has one write-up at most, and it is read with the incident anyway.
+        "ALTER TABLE incidents ADD COLUMN writeup_note TEXT",
+
+        // 27 — backup proof: the things that ought to be backed up, what proves each one was,
+        // and when a restore was last tried. Items are a handful of rows read whole, so the
+        // primary key is all they need; the sweep's own state (the newest success proven,
+        // whether lateness was announced) lives beside the settings so one read has both.
+        // Restore tests are kept for ever — a few a quarter — and only ever read for one item,
+        // newest first, which is exactly (item_id, ts).
+        """
+        CREATE TABLE IF NOT EXISTS backup_items (
+            id                TEXT    PRIMARY KEY,
+            name              TEXT    NOT NULL,
+            connection_id     TEXT,
+            source            TEXT    NOT NULL DEFAULT 'manual',
+            source_target     TEXT    NOT NULL DEFAULT '',
+            source_metric     TEXT    NOT NULL DEFAULT '',
+            frequency         TEXT    NOT NULL DEFAULT 'daily',
+            grace_hours       INTEGER,
+            alert_late        INTEGER NOT NULL DEFAULT 1,
+            drill             TEXT    NOT NULL DEFAULT 'quarterly',
+            position          INTEGER NOT NULL DEFAULT 0,
+            created_ts        INTEGER NOT NULL,
+            last_success_ts   INTEGER,
+            last_success_by   TEXT    NOT NULL DEFAULT '',
+            last_state        TEXT    NOT NULL DEFAULT '',
+            late_announced    INTEGER NOT NULL DEFAULT 0,
+            drill_reminded_ts INTEGER);
+        CREATE TABLE IF NOT EXISTS restore_tests (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id TEXT    NOT NULL,
+            ts      INTEGER NOT NULL,
+            who     TEXT    NOT NULL DEFAULT '',
+            notes   TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_restore_tests_item ON restore_tests (item_id, ts);
+        """,
+
+        // 28 — each container's configuration, one row per version, written only when a
         // container is seen with a new id and its settings differ from the last version.
         // Keyed by the container's name, which is what survives a recreate. Every read is
         // "this host's containers" or "this container's versions, newest first", both of
@@ -484,7 +570,7 @@ public sealed class Db
         CREATE INDEX IF NOT EXISTS ix_container_configs_name ON container_configs (connection_id, container, id);
         """,
 
-        // 25 — safe updates: one row per container update started from the Containers tab,
+        // 29 — safe updates: one row per container update started from the Containers tab,
         // holding the image it ran before (so it can be put back) and where the watch after
         // the update has got to. The watch job reads only the rows still in progress, through
         // a partial index that is empty whenever nothing is being watched; the tab reads the

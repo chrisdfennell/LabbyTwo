@@ -195,6 +195,7 @@ public sealed class DuplicatiProvider(IHttpClientFactory httpFactory) : IConnect
     [
         new("jobs", "Backup jobs"),
         new("jobs_failed", "Jobs whose last run failed"),
+        // Also reported per job, as hours_since_backup:<job name>, for the Backups page.
         new("hours_since_backup", "Since the last backup", " h", 1),
         new("latency_ms", "Response time", " ms"),
     ];
@@ -243,6 +244,7 @@ public sealed class DuplicatiProvider(IHttpClientFactory httpFactory) : IConnect
             var jobs = 0;
             var failed = 0;
             DateTimeOffset? newest = null;
+            var perJob = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var entry in document.RootElement.EnumerateArray())
             {
@@ -255,8 +257,15 @@ public sealed class DuplicatiProvider(IHttpClientFactory httpFactory) : IConnect
                 if (!backup.TryGetProperty("Metadata", out var metadata))
                     continue;
 
-                if (When(metadata, "LastBackupFinished") is { } finished && (newest is null || finished > newest))
-                    newest = finished;
+                if (When(metadata, "LastBackupFinished") is { } finished)
+                {
+                    if (newest is null || finished > newest)
+                        newest = finished;
+                    // Per job as well, so the Backups page can hold each job to its own
+                    // schedule: the newest of five jobs says nothing about the other four.
+                    if (backup.TryGetProperty("Name", out var jobName) && jobName.GetString() is { Length: > 0 } named)
+                        perJob[named.Trim()] = finished;
+                }
 
                 // Duplicati records the last result as a word: Success, Warning, Error, Fatal.
                 if (metadata.TryGetProperty("LastBackupStarted", out _)
@@ -269,6 +278,8 @@ public sealed class DuplicatiProvider(IHttpClientFactory httpFactory) : IConnect
             metrics["jobs_failed"] = failed;
             if (newest is { } last)
                 metrics["hours_since_backup"] = Math.Max(0, (DateTimeOffset.Now - last).TotalHours);
+            foreach (var (job, finishedAt) in perJob)
+                metrics[$"hours_since_backup:{job}"] = Math.Max(0, (DateTimeOffset.Now - finishedAt).TotalHours);
 
             var message = jobs == 0
                 ? "No backup jobs configured"

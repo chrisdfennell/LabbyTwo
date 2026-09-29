@@ -50,7 +50,7 @@ public static class ChangeLists
             }
             else
             {
-                problems.Add($"“{word}” is not a kind of change. Use services, containers, alerts, certificates, dns, devices or updates.");
+                problems.Add($"“{word}” is not a kind of change. Use services, containers, alerts, certificates, dns, devices, updates or backups.");
             }
         }
 

@@ -1,4 +1,6 @@
 @inject NotesStore Notes
+@inject NavigationManager Nav
+@using Microsoft.AspNetCore.WebUtilities
 
 <div class="page-head">
     <div>
@@ -17,7 +19,7 @@ else
     <div class="row g-3">
         @foreach (var note in _notes)
         {
-            <div class="col-12 col-lg-6">
+            <div class="col-12 col-lg-6" id="@($"note-{note.Id}")">
                 <div class="widget h-100">
                     <div class="widget-head">
                         <h2 class="widget-title text-truncate">@(note.Title is { Length: > 0 } ? note.Title : "Untitled")</h2>
@@ -88,7 +90,30 @@ else
 
     private static string Describe(NotesStore.Note note) => note.Title is { Length: > 0 } ? note.Title : "Untitled";
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+        OpenAsked();
+    }
+
+    /// <summary>
+    /// ?edit=&lt;id&gt; opens that note in the editor — where an incident's "Write up" sends
+    /// you, so the note it just wrote is ready to finish. Taken off the address once opened,
+    /// so closing the editor and reloading does not open it again.
+    /// </summary>
+    private void OpenAsked()
+    {
+        // Not while prerendering: a navigation there is a redirect, which would lose the
+        // question before the interactive render could answer it.
+        if (!RendererInfo.IsInteractive)
+            return;
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        if (!QueryHelpers.ParseQuery(uri.Query).TryGetValue("edit", out var asked))
+            return;
+        if (_notes.FirstOrDefault(n => n.Id == asked.ToString()) is { } note)
+            Edit(note);
+        Nav.NavigateTo(uri.GetLeftPart(UriPartial.Path) + $"#note-{asked}", replace: true);
+    }
 
     private async Task LoadAsync() => _notes = await Notes.ForTabAsync(Tab.Id);
 
