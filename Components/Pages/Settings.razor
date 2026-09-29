@@ -402,6 +402,30 @@
                     Docker Hub limits anonymous requests, so a few are asked at a time and each answer is reused for
                     ten minutes. Checking never updates anything — that is always a button.
                 </div>
+
+                <div class="d-flex align-items-center gap-2 flex-wrap mt-3">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="safe-updates"
+                               checked="@_safeUpdates" @onchange="ToggleSafeUpdatesAsync" />
+                        <label class="form-check-label" for="safe-updates">Safe updates: watch each one, and roll back if it fails</label>
+                    </div>
+                    <label class="form-label mb-0 tile-meta" for="safe-minutes">for</label>
+                    <select id="safe-minutes" class="form-select form-select-sm" style="width: auto"
+                            value="@_safeMinutes" @onchange="SaveSafeMinutesAsync">
+                        @foreach (var minutes in SafeUpdateRules.Minutes)
+                        {
+                            <option value="@minutes">@minutes minutes</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-text">
+                    After an Update from a Containers tab, the image the container ran before is kept, and the container
+                    is watched: if it stops, restarts, turns unhealthy, or a connection that reaches it by name goes down
+                    or fires an alert, it is recreated on the previous image by itself, and What changed says why. With
+                    this off the previous image is still kept, for rolling back by hand. A Containers tab can turn it on
+                    or off for itself. Never LabbyTwo's own container: once it has been replaced, nothing is left running
+                    to watch it or put the old one back.
+                </div>
             </div>
         </div>
     </div>
@@ -993,6 +1017,22 @@ docker compose restart labbytwo</code></pre>
         }
     }
 
+    private bool _safeUpdates = true;
+    private int _safeMinutes = SafeUpdateRules.DefaultMinutes;
+
+    private async Task ToggleSafeUpdatesAsync(ChangeEventArgs args)
+    {
+        _safeUpdates = args.Value is true;
+        await Task.Run(() => AppSettings.SaveAsync(SafeUpdates.EnabledKey, _safeUpdates ? "true" : "false"));
+    }
+
+    private async Task SaveSafeMinutesAsync(ChangeEventArgs args)
+    {
+        _safeMinutes = int.TryParse(args.Value?.ToString(), out var minutes) ? Math.Clamp(minutes, 1, 240) : SafeUpdateRules.DefaultMinutes;
+        var value = _safeMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await Task.Run(() => AppSettings.SaveAsync(SafeUpdates.MinutesKey, value));
+    }
+
     private async Task TogglePluginAutoAsync(ChangeEventArgs args)
     {
         _pluginAuto = args.Value is true;
@@ -1068,6 +1108,8 @@ docker compose restart labbytwo</code></pre>
         var settings = await AppSettings.AllAsync();
         _pluginAuto = settings.GetBool(PluginUpdater.EnabledKey);
         _containerSchedule = settings.GetInt(ContainerUpdates.ScheduleKey, 0);
+        _safeUpdates = settings.GetBool(SafeUpdates.EnabledKey, true);
+        _safeMinutes = settings.GetInt(SafeUpdates.MinutesKey, SafeUpdateRules.DefaultMinutes);
 
         await LoadAsync();
 

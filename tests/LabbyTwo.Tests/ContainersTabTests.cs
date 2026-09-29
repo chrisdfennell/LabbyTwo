@@ -933,6 +933,15 @@ public class ContainersTabRenderTests
                 .AddSingleton<ImageRegistry>()
                 .AddSingleton<ContainerUpdates>()
                 .AddSingleton<SelfUpdater>()
+                .AddSingleton(services.GetRequiredService<Db>())
+                .AddSingleton(services.GetRequiredService<AppSettingsStore>())
+                .AddSingleton(services.GetRequiredService<ChangeStore>())
+                .AddSingleton(services.GetRequiredService<IncidentStore>())
+                .AddSingleton(services.GetRequiredService<HistoryStore>())
+                .AddSingleton<HealthMonitor>()
+                .AddSingleton<SafeUpdateStore>()
+                .AddSingleton<SafeUpdates>()
+                .AddSingleton<ContainerConfigStore>()
                 .BuildServiceProvider();
 
             var html = await RenderAsync<ContainersTab>(withExtras, new()

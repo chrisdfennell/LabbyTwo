@@ -134,10 +134,95 @@
             </tbody>
         </table>
     }
+
+    <h3 class="ct-subhead">Config history <span class="tile-meta">@(History?.Count.ToString() ?? "")</span></h3>
+    @if (History is null)
+    {
+        <p class="tile-meta">Loading…</p>
+    }
+    else if (History.Count == 0)
+    {
+        <p class="tile-meta" data-history="none">
+            Nothing recorded yet. LabbyTwo writes down a container's settings the first time it sees it, and a new version
+            whenever it is recreated with different ones.
+        </p>
+    }
+    else
+    {
+        <ol class="ct-history" data-history="@History.Count">
+            @for (var i = 0; i < History.Count; i++)
+            {
+                var version = History[i];
+                var older = i + 1 < History.Count ? History[i + 1] : null;
+                var differences = older is null ? null : ContainerConfigs.Diff(older.Config, version.Config);
+                <li @key="version.Id" data-version="@version.Id">
+                    <details open="@(i == 0 && differences is { Count: > 0 })">
+                        <summary>
+                            <span class="ct-history-when">@When(version.At)</span>
+                            <span class="tile-meta">
+                                — @(differences is null ? "the first version recorded"
+                                    : differences.Count == 0 ? "the same settings as the one before"
+                                    : ContainerConfigs.Summary(differences))
+                            </span>
+                        </summary>
+                        @if (differences is { Count: > 0 })
+                        {
+                            <ul class="ct-diff">
+                                @foreach (var difference in differences)
+                                {
+                                    <li>
+                                        <span class="ct-badge">@difference.Section</span>
+                                        @if (difference.Key.Length > 0)
+                                        {
+                                            <code>@difference.Key</code>
+                                        }
+                                        @if (difference.Before is null)
+                                        {
+                                            <text><span class="tile-meta">added</span> <code class="ct-now">@Shown(difference.After)</code></text>
+                                        }
+                                        else if (difference.After is null)
+                                        {
+                                            <text><span class="tile-meta">removed, was</span> <code class="ct-was">@Shown(difference.Before)</code></text>
+                                        }
+                                        else
+                                        {
+                                            <text><code class="ct-was">@Shown(difference.Before)</code> → <code class="ct-now">@Shown(difference.After)</code></text>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        else
+                        {
+                            <p class="tile-meta mb-1">
+                                <code>@version.Config.Image</code> · restart @version.Config.Restart ·
+                                @version.Config.Env.Count environment, @version.Config.Ports.Count published
+                                port@(version.Config.Ports.Count == 1 ? "" : "s"), @version.Config.Mounts.Count
+                                mount@(version.Config.Mounts.Count == 1 ? "" : "s"), @version.Config.Networks.Count
+                                network@(version.Config.Networks.Count == 1 ? "" : "s").
+                            </p>
+                        }
+                    </details>
+                </li>
+            }
+        </ol>
+        <p class="tile-meta">
+            A variable or label whose name looks like a secret — a password, token or key — is never stored: only a short
+            hash of it, enough to tell that it changed. The image's own defaults are left out, so an update that brings a
+            new default is not mistaken for a change you made. The last @ContainerConfigStore.Keep versions are kept.
+        </p>
+    }
 </div>
 
 @code {
     [Parameter, EditorRequired] public ContainerDetails Details { get; set; } = default!;
+
+    /// <summary>
+    /// The container's recorded settings, newest first, or null while they load. Each is
+    /// shown against the one before it, which is the question anybody opening this asks:
+    /// what was different last time it worked?
+    /// </summary>
+    [Parameter] public IReadOnlyList<ContainerConfigVersion>? History { get; set; }
 
     private IReadOnlyList<ContainerSafety.EnvEntry> _env = [];
     private readonly HashSet<int> _revealed = [];
@@ -181,6 +266,8 @@
         "on-failure" => Details.RestartRetries > 0 ? $"On failure, up to {Details.RestartRetries} times" : "On failure",
         var other => other,
     };
+
+    private static string Shown(string? value) => string.IsNullOrEmpty(value) ? "(empty)" : value;
 
     private static string When(DateTimeOffset? time) =>
         time is { } at ? $"{at.ToLocalTime():yyyy-MM-dd HH:mm:ss} ({Ago.Since(at)})" : "—";

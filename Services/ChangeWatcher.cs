@@ -22,6 +22,9 @@ namespace LabbyTwo.Services;
 /// what the network scan plugin reports; read as a metric so the host knows nothing about
 /// the plugin.</item>
 /// <item><b>LabbyTwo itself</b> — a version different from the one that last started.</item>
+/// <item><b>Container settings</b> — handed the same list, <see cref="ContainerConfigHistory"/>
+/// inspects only the containers with a new id and records a "config changed" entry when
+/// their settings differ from the last version.</item>
 /// </list>
 ///
 /// DNS answers are recorded by <see cref="DnsCheck"/> when somebody runs it, since it only
@@ -36,6 +39,7 @@ public sealed class ChangeWatcher(
     ConfigStore config,
     HealthMonitor monitor,
     MetricAlertService alerts,
+    ContainerConfigHistory configs,
     ILogger<ChangeWatcher> log) : IHostedService
 {
     /// <summary>The baseline key holding the version that last started.</summary>
@@ -261,6 +265,16 @@ public sealed class ChangeWatcher(
             }
 
             await NoteContainersAsync(connection, rows, state.At, ct);
+
+            // The same list, so the same moment: only containers with a new id are inspected.
+            try
+            {
+                await configs.NoteAsync(connection, endpoint, timeout, rows, state.At, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogDebug(ex, "Could not record the container settings on {Connection}", connection.Name);
+            }
         }
 
         // Forget hosts that were deleted, so a new one reusing nothing starts clean.

@@ -495,6 +495,8 @@ kind, by connection and by how far back:
 | DNS | a LAN name resolves to different addresses | the **Check now** DNS test on the health page, when you run it — it never runs by itself. Public names are left out, since a CDN answers differently every minute |
 | Devices | the network scan finds addresses it has never seen | any connection reporting `devices_new`, which the network scan plugin does |
 | Updates | LabbyTwo starts as a different version from last time | a comparison at startup |
+| Container settings | a container is recreated with different settings — "sonarr config changed: env PUID; ports" | the same container list: only a container with a new id is inspected, and only one whose settings differ is written (see [Config history](#config-history)) |
+| Safe updates | an update from the Containers tab is being watched, passes, fails, or is rolled back | the watch after the update (see [Safe updates](#safe-updates)) |
 
 Containers are compared by polling rather than by Docker's event stream on purpose: the
 stream is a request held open for ever, and socket proxies, TCP endpoints and restarts all
@@ -1465,6 +1467,10 @@ What each feature asks Docker for, and what the proxy has to allow:
 | Containers tab: image ages, **Check for updates** | `GET /images/{id}/json` (then the registries, not Docker) | `IMAGES=1` |
 | Containers tab: **⬆ Update**, through a Watchtower's HTTP API | none — LabbyTwo calls Watchtower | none |
 | Containers tab: **⬆ Update**, one-shot Watchtower | as **Update now** above | `CONTAINERS=1`, `IMAGES=1`, `POST=1` — the same power as the raw socket |
+| Containers tab: keeping the previous image before an update | `GET /containers/{id}/json`, `GET /images/{id}/json`, `POST /images/{id}/tag`, `DELETE /images/{last tag}` | `CONTAINERS=1`, `IMAGES=1`, `POST=1` — without them the update still runs, with less of a way back |
+| Containers tab: watching after a safe update | `GET /containers/{name}/json` once a minute while a watch is on | `CONTAINERS=1` |
+| Containers tab: **↶** roll back, by hand or by a failed watch | `POST /images/{id}/tag`, `POST /images/create` (only if the old image was deleted), `POST /containers/{id}/stop`, `/rename`, `POST /containers/create`, `POST /networks/{name}/connect`, `POST /containers/{id}/start`, `DELETE /containers/{id}` | `CONTAINERS=1`, `IMAGES=1`, `NETWORKS=1`, `POST=1` — the same power as the raw socket |
+| Config history | `GET /containers/{id}/json` for a container with a new id, `GET /images/{id}/json` once per image | `CONTAINERS=1`; `IMAGES=1` to leave the image's defaults out |
 | Terminal plugin (`docker exec`) | `POST /containers/{id}/exec`, `POST /exec/{id}/start` | `CONTAINERS=1`, `EXEC=1`, `POST=1` — root-equivalent too |
 
 When the proxy refuses something, LabbyTwo says which flag to set rather than "HTTP 403".
@@ -1775,7 +1781,7 @@ against its pull limit.
   (`POST /v1/update?image=lscr.io/linuxserver/sonarr,…`). Watchtower still only touches
   containers it is watching — if you started it with container names, the others are left
   alone, and the page says to check again to see which it did;
-- otherwise it starts a one-shot `watchtower --run-once --cleanup sonarr radarr …` through
+- otherwise it starts a one-shot `watchtower --run-once sonarr radarr …` through
   the Docker API, told exactly those names, with the same DNS servers, network and
   `DOCKER_API_VERSION` the self-update helper gets. It works in the background; check
   again in a minute to see it done.
@@ -1787,6 +1793,94 @@ listed in the confirmation as left alone, to be done one at a time. Connections 
 an updated container by name are silenced while it is recreated, as for a restart.
 
 Turn the button off with **Offer to check registries for updates** in the tab's settings.
+
+#### Safe updates
+
+A new version that does not start is the usual way an update goes wrong, and it tends to be
+found an hour later by somebody else. So every update started from the Containers tab keeps
+the way back, and — unless you turn it off — watches the container afterwards and takes the
+way back by itself if the new version fails.
+
+**Before the update**, LabbyTwo writes down the image the container runs now three ways,
+since any one of them can be gone by the time it is needed: its id; its registry digest
+(`lscr.io/linuxserver/sonarr@sha256:…`), which can always be pulled again; and a tag,
+`labbytwo-rollback/sonarr:20260929-140201`, so that nothing tidying up untagged images
+takes it. The one-shot Watchtower is started **without** `--cleanup` for the same reason. A
+Watchtower you run yourself behaves as its own flags say: with `WATCHTOWER_CLEANUP` on it can
+delete the old image, tag and all, and a roll-back then pulls it again by digest (which a
+locally built image cannot do — the page says so). One previous image is kept per container:
+the next update's tag replaces the last.
+
+**After the update**, once the container is seen on its new image, it is watched for
+**10 minutes** (Settings → Updates: 5 to 60). The watch fails, and the previous image is put
+back, if in that time:
+
+- the container stops, crash-restarts (Docker's restart count goes up), or its
+  `HEALTHCHECK` says **unhealthy**;
+- a connection that reaches it by name — `http://sonarr:8989`, the same match that silences
+  connections during a restart — is down, or goes down, after the first two minutes (a new
+  version takes a moment to start listening; a connection that was already down before the
+  update does not count);
+- an alert rule fires on one of those connections.
+
+A container replaced or removed by somebody else during the watch is left alone — that is
+no longer the update LabbyTwo made. An update that never happens (Watchtower found nothing,
+or does not watch that container) is given up after half an hour. A watch outlives a restart
+of LabbyTwo: it is kept in the database and picked up again within a minute.
+
+**Rolling back** recreates the container on the previous image with the settings it has now,
+the way Compose or Watchtower would, since Watchtower itself can only move a container
+forward. The container's own reference (`sonarr:latest`) is pointed back at the old image and
+the container created from it, so it reads exactly as before and a `docker compose up` does
+not quietly bring the new version back without a pull. The new image's own defaults — its
+environment, labels and command — are taken out first, so the old version gets its own; the
+hostname and network alias Docker made from the old container's id are dropped; anonymous
+volumes are handed over by name rather than replaced with empty ones; and the old container
+is stopped and renamed aside rather than removed, and only removed once the new one has
+started. If anything fails part-way, the original is renamed back and started again.
+
+Every step goes into **What changed** — "sonarr was updated — watching it for 10 minutes",
+"sonarr failed its watch after updating: it stopped with exit code 1", "sonarr was rolled
+back to its previous image" — so an incident's timeline shows it, and the roll-back names
+the incident if one is open. The row says where it has got to: *watching after update… 6 min
+left*, *rolled back: it crashed and restarted*. A container whose previous image is kept has
+a **↶** button to roll it back by hand at any time, watched or not.
+
+Safe update is on by default. Turn it off for everything in **Settings → Updates**, or for
+one tab with **Safe updates** in its settings; the previous image is still kept either way.
+The newer image stays published, so the next check offers it again — and a Watchtower of
+your own running on a schedule will update it again too, so label the container
+`com.centurylinklabs.watchtower.enable=false` or pin its tag until a fixed version is out.
+
+**LabbyTwo's own container is never watched or rolled back.** Once it has been replaced
+there is no LabbyTwo left running the old version to watch the new one, and a new one that
+failed could not put itself back — stopping the container is the end of whatever was doing
+the stopping. Its update confirmation says so.
+
+#### Config history
+
+Every container's settings are written down whenever they change: the image reference,
+environment, published ports, mounts, networks, labels, restart policy and command, keyed
+by the container's name so a recreate is a new version of the same thing. **🔍 Inspect**
+on a row shows the versions, newest first, each against the one before it — "PUID: 1000 →
+1001", "added TZ", "ports", "restart policy" — and **What changed** gets a line for each
+change: "sonarr config changed: env PUID; ports".
+
+It costs next to nothing. A container's settings cannot change without it being recreated,
+so the watcher that already compares every sweep's container list only inspects a container
+with a new id — once — and writes only when its settings actually differ. What the image
+brings with it (its environment, labels and command) is left out, so an update that ships a
+new default is not mistaken for a change you made; that needs `IMAGES=1` on a socket proxy,
+and without it the defaults stay in and the version says so. The last 20 versions of each
+container are kept. The one thing it misses is `docker update`, which changes a restart
+policy or a limit in place; the next recreate records it.
+
+**Secrets are never stored.** A variable or label whose name looks like one — anything with
+`PASS`, `SECRET`, `TOKEN`, `KEY`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `SALT`, `COOKIE`,
+`SESSION` and the like in it — or whose value is a URL with a password in it, is kept only as
+an eight-digit keyed hash of the value (`hidden #3fa9c2e1`): enough to see that it changed,
+not what it is. The key is random per install, so the hash cannot be looked up in a table
+of common passwords.
 
 ## When you delete the wrong thing
 

@@ -40,10 +40,10 @@ public sealed record Change(
     public long Id { get; init; }
 
     /// <summary>Something breaking — the red end of the feed.</summary>
-    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped;
+    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped or ChangeActions.Failed;
 
     /// <summary>Something coming back — the green end.</summary>
-    public bool IsRecovery => Action is ChangeActions.Up or ChangeActions.Cleared or ChangeActions.Started;
+    public bool IsRecovery => Action is ChangeActions.Up or ChangeActions.Cleared or ChangeActions.Started or ChangeActions.Passed;
 
     /// <summary>
     /// The status dot a change is drawn with: red for trouble, green for recovery, amber for
@@ -52,7 +52,7 @@ public sealed record Change(
     /// </summary>
     public string Dot => IsTrouble ? "status-down"
         : IsRecovery ? "status-up"
-        : Action == ChangeActions.Restarted ? "status-flapping"
+        : Action is ChangeActions.Restarted or ChangeActions.RolledBack ? "status-flapping"
         : "status-unknown";
 }
 
@@ -126,6 +126,18 @@ public static class ChangeActions
     public const string Changed = "changed";
     public const string Appeared = "appeared";
     public const string Updated = "updated";
+
+    /// <summary>A container updated from the Containers tab, now being watched (see <see cref="SafeUpdateRules"/>).</summary>
+    public const string Watching = "watching";
+
+    /// <summary>A safe update's watch ended with nothing wrong.</summary>
+    public const string Passed = "passed";
+
+    /// <summary>A safe update's watch found something wrong, or a roll-back could not be done.</summary>
+    public const string Failed = "failed";
+
+    /// <summary>A container put back on the image it ran before an update.</summary>
+    public const string RolledBack = "rolled-back";
 }
 
 /// <summary>

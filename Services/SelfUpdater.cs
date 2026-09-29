@@ -410,7 +410,13 @@ public sealed class SelfUpdater(
     /// Null when a one-shot Watchtower has been started and is working in the background;
     /// otherwise what Watchtower said, once it finished.
     /// </returns>
-    public async Task<string?> UpdateContainersAsync(string endpoint, IReadOnlyList<Target> targets, CancellationToken ct = default)
+    /// <param name="keepPrevious">
+    /// Start the one-shot helper without <c>--cleanup</c>, so the image each container ran
+    /// before is still there to roll back to (see <see cref="SafeUpdates"/>). A Watchtower
+    /// reached through its API cleans up or not by its own flags.
+    /// </param>
+    public async Task<string?> UpdateContainersAsync(
+        string endpoint, IReadOnlyList<Target> targets, CancellationToken ct = default, bool keepPrevious = false)
     {
         if (targets.Count == 0)
             throw new ArgumentException("Nothing to update.", nameof(targets));
@@ -437,7 +443,7 @@ public sealed class SelfUpdater(
         }
 
         await StartHelperAsync(endpoint, [.. targets.Select(t => t.Name).Distinct(StringComparer.Ordinal)],
-            self?.Dns, self?.Network, ct);
+            self?.Dns, self?.Network, ct, cleanup: !keepPrevious);
         return null;
     }
 
@@ -551,7 +557,8 @@ public sealed class SelfUpdater(
 
     /// <summary>Pulls Watchtower, creates the one-shot helper for these names, and starts it.</summary>
     private static async Task StartHelperAsync(
-        string endpoint, IReadOnlyList<string> containers, string[]? dns, string? network, CancellationToken ct)
+        string endpoint, IReadOnlyList<string> containers, string[]? dns, string? network, CancellationToken ct,
+        bool cleanup = true)
     {
         // Pull first. On a host that has never run Watchtower, creating the container would
         // otherwise fail with "no such image" and leave nothing to show for the click.
@@ -559,7 +566,7 @@ public sealed class SelfUpdater(
             $"/images/create?fromImage={Uri.EscapeDataString(WatchtowerImage)}&tag=latest", null, ct);
 
         using var created = JsonDocument.Parse(await DockerSocket.PostAsync(
-            endpoint, Timeout, "/containers/create", OneShotRequest(endpoint, containers, dns, network), ct));
+            endpoint, Timeout, "/containers/create", OneShotRequest(endpoint, containers, dns, network, cleanup), ct));
 
         var id = created.RootElement.TryGetProperty("Id", out var identifier) ? identifier.GetString() : null;
         if (id is null)
@@ -585,7 +592,10 @@ public sealed class SelfUpdater(
     /// </summary>
     /// <param name="dns">DNS servers for the helper — LabbyTwo's own, where it has some.</param>
     /// <param name="network">A network to join when Docker is reached over TCP, so a proxy's name resolves.</param>
-    public static string OneShotRequest(string endpoint, IReadOnlyList<string> containers, string[]? dns, string? network)
+    /// <param name="cleanup">Whether Watchtower deletes each old image once the container is recreated.
+    /// Off for a safe update, which keeps the old image to roll back to.</param>
+    public static string OneShotRequest(
+        string endpoint, IReadOnlyList<string> containers, string[]? dns, string? network, bool cleanup = true)
     {
         if (containers.Count == 0 || containers.Any(string.IsNullOrWhiteSpace))
             throw new ArgumentException("A one-shot Watchtower needs container names; without any it updates everything.",
@@ -598,7 +608,7 @@ public sealed class SelfUpdater(
             Image = $"{WatchtowerImage}:latest",
             // --run-once so it does the job and exits, rather than becoming a second
             // scheduler competing with whatever the user already runs.
-            Cmd = new[] { "--run-once", "--cleanup" }.Concat(containers).ToArray(),
+            Cmd = (cleanup ? new[] { "--run-once", "--cleanup" } : ["--run-once"]).Concat(containers).ToArray(),
             // Watchtower's Docker client asks for API 1.25 unless told otherwise, and Docker 29
             // refuses anything that old — the helper would start, log one error and exit,
             // leaving nothing updated and nothing on the page to say why.

@@ -39,6 +39,7 @@
                 var listed = IsListed(row);
                 var stats = Stats.TryGetValue(row.Id, out var s) ? s : null;
                 var update = Updates.TryGetValue(row.Id, out var u) ? u : null;
+                var safe = Safe.TryGetValue(row.Name, out var su) ? su : null;
                 <div class="ct-row" role="listitem" @key="row.Id" data-container="@row.Name">
                     <span class="status-dot @Dot(row)" title="@row.State"></span>
 
@@ -95,6 +96,11 @@
                                 }
                             }
                         </div>
+                        @if (safe?.Badge(DateTimeOffset.Now) is { } safeBadge)
+                        {
+                            <div class="ct-safe ct-safe-@SafeUpdate.Word(safe.State)" data-safe="@SafeUpdate.Word(safe.State)"
+                                 title="@SafeTitle(safe)">@safeBadge</div>
+                        }
                         <div class="tile-meta text-truncate" title="@row.Image">
                             @ImageText(row) · @StatusText(row)@if (update?.ImageCreated is { } built)
                             {
@@ -139,6 +145,15 @@
                                     aria-label="@($"Update {row.Name}")"
                                     data-action="update"
                                     @onclick="() => OnUpdate.InvokeAsync(row)">⬆</button>
+                        }
+                        @if (AllowActions && !self && safe is { CanRollBack: true } && safe.NewImage == row.ImageId)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary"
+                                    disabled="@(Busy is not null)"
+                                    title="@($"Roll back to the previous image — {row.Name} ran {ContainerChanges.ShortImage(safe.PreviousImage)} before it was updated {Ago.Since(safe.RequestedAt)}")"
+                                    aria-label="@($"Roll {row.Name} back to its previous image")"
+                                    data-action="rollback"
+                                    @onclick="() => OnRollback.InvokeAsync(row)">↶</button>
                         }
                         @if (AllowActions)
                         {
@@ -197,6 +212,14 @@
     [Parameter] public bool Checked { get; set; }
 
     [Parameter] public EventCallback<ContainerRow> OnUpdate { get; set; }
+
+    /// <summary>
+    /// The newest update started from this page for each container, by name — what the
+    /// watch after it says, and whether the previous image is kept to roll back to.
+    /// </summary>
+    [Parameter] public IReadOnlyDictionary<string, SafeUpdate> Safe { get; set; } = new Dictionary<string, SafeUpdate>();
+
+    [Parameter] public EventCallback<ContainerRow> OnRollback { get; set; }
     [Parameter] public bool AllowActions { get; set; } = true;
     [Parameter] public bool ShowStats { get; set; } = true;
 
@@ -276,6 +299,19 @@
             text += " Labelled for Watchtower to leave alone, so it is not offered here.";
         return text;
     }
+
+    private static string SafeTitle(SafeUpdate safe) => safe.State switch
+    {
+        SafeUpdateState.Waiting =>
+            "Watchtower is pulling the new image. Once the container is on it, LabbyTwo watches it and puts the previous image back if it fails.",
+        SafeUpdateState.Watching =>
+            "If it stops, restarts, turns unhealthy, or a connection pointing at it goes down or fires an alert before the watch ends, " +
+            $"LabbyTwo puts image {ContainerChanges.ShortImage(safe.PreviousImage)} back.",
+        SafeUpdateState.RolledBack =>
+            $"Put back on image {ContainerChanges.ShortImage(safe.PreviousImage)}. A newer image is still published, so the next update will offer it again.",
+        SafeUpdateState.RollbackFailed => "It should have been put back on its previous image and could not be. What changed has the details.",
+        _ => safe.Reason,
+    };
 
     private static string StatusText(ContainerRow row) =>
         row.Uptime.Length > 0 ? row.Uptime : row.State;

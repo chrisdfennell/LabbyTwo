@@ -97,3 +97,16 @@
     .ct-stats { grid-column: 2 / 4; }
     .ct-actions { grid-column: 1 / 4; justify-content: flex-start; }
 }
+
+/* The watch after a safe update, and how it ended: a line of its own under the name, so a
+   countdown or a reason never pushes the badges off a phone's width. */
+.ct-safe {
+    font-size: .75rem;
+    color: var(--accent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ct-safe-rolled-back { color: var(--warn); }
+.ct-safe-rollback-failed { color: var(--down); }
+.ct-safe-passed { color: var(--up); }

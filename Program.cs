@@ -136,6 +136,17 @@ builder.Services.AddSingleton<SelfUpdater>();
 // runs the schedule is an IBackgroundJob and is discovered.
 builder.Services.AddSingleton<ImageRegistry>();
 builder.Services.AddSingleton<ContainerUpdates>();
+
+// Safe updates: the image a container ran before an update from the Containers tab, and
+// the watch after it that puts that image back if the new one fails. The job that watches
+// is an IBackgroundJob and is discovered.
+builder.Services.AddSingleton<SafeUpdateStore>();
+builder.Services.AddSingleton<SafeUpdates>();
+
+// Each container's configuration, version by version. Fed by the change watcher from the
+// container lists it already compares; only a container with a new id is inspected.
+builder.Services.AddSingleton<ContainerConfigStore>();
+builder.Services.AddSingleton<ContainerConfigHistory>();
 builder.Services.AddSingleton<DashboardImportService>();
 
 // Copies the nightly backup off this machine. Not discovered: the backup job calls it.
