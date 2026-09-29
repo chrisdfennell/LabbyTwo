@@ -8,11 +8,27 @@ namespace LabbyTwo.Core;
 /// <param name="Registry">Host name, or "docker.io" when the reference does not name one.</param>
 /// <param name="Repository">Everything between the registry and the tag.</param>
 /// <param name="Tag">The tag, defaulting to "latest".</param>
-public sealed record ImageRef(string Registry, string Repository, string Tag)
+/// <param name="Digest">
+/// The <c>sha256:…</c> a reference like <c>nginx@sha256:…</c> is pinned to, or null. A
+/// pinned container runs exactly that image whatever the tag does since, so there is never
+/// anything newer to update it to.
+/// </param>
+public sealed record ImageRef(string Registry, string Repository, string Tag, string? Digest = null)
 {
     public const string DockerHub = "docker.io";
 
     public bool IsDockerHub => Registry.Equals(DockerHub, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsPinned => Digest is { Length: > 0 };
+
+    /// <summary>
+    /// Where the registry's v2 API answers. Docker Hub's does not live at docker.io — that
+    /// name is only what references default to — but at registry-1.docker.io.
+    /// </summary>
+    public string RegistryHost => IsDockerHub ? "registry-1.docker.io" : Registry;
+
+    /// <summary>The repository as the registry's v2 API spells it: Hub's official images under "library/".</summary>
+    public string RegistryRepository => IsDockerHub ? HubRepository : Repository;
 
     /// <summary>
     /// What Docker Hub's API wants. Official images live under "library", so plain
@@ -36,9 +52,13 @@ public sealed record ImageRef(string Registry, string Repository, string Tag)
             return new ImageRef(DockerHub, "", "latest");
 
         // A digest pins the exact image; the repository is still the part before it.
+        string? digest = null;
         var at = text.IndexOf('@');
         if (at >= 0)
+        {
+            digest = text[(at + 1)..];
             text = text[..at];
+        }
 
         var registry = DockerHub;
         var remainder = text;
@@ -65,6 +85,6 @@ public sealed record ImageRef(string Registry, string Repository, string Tag)
             remainder = remainder[..colon];
         }
 
-        return new ImageRef(registry, remainder, tag.Length > 0 ? tag : "latest");
+        return new ImageRef(registry, remainder, tag.Length > 0 ? tag : "latest", digest is { Length: > 0 } ? digest : null);
     }
 }

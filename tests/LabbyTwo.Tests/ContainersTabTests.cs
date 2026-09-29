@@ -864,6 +864,40 @@ public class ContainersTabRenderTests
     }
 
     [Fact]
+    public async Task AContainerBehindItsRegistryGetsABadgeAndAnUpdateButton()
+    {
+        var sonarr = ContainerListTests.Row("sonarr");
+        var db = ContainerListTests.Row("db");
+        var homemade = ContainerListTests.Row("homemade");
+        var built = DateTimeOffset.UtcNow.AddDays(-95);
+        var updates = new Dictionary<string, ContainerUpdate>
+        {
+            [sonarr.Id] = new(sonarr.Id, "sonarr", "lscr.io/linuxserver/sonarr", UpdateState.Behind, built, DateTimeOffset.UtcNow.AddDays(-3)),
+            [db.Id] = new(db.Id, "db", "postgres:16", UpdateState.Behind, built, Excluded: true),
+            [homemade.Id] = new(homemade.Id, "homemade", "homemade", UpdateState.LocalBuild, built),
+        };
+
+        await using var services = Bare();
+        var html = WebUtility.HtmlDecode(await RenderAsync<ContainerGroupCard>(services, new()
+        {
+            [nameof(ContainerGroupCard.Group)] = new ContainerGroup(null, [sonarr, db, homemade]),
+            [nameof(ContainerGroupCard.Updates)] = updates,
+            [nameof(ContainerGroupCard.Checked)] = true,
+        }));
+
+        Assert.Contains("aria-label=\"Update sonarr\"", html);
+        Assert.Contains("published 3 days ago", html);
+        Assert.Contains("image 3 months old", html);
+
+        // Behind, but labelled for Watchtower to leave alone: said so, and no button.
+        Assert.Contains("excluded from updates", html);
+        Assert.DoesNotContain("aria-label=\"Update db\"", html);
+
+        Assert.Contains("built here", html);
+        Assert.DoesNotContain("aria-label=\"Update homemade\"", html);
+    }
+
+    [Fact]
     public async Task ReadOnlyDrawsNoButtonsThatChangeAnything()
     {
         var group = new ContainerGroup(null, [ContainerListTests.Row("sonarr")]);
@@ -895,6 +929,10 @@ public class ContainersTabRenderTests
                 .AddSingleton(services.GetRequiredService<Microsoft.Extensions.Options.IOptions<LabbyOptions>>())
                 .AddSingleton(new Offload(NullLogger<Offload>.Instance))
                 .AddSingleton<IJSRuntime, NoJs>()
+                .AddHttpClient()
+                .AddSingleton<ImageRegistry>()
+                .AddSingleton<ContainerUpdates>()
+                .AddSingleton<SelfUpdater>()
                 .BuildServiceProvider();
 
             var html = await RenderAsync<ContainersTab>(withExtras, new()

@@ -128,6 +128,12 @@ builder.Services.AddSingleton<TabTemplates>();
 builder.Services.AddSingleton<FaviconService>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<SelfUpdater>();
+
+// Whether each container's registry has published something newer. Asked only when
+// somebody presses "Check for updates", or on the schedule if they chose one; the job that
+// runs the schedule is an IBackgroundJob and is discovered.
+builder.Services.AddSingleton<ImageRegistry>();
+builder.Services.AddSingleton<ContainerUpdates>();
 builder.Services.AddSingleton<DashboardImportService>();
 
 // Copies the nightly backup off this machine. Not discovered: the backup job calls it.

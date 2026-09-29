@@ -38,6 +38,7 @@
                 var self = IsSelf(row);
                 var listed = IsListed(row);
                 var stats = Stats.TryGetValue(row.Id, out var s) ? s : null;
+                var update = Updates.TryGetValue(row.Id, out var u) ? u : null;
                 <div class="ct-row" role="listitem" @key="row.Id" data-container="@row.Name">
                     <span class="status-dot @Dot(row)" title="@row.State"></span>
 
@@ -62,9 +63,43 @@
                                 <span class="ct-badge ct-update"
                                       title="A newer @tag has been pulled, but this container still runs the old image. Recreate it (docker compose up -d) to use the new one.">⬆ newer image</span>
                             }
+                            @if (update is not null)
+                            {
+                                @* The registry's verdicts only once somebody asked a registry;
+                                   before that, "built here" would be the only badge and read
+                                   like a complaint. The label is local and always shown. *@
+                                @if (update.IsBehind)
+                                {
+                                    <span class="ct-badge ct-update" data-update="behind" title="@UpdateTitle(update)">⬆ update available</span>
+                                }
+                                else if (update.State == UpdateState.Started)
+                                {
+                                    <span class="ct-badge ct-update" data-update="started" title="@update.Note">updating…</span>
+                                }
+                                else if (Checked && update.State == UpdateState.LocalBuild)
+                                {
+                                    <span class="ct-badge" data-update="local" title="@update.Note">built here</span>
+                                }
+                                else if (Checked && update.State == UpdateState.Pinned)
+                                {
+                                    <span class="ct-badge" data-update="pinned" title="@update.Note">pinned</span>
+                                }
+                                else if (Checked && update.State == UpdateState.Unknown)
+                                {
+                                    <span class="ct-badge" data-update="unknown" title="@update.Note">not checked</span>
+                                }
+                                @if (update.Excluded)
+                                {
+                                    <span class="ct-badge" data-update="excluded"
+                                          title="Labelled com.centurylinklabs.watchtower.enable=false: Watchtower leaves it alone, and so do the update buttons here.">excluded from updates</span>
+                                }
+                            }
                         </div>
                         <div class="tile-meta text-truncate" title="@row.Image">
-                            @ImageText(row) · @StatusText(row)
+                            @ImageText(row) · @StatusText(row)@if (update?.ImageCreated is { } built)
+                            {
+                                <span title="@($"The running image was built {built.ToLocalTime():d MMM yyyy}")"> · image @ContainerUpdates.Age(built) old</span>
+                            }
                         </div>
                     </div>
 
@@ -96,6 +131,15 @@
                     </div>
 
                     <div class="ct-actions">
+                        @if (AllowActions && update is { CanUpdate: true })
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                    disabled="@(Busy is not null)"
+                                    title="@($"Update {row.Name} to the newer image")"
+                                    aria-label="@($"Update {row.Name}")"
+                                    data-action="update"
+                                    @onclick="() => OnUpdate.InvokeAsync(row)">⬆</button>
+                        }
                         @if (AllowActions)
                         {
                             @foreach (var action in RowActions(row))
@@ -142,6 +186,17 @@
     [Parameter] public IReadOnlyDictionary<string, ContainerStats> Stats { get; set; } = new Dictionary<string, ContainerStats>();
     [Parameter] public IReadOnlyDictionary<string, string> Stale { get; set; } = new Dictionary<string, string>();
     [Parameter] public DockerCapabilities Capabilities { get; set; } = DockerCapabilities.All;
+
+    /// <summary>
+    /// Each container's standing against its registry, by container id: image ages and the
+    /// label from Docker alone, and — once somebody pressed "Check for updates" — the verdict.
+    /// </summary>
+    [Parameter] public IReadOnlyDictionary<string, ContainerUpdate> Updates { get; set; } = new Dictionary<string, ContainerUpdate>();
+
+    /// <summary>Whether a registry was asked, which is when "built here" and "not checked" mean something.</summary>
+    [Parameter] public bool Checked { get; set; }
+
+    [Parameter] public EventCallback<ContainerRow> OnUpdate { get; set; }
     [Parameter] public bool AllowActions { get; set; } = true;
     [Parameter] public bool ShowStats { get; set; } = true;
 
@@ -208,6 +263,19 @@
         : Stale.TryGetValue(row.Id, out var tag) ? tag
         : row.Image.StartsWith("sha256:", StringComparison.Ordinal) ? row.Image[7..Math.Min(19, row.Image.Length)]
         : row.Image[..Math.Min(12, row.Image.Length)];
+
+    private static string UpdateTitle(ContainerUpdate update)
+    {
+        var text = $"The registry has a newer {update.Reference}";
+        if (update.Published is { } published)
+            text += $", published {ContainerUpdates.Age(published)} ago";
+        text += ".";
+        if (update.ImageCreated is { } built)
+            text += $" The one running was built {built.ToLocalTime():d MMM yyyy}.";
+        if (update.Excluded)
+            text += " Labelled for Watchtower to leave alone, so it is not offered here.";
+        return text;
+    }
 
     private static string StatusText(ContainerRow row) =>
         row.Uptime.Length > 0 ? row.Uptime : row.State;
