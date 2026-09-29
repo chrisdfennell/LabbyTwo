@@ -125,15 +125,25 @@ public sealed record AlertRule
 
     public double ClearsAt => ClearThreshold ?? Threshold;
 
+    /// <summary>
+    /// Strictly past the line, because that is what the editor says: "above" and "below".
+    /// It used to be "at or above", and every rule whose healthy value sits exactly on its
+    /// threshold fired while healthy — "a disk is failing" at 0 failing disks, "an AD
+    /// service has gone" with all 4 answering, "DNS has stopped" with DNS answering — and,
+    /// firing state living in memory, fired again after every restart.
+    /// </summary>
     public bool IsBreaching(double value) =>
-        Comparison == Comparison.Above ? value >= Threshold : value <= Threshold;
+        Comparison == Comparison.Above ? value > Threshold : value < Threshold;
 
     /// <summary>
-    /// Deliberately not just <c>!IsBreaching</c>: between the two thresholds the rule
-    /// holds whatever state it is in, which is the whole point of hysteresis.
+    /// Back on the right side of the clearing line, the line included. Deliberately not just
+    /// <c>!IsBreaching</c> when a separate clear threshold is set: between the two the rule
+    /// holds whatever state it is in, which is the whole point of hysteresis. With none set
+    /// the two lines are the same and this is exactly the complement of breaching — so a
+    /// value sitting on the threshold is cleared, never stuck "holding" a firing alert.
     /// </summary>
     public bool IsCleared(double value) =>
-        Comparison == Comparison.Above ? value < ClearsAt : value > ClearsAt;
+        Comparison == Comparison.Above ? value <= ClearsAt : value >= ClearsAt;
 
     /// <summary>
     /// Where an unusual rule clears when no clear threshold was set: two thirds of the way
