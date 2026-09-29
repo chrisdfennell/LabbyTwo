@@ -110,6 +110,24 @@ public sealed record AlertRule
     public string? ChannelId { get; init; }
 
     /// <summary>
+    /// Minutes of still firing before this rule is sent again, louder — see
+    /// <see cref="EscalationPolicy"/>. Null follows the default on the Alerts page, so one
+    /// switch there covers every rule nobody has set; zero is "never for this rule", for the
+    /// one that is fine to leave until morning.
+    /// </summary>
+    public int? EscalateAfterMinutes { get; init; }
+
+    /// <summary>
+    /// Channel ids to escalate to, comma-separated; empty is every channel. Only read when
+    /// <see cref="EscalateAfterMinutes"/> is set. A string rather than a list so two rules
+    /// with the same settings are still equal records.
+    /// </summary>
+    public string EscalateTo { get; init; } = "";
+
+    /// <summary>Send the escalation again this often while still firing. Zero escalates once.</summary>
+    public int EscalateRepeatMinutes { get; init; }
+
+    /// <summary>
     /// A fixed threshold, or "unusual for the time". An unusual rule keeps the same fields
     /// meaning nearly the same things — <see cref="Threshold"/> is how far from usual fires
     /// it, <see cref="ClearThreshold"/> how close it must come back to clear, and
@@ -210,6 +228,9 @@ public sealed record AlertRule
     /// </summary>
     public string? Problem()
     {
+        if (EscalateAfterMinutes is > 0 && EscalateRepeatMinutes < 0)
+            return "“Repeat every” cannot be negative — leave it at 0 to escalate once.";
+
         if (!IsUnusual)
         {
             if (Comparison == Comparison.Either)

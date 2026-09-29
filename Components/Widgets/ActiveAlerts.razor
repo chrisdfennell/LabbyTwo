@@ -4,6 +4,7 @@
 @inject AlertRuleStore Rules
 @inject ConfigStore Config
 @inject Registry Registry
+@inject AlertService Alerts
 
 @if (_firing.Count == 0)
 {
@@ -62,10 +63,14 @@ else
                 // The reading and the limit in the reader's units, as the alert rules page
                 // shows them; the rule is still stored and compared in the metric's own.
                 var units = DisplayUnits.Current;
+                // Still listed while a mute window holds it — it is still true — but saying
+                // so, so nobody wonders why their phone stayed quiet.
+                var muted = Alerts.MutedBy(rule.Id, connection.Id, DateTimeOffset.Now);
                 return new Row(
                     $"{connection.Name} · {spec.Label}",
                     $"{Units.Format(spec, breach.LastValue, units, 1)} — {rule.ComparisonWord} {Units.Format(spec, rule.Threshold, units)}" +
-                    (breach.Since is { } since ? $", since {since:HH:mm}" : ""));
+                    (breach.Since is { } since ? $", since {since:HH:mm}" : "") +
+                    (muted is not null ? $" · muted by {muted.Name}" : ""));
             })
             .OfType<Row>()
             .OrderBy(r => r.Title)];

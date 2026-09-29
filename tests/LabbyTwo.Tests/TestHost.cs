@@ -33,6 +33,8 @@ public static class TestHost
         services.AddSingleton<Registry>();
         services.AddSingleton<Db>();
         services.AddSingleton<AppSettingsStore>();
+        services.AddSingleton<MuteWindowStore>();
+        services.AddSingleton<FiringAlertStore>();
         services.AddSingleton<AlertRuleStore>();
         services.AddSingleton<HistoryStore>();
         services.AddSingleton<ConfigStore>();
@@ -62,6 +64,8 @@ public static class TestHost
         services.AddSingleton(Options.Create(options));
         services.AddSingleton<Db>();
         services.AddSingleton<AppSettingsStore>();
+        services.AddSingleton<MuteWindowStore>();
+        services.AddSingleton<FiringAlertStore>();
         return services;
     }
 

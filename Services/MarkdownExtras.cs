@@ -257,7 +257,9 @@ public static class UptimeStrip
 /// <param name="Name">The rule's own name, or its description when it has none.</param>
 /// <param name="Value">The last reading, in the reader's units.</param>
 /// <param name="Since">When the breach began; null when the evaluator does not know.</param>
-public sealed record AlertLine(string RuleId, string Name, Connection Connection, string Metric, string Value, string Limit, DateTimeOffset? Since);
+/// <param name="MutedBy">The mute window holding its notification back right now, if any.</param>
+public sealed record AlertLine(string RuleId, string Name, Connection Connection, string Metric, string Value, string Limit, DateTimeOffset? Since,
+    string? MutedBy = null);
 
 /// <summary>One line of <c>{{renewals}}</c>.</summary>
 /// <param name="What">"certificate", "node key", "next renewal" — or empty for a count of overdue renewals.</param>
@@ -322,7 +324,8 @@ public static class MarkdownLists
         IReadOnlyList<Connection> connections,
         Registry registry,
         HashSet<string>? only,
-        Units.Preferences units)
+        Units.Preferences units,
+        Func<string, string, string?>? mutedBy = null)
     {
         var lines = new List<AlertLine>();
         foreach (var breach in firing.Where(b => b.Firing))
@@ -338,7 +341,7 @@ public static class MarkdownLists
             var limit = rule.IsUnusual ? rule.UnusualPhrase() : $"{rule.ComparisonWord} {Units.Format(spec, rule.Threshold, units)}";
             lines.Add(new AlertLine(rule.Id, rule.Describe(spec, connection.Name, units), connection, spec.Label,
                 Units.Format(spec, breach.LastValue, units, spec.Decimals == 0 && Math.Abs(breach.LastValue) < 100 ? 1 : spec.Decimals),
-                limit, breach.Since));
+                limit, breach.Since, mutedBy?.Invoke(rule.Id, connection.Id)));
         }
         return
         [

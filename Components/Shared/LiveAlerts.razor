@@ -4,6 +4,7 @@
 @inject AlertRuleStore Rules
 @inject Registry Registry
 @inject Offload Offload
+@inject AlertService Alerts
 
 @* {{alerts}}: the alert rules firing right now — threshold, unusual-for-the-time and
    forecast rules alike, since one evaluator runs them all — with the connection, the
@@ -21,7 +22,8 @@
 else
 {
     var only = MarkdownLists.Only(Code, Scope.Connections, out var problem);
-    var lines = MarkdownLists.Alerts(Evaluator.Firing, _rules, Scope.Connections, Registry, only, DisplayUnits.Current);
+    var lines = MarkdownLists.Alerts(Evaluator.Firing, _rules, Scope.Connections, Registry, only, DisplayUnits.Current,
+        (ruleId, connectionId) => Alerts.MutedBy(ruleId, connectionId, DateTimeOffset.Now)?.Name);
     <div class="md-down md-alerts" role="list" aria-label="Alerts firing">
         @if (problem is not null)
         {
@@ -50,6 +52,9 @@ else
                         @line.Metric is <span class="md-alert-value">@line.Value</span> — @(line.Limit)@if (line.Since is { } since)
                         {
                             <span title="@($"Firing since {since.ToLocalTime():d MMM yyyy HH:mm}")">, for @LiveText.Since(since, DateTimeOffset.Now) (since @since.ToLocalTime().ToString("HH:mm"))</span>
+                        }@if (line.MutedBy is { } window)
+                        {
+                            <span> · muted by @window</span>
                         }
                     </div>
                 </div>

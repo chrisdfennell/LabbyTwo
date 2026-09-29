@@ -59,8 +59,15 @@ public sealed record AlertPolicy(TimeOnly QuietFrom, TimeOnly QuietTo, string Qu
     /// "down only" mode: being woken to be told something came back is the purest form of
     /// pointless alert. An urgent alert is never held — see <see cref="Alert.Urgent"/>.
     /// </summary>
-    public bool Allows(Alert alert, DateTimeOffset at) =>
-        alert.Urgent || !IsQuiet(at) || (QuietMode != Nothing && alert.Level == AlertLevel.Down);
+    public bool Allows(Alert alert, DateTimeOffset at) => Allows(alert, at, TimeZoneInfo.Local);
+
+    /// <summary>
+    /// <see cref="Allows(Alert, DateTimeOffset)"/> in a given zone. An escalation is a
+    /// <see cref="AlertLevel.Down"/> alert like the one it follows up, so "down only" lets it
+    /// through and "nothing" holds it until the quiet hours end.
+    /// </summary>
+    public bool Allows(Alert alert, DateTimeOffset at, TimeZoneInfo zone) =>
+        alert.Urgent || !IsQuiet(at, zone) || (QuietMode != Nothing && alert.Level == AlertLevel.Down);
 
     public string Describe() => !QuietHoursOn
         ? "Alerts are sent at any hour."

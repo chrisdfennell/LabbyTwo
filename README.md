@@ -273,7 +273,7 @@ Power.
 ### Alerts you can leave switched on
 
 Monitoring forty things makes a dashboard worse, not better, unless something decides what
-is worth saying. Five things do:
+is worth saying. These do:
 
 - **Quiet hours** — between the times you set, only a service actually going down gets
   through, or nothing at all. Recoveries are always held: being woken to be told something
@@ -289,11 +289,18 @@ is worth saying. Five things do:
   resume" a safe option to offer here and not on a single connection.
 - **Dependencies** — a connection can sit *behind* another. While the VPN gateway is down,
   the ten containers behind it stay quiet, and the one message you get names the gateway.
+- **Mute windows** — named, recurring times when particular alerts are expected: "NAS scrub,
+  Sundays 01:00–05:00, mutes the QNAP", "Backup window, every day 02:00–03:30, mutes *CPU
+  above 90%*". Unlike quiet hours they are about the thing, not about you. See
+  [Mute windows](#mute-windows).
 - **Routing** — each rule can name a channel, so the disk-space rule goes to email and the
   front door goes to your phone.
+- **Escalation** — the other direction: an alert nobody has dealt with after fifteen minutes
+  is sent again somewhere louder. See [Escalation](#escalation).
 
-Held alerts are not queued for later; they are simply not sent. The Alerts page still shows
-the real state, so a rule that fired overnight is red in the morning.
+Alerts held by quiet hours, a silence or maintenance are not queued for later; they are
+simply not sent. (A mute window is the one exception — see below.) The Alerts page still
+shows the real state, so a rule that fired overnight is red in the morning.
 
 ### A weekly summary
 
@@ -384,6 +391,52 @@ offers frost and high wind, TrueNAS offers "pool not healthy" and warns at 80% b
 that is where ZFS starts to slow down. They are listed on the Alerts page with a reason
 each, nothing is created until you say so, and once added they are ordinary rules you can
 edit or delete.
+
+A rule that is firing when LabbyTwo restarts stays firing: it is not announced again as if
+new, and if it recovered while LabbyTwo was stopped the recovery is sent when it starts.
+
+#### Mute windows
+
+**Settings → Alerts → Mute windows.** A window has a name, the days it starts on, a start and
+an end time, and what it mutes: every alert, everything about some connections (their rules
+and them going down), or particular rules on whatever they watch. An end at or before the
+start runs past midnight and belongs to the day it started — "Friday 23:00–02:00" covers
+Saturday's small hours and nothing on Saturday night — and the same time at both ends is a
+whole day. Times are the server's local time and follow the clock across daylight-saving
+changes: 01:00–05:00 ends at 05:00 on the clock whether that night was three hours long or
+five.
+
+While a window is open, an alert it covers still fires — it is on the Alerts page, the Active
+alerts card and `{{alerts}}`, with *muted by Backup window* beside it — it just is not
+delivered. What happens next depends on how it ends:
+
+- **Still firing when the window ends:** it is sent then, once, saying it was held.
+- **Cleared inside the window:** nothing is sent, ever. You were never told it broke, so there
+  is nothing to tell you about it coming back.
+
+A window ending during maintenance or quiet hours does not overrule them; the held alert is
+then treated like any other alert at that moment.
+
+#### Escalation
+
+**Settings → Alerts → Escalation** sets the default: if an alert is still firing after *N*
+minutes, send it again to a second set of channels — email first, then your phone after
+fifteen minutes — and optionally again every *M* minutes until it clears. It is off until you
+set it. The default covers every down alert and every rule that does not choose for itself; in
+the rule editor a rule can follow the default, never escalate, or escalate its own way.
+
+- **The recovery goes to the escalation channels too**, so the loud one does not keep saying
+  something is broken after it has been fixed.
+- **Held, not dropped.** Maintenance, a silence, a dependency that is down, a mute window and
+  quiet hours set to "nothing" all hold an escalation; it goes as soon as none of them
+  applies, if the alert is still firing. Quiet hours set to "only when something goes down"
+  let it through, because an escalation is about something that is down.
+- **A muted alert's clock starts when its window ends**, not when it fired — the window was
+  somebody saying "this is expected until five".
+- **Restarts do not repeat it.** Where each alert has been escalated to is kept in the
+  database. An escalation already sent is not sent again after an update, and one that came
+  due while LabbyTwo was stopped is sent once when it starts — never a burst of the repeats
+  it missed.
 
 Alert channels are connections too. Add a webhook or Pushover channel and both kinds start
 being delivered — there is no separate notification settings screen.

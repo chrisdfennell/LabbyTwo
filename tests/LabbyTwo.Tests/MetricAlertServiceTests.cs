@@ -90,6 +90,8 @@ public sealed class MetricAlertServiceTests : IDisposable
         services.AddSingleton<Db>();
         services.AddSingleton<ConfigStore>();
         services.AddSingleton<AlertRuleStore>();
+        services.AddSingleton<MuteWindowStore>();
+        services.AddSingleton<FiringAlertStore>();
         services.AddSingleton<AppSettingsStore>();
         services.AddSingleton<HistoryStore>();
         services.AddSingleton<HealthMonitor>();

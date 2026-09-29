@@ -12,6 +12,7 @@
 @inject CapacityForecasts Forecasts
 @inject MetricBaselines Baselines
 @inject HealthMonitor Monitor
+@inject MuteWindowStore Mutes
 
 <PageTitle>Alert rules · LabbyTwo</PageTitle>
 
@@ -80,6 +81,115 @@
             reached your phone. Recoveries are always held while quiet: being woken to be told
             something came back is the purest kind of pointless alert.
         </p>
+    </div>
+</div>
+
+@* Mute windows sit with quiet hours because they answer the same question — when — but
+   about particular things rather than about you. *@
+<div class="widget mb-3">
+    <div class="widget-head">
+        <h2 class="widget-title">Mute windows</h2>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="StartNewWindow">+ New window</button>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            Times when particular alerts are expected — the NAS scrub on Sunday night, the backup at two.
+            A muted alert still fires and shows here, marked “muted by” the window; it just is not sent.
+            If it is still firing when the window ends, it is sent then, once. If it clears inside the
+            window, you hear nothing about it at all.
+        </p>
+        @if (_windows.Count == 0)
+        {
+            <p class="tile-meta mb-0">No mute windows yet.</p>
+        }
+        else
+        {
+            <div class="d-flex flex-column gap-2">
+                @foreach (var window in _windows)
+                {
+                    var current = window;
+                    var open = window.OccurrenceAt(DateTimeOffset.Now, Alerts.Zone);
+                    <div class="d-flex align-items-start gap-2">
+                        <span class="status-dot mt-1 @(!window.Enabled ? "status-unknown" : open is not null ? "status-flapping" : "status-up")"
+                              title="@(!window.Enabled ? "Off" : open is not null ? "Muting now" : "Waiting")"></span>
+                        <div class="min-w-0 flex-grow-1">
+                            <div class="tile-name">
+                                @window.Name
+                                <span class="tile-meta">@window.Describe()</span>
+                            </div>
+                            <div class="tile-meta">
+                                @ScopeText(window)
+                                @if (!window.Enabled)
+                                {
+                                    <text> · off</text>
+                                }
+                                else if (open is { } occurrence)
+                                {
+                                    <strong> · muting now, until @occurrence.End.ToLocalTime().ToString("ddd HH:mm")</strong>
+                                }
+                                else if (window.NextStart(DateTimeOffset.Now, Alerts.Zone) is { } next)
+                                {
+                                    <text> · next @next.ToLocalTime().ToString("ddd d MMM, HH:mm")</text>
+                                }
+                            </div>
+                        </div>
+                        <div class="text-end flex-none">
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => EditWindow(current)">Edit</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDeleteWindow = current">✕</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+<div class="widget mb-3">
+    <div class="widget-head">
+        <h2 class="widget-title">Escalation</h2>
+        <span class="tile-meta">@_escalation.Describe(ChannelName)</span>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            When an alert is still firing after a while, send it again somewhere louder — email first,
+            then your phone. This is the default for every down alert and every rule that does not set
+            its own. Its recovery goes to the escalation channels too, so the loud one does not keep
+            saying something is broken. Maintenance, silences, mute windows and quiet hours hold an
+            escalation just as they hold an alert, and it goes as soon as they lift if the alert is still
+            firing. “Only send when something goes down” lets escalations through, since they are about
+            something that is down.
+        </p>
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="escalate-after">After (minutes)</label>
+                <input id="escalate-after" type="number" min="0" class="form-control" value="@_escalation.AfterMinutes"
+                       @onchange="e => SaveEscalationAsync(_escalation with { AfterMinutes = Math.Max(0, (int)Parse(e.Value, 0)) })" />
+                <div class="form-text">0 is off.</div>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="escalate-repeat">Repeat every (minutes)</label>
+                <input id="escalate-repeat" type="number" min="0" class="form-control" value="@_escalation.RepeatMinutes"
+                       disabled="@(!_escalation.On)"
+                       @onchange="e => SaveEscalationAsync(_escalation with { RepeatMinutes = Math.Max(0, (int)Parse(e.Value, 0)) })" />
+                <div class="form-text">0 sends it once.</div>
+            </div>
+            <div class="col-12 col-md-6">
+                <div class="form-label">Send to</div>
+                <div class="d-flex flex-wrap gap-3">
+                    @foreach (var channel in _channels)
+                    {
+                        var id = channel.Id;
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="@($"escalate-to-{id}")"
+                                   checked="@_escalation.Channels.Contains(id)" disabled="@(!_escalation.On)"
+                                   @onchange="e => SaveEscalationAsync(_escalation with { Channels = Toggle(_escalation.Channels, id, e.Value is true) })" />
+                            <label class="form-check-label" for="@($"escalate-to-{id}")">@channel.Icon @channel.Name</label>
+                        </div>
+                    }
+                </div>
+                <div class="form-text">None ticked sends to every channel.</div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -194,6 +304,10 @@ else
                                         @if (breach.Usual is { } usual)
                                         {
                                             <div class="tile-meta">usually about @MetricAlertService.About(SpecFor(rule, breach.ConnectionId), usual.Median, _units) @usual.When</div>
+                                        }
+                                        @if (breach.Firing && DeliveryNote(rule, breach) is { } note)
+                                        {
+                                            <div class="tile-meta">@note</div>
                                         }
                                     </div>
                                 }
@@ -409,6 +523,46 @@ else
             </div>
 
             <div class="mb-3">
+                <label class="form-label" for="rule-escalate">If it is still firing</label>
+                <select id="rule-escalate" class="form-select" value="@EscalationMode(draft)" @onchange="SetEscalationMode">
+                    <option value="default">@(_escalation.On ? $"Use the default — escalate after {_escalation.AfterMinutes} min" : "Use the default — which is off")</option>
+                    <option value="never">Never escalate this rule</option>
+                    <option value="custom">Escalate it my own way</option>
+                </select>
+                @if (draft.EscalateAfterMinutes is > 0)
+                {
+                    <div class="row g-2 mt-1">
+                        <div class="col-6">
+                            <label class="form-label" for="rule-escalate-after">After (minutes)</label>
+                            <input id="rule-escalate-after" type="number" min="1" class="form-control" value="@draft.EscalateAfterMinutes"
+                                   @onchange="e => _draft = draft with { EscalateAfterMinutes = Math.Max(1, (int)Parse(e.Value, 15)) }" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label" for="rule-escalate-repeat">Repeat every (minutes)</label>
+                            <input id="rule-escalate-repeat" type="number" min="0" class="form-control" value="@draft.EscalateRepeatMinutes"
+                                   @onchange="e => _draft = draft with { EscalateRepeatMinutes = Math.Max(0, (int)Parse(e.Value, 0)) }" />
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-3 mt-2">
+                        @foreach (var channel in _channels)
+                        {
+                            var id = channel.Id;
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@($"rule-escalate-to-{id}")"
+                                       checked="@EscalationPolicy.ParseChannels(draft.EscalateTo).Contains(id)"
+                                       @onchange="e => _draft = draft with { EscalateTo = string.Join(',', Toggle(EscalationPolicy.ParseChannels(draft.EscalateTo), id, e.Value is true)) }" />
+                                <label class="form-check-label" for="@($"rule-escalate-to-{id}")">@channel.Icon @channel.Name</label>
+                            </div>
+                        }
+                    </div>
+                    <div class="form-text">
+                        None ticked sends to every channel. Repeat 0 escalates once. The recovery goes to
+                        these channels too.
+                    </div>
+                }
+            </div>
+
+            <div class="mb-3">
                 <label class="form-label" for="rule-name">Name</label>
                 <input id="rule-name" class="form-control" value="@draft.Name" placeholder="@Preview(draft)"
                        @onchange="e => _draft = draft with { Name = e.Value?.ToString() ?? string.Empty }" />
@@ -442,6 +596,125 @@ else
                    OnConfirm="DeleteConfirmedAsync" />
 }
 
+@if (_windowDraft is { } win)
+{
+    <Modal Title="@(_windowIsNew ? "New mute window" : "Edit mute window")" OnClose="() => _windowDraft = null">
+        <ChildContent>
+            <div class="mb-3">
+                <label class="form-label" for="window-name">Name</label>
+                <input id="window-name" class="form-control" value="@win.Name" placeholder="NAS scrub"
+                       @onchange="e => _windowDraft = win with { Name = e.Value?.ToString() ?? string.Empty }" />
+                <div class="form-text">What an alert is shown as “muted by”.</div>
+            </div>
+
+            <div class="mb-3">
+                <div class="form-label">Starts on</div>
+                <div class="d-flex flex-wrap gap-1 mb-2">
+                    @foreach (var day in MuteWindow.Week)
+                    {
+                        var chosen = day;
+                        var on = win.Days.Contains(day);
+                        <button type="button" class="btn btn-sm @(on ? "btn-primary" : "btn-outline-secondary")"
+                                aria-pressed="@(on ? "true" : "false")"
+                                @onclick="() => _windowDraft = win with { Days = Toggle(win.Days, chosen, !on) }">@(day.ToString()[..3])</button>
+                    }
+                </div>
+                <div class="d-flex flex-wrap gap-1">
+                    <button type="button" class="btn btn-sm btn-link px-1" @onclick="() => _windowDraft = win with { Days = MuteWindow.Week }">Every day</button>
+                    <button type="button" class="btn btn-sm btn-link px-1" @onclick="() => _windowDraft = win with { Days = MuteWindow.Weekdays }">Weekdays</button>
+                    <button type="button" class="btn btn-sm btn-link px-1" @onclick="() => _windowDraft = win with { Days = [DayOfWeek.Saturday, DayOfWeek.Sunday] }">Weekends</button>
+                </div>
+            </div>
+
+            <div class="row g-2 mb-3">
+                <div class="col-6">
+                    <label class="form-label" for="window-start">From</label>
+                    <input id="window-start" type="time" class="form-control" value="@win.Start.ToString("HH\\:mm")"
+                           @onchange="e => _windowDraft = win with { Start = MuteWindow.ParseTime(e.Value?.ToString()) }" />
+                </div>
+                <div class="col-6">
+                    <label class="form-label" for="window-end">Until</label>
+                    <input id="window-end" type="time" class="form-control" value="@win.End.ToString("HH\\:mm")"
+                           @onchange="e => _windowDraft = win with { End = MuteWindow.ParseTime(e.Value?.ToString()) }" />
+                </div>
+                <div class="col-12 form-text">
+                    Now reads “@win.Describe()”. An end at or before the start runs into the next morning, and
+                    counts as the day it started; the same time at both ends is a whole day.
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="window-scope">Mutes</label>
+                <select id="window-scope" class="form-select" value="@win.Scope.ToString()" @onchange="SetWindowScope">
+                    <option value="Everything">every alert</option>
+                    <option value="Connections">everything about some connections — their rules and them going down</option>
+                    <option value="Rules">some alert rules</option>
+                </select>
+            </div>
+
+            @if (win.Scope == MuteScope.Connections)
+            {
+                <div class="mb-3 d-flex flex-column gap-1">
+                    @foreach (var connection in _connections)
+                    {
+                        var id = connection.Id;
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="@($"window-conn-{id}")"
+                                   checked="@win.Targets.Contains(id)"
+                                   @onchange="e => _windowDraft = win with { Targets = Toggle(win.Targets, id, e.Value is true) }" />
+                            <label class="form-check-label" for="@($"window-conn-{id}")">@connection.Name</label>
+                        </div>
+                    }
+                </div>
+            }
+            else if (win.Scope == MuteScope.Rules)
+            {
+                <div class="mb-3 d-flex flex-column gap-1">
+                    @foreach (var rule in _rules)
+                    {
+                        var id = rule.Id;
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="@($"window-rule-{id}")"
+                                   checked="@win.Targets.Contains(id)"
+                                   @onchange="e => _windowDraft = win with { Targets = Toggle(win.Targets, id, e.Value is true) }" />
+                            <label class="form-check-label" for="@($"window-rule-{id}")">@rule.Describe(SpecFor(rule), NameOf(rule.ConnectionId), _units)</label>
+                        </div>
+                    }
+                    @if (_rules.Count == 0)
+                    {
+                        <span class="tile-meta">There are no rules yet.</span>
+                    }
+                </div>
+            }
+
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="window-enabled"
+                       checked="@win.Enabled"
+                       @onchange="e => _windowDraft = win with { Enabled = e.Value is true }" />
+                <label class="form-check-label" for="window-enabled">On</label>
+            </div>
+
+            @if (_windowValidation is { Length: > 0 })
+            {
+                <div class="alert alert-warning py-2 mt-3 mb-0">@_windowValidation</div>
+            }
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _windowDraft = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveWindowAsync">Save</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_confirmDeleteWindow is { } deletingWindow)
+{
+    <ConfirmDialog Title="Delete this mute window?"
+                   Message="@($"“{deletingWindow.Name}” will stop muting anything. An alert it is holding right now is sent on the next check if it is still firing.")"
+                   ConfirmText="Delete"
+                   OnCancel="() => _confirmDeleteWindow = null"
+                   OnConfirm="DeleteWindowConfirmedAsync" />
+}
+
 @code {
     private IReadOnlyList<AlertRule> _rules = [];
     private IReadOnlyList<Connection> _connections = [];
@@ -461,6 +734,13 @@ else
     private bool _isNew;
     private string? _validation;
 
+    private IReadOnlyList<MuteWindow> _windows = [];
+    private MuteWindow? _windowDraft;
+    private MuteWindow? _confirmDeleteWindow;
+    private bool _windowIsNew;
+    private string? _windowValidation;
+    private EscalationPolicy _escalation = EscalationPolicy.Off;
+
     /// <summary>
     /// "Now 180 Mbps; usually about 520 at this hour", for the unusual rule being drawn up.
     /// Null while it is being worked out.
@@ -474,8 +754,146 @@ else
     {
         _recordedMetrics = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Rules.Changed += OnChanged;
+        Mutes.Changed += OnChanged;
         Evaluator.Updated += OnChanged;
         await LoadAsync();
+    }
+
+    /// <summary>
+    /// Saved whole, from the one control that changed, as the quiet hours are. Through
+    /// <see cref="Offload"/> because a save is a database write, and the circuit should not
+    /// wait on one.
+    /// </summary>
+    private async Task SaveEscalationAsync(EscalationPolicy next)
+    {
+        _escalation = next;
+        await Offload.Run(async ct =>
+        {
+            await AppSettings.SaveAsync(next.ToSettings(), ct);
+            return true;
+        });
+    }
+
+    private string ChannelName(string id) => _channels.FirstOrDefault(c => c.Id == id)?.Name ?? "a deleted channel";
+
+    private static IReadOnlyList<T> Toggle<T>(IReadOnlyList<T> list, T item, bool on) =>
+        on ? [.. list.Append(item).Distinct()] : [.. list.Where(x => !EqualityComparer<T>.Default.Equals(x, item))];
+
+    /// <summary>
+    /// What a firing breach's notification is doing, beside its reading: held by a window,
+    /// or escalated. Null when it simply went out, which is the ordinary case and needs no note.
+    /// </summary>
+    private string? DeliveryNote(AlertRule rule, MetricAlertService.Breach breach)
+    {
+        if (Alerts.MutedBy(rule.Id, breach.ConnectionId, DateTimeOffset.Now) is { } window)
+            return $"muted by {window.Name}";
+        if (Alerts.Delivery(FiringAlert.RuleKey(rule.Id, breach.ConnectionId)) is { Escalations: > 0 } entry)
+            return entry.Escalations == 1
+                ? $"escalated at {entry.EscalatedAt?.ToLocalTime():HH:mm}"
+                : $"escalated {entry.Escalations} times, last at {entry.EscalatedAt?.ToLocalTime():HH:mm}";
+        return null;
+    }
+
+    private static string EscalationMode(AlertRule rule) => rule.EscalateAfterMinutes switch
+    {
+        null => "default",
+        <= 0 => "never",
+        _ => "custom",
+    };
+
+    /// <summary>
+    /// Choosing "my own way" starts from the default's numbers where there are any, so
+    /// somebody tweaking one rule does not have to re-enter the rest.
+    /// </summary>
+    private void SetEscalationMode(ChangeEventArgs args)
+    {
+        var draft = _draft!;
+        _draft = args.Value?.ToString() switch
+        {
+            "never" => draft with { EscalateAfterMinutes = 0 },
+            "custom" => draft with
+            {
+                EscalateAfterMinutes = _escalation.On ? _escalation.AfterMinutes : 15,
+                EscalateTo = string.Join(',', _escalation.Channels),
+                EscalateRepeatMinutes = _escalation.RepeatMinutes,
+            },
+            _ => draft with { EscalateAfterMinutes = null },
+        };
+    }
+
+    /// <summary>"Mutes everything", "Mutes NAS, Router", "Mutes CPU above 90%".</summary>
+    private string ScopeText(MuteWindow window) => window.Scope switch
+    {
+        MuteScope.Everything => "Mutes every alert",
+        MuteScope.Connections => "Mutes " + Names(window.Targets.Select(id => _connections.FirstOrDefault(c => c.Id == id)?.Name)),
+        _ => "Mutes " + Names(window.Targets.Select(id => _rules.FirstOrDefault(r => r.Id == id) is { } rule
+            ? rule.Describe(SpecFor(rule), NameOf(rule.ConnectionId), _units)
+            : null)),
+    };
+
+    private static string Names(IEnumerable<string?> names)
+    {
+        var known = names.OfType<string>().ToList();
+        return known.Count == 0 ? "nothing that still exists" : string.Join(", ", known);
+    }
+
+    private void StartNewWindow()
+    {
+        _windowIsNew = true;
+        _windowValidation = null;
+        _windowDraft = new MuteWindow
+        {
+            Days = [DayOfWeek.Sunday],
+            Start = new TimeOnly(1, 0),
+            End = new TimeOnly(5, 0),
+        };
+    }
+
+    private void EditWindow(MuteWindow window)
+    {
+        _windowIsNew = false;
+        _windowValidation = null;
+        _windowDraft = window;
+    }
+
+    /// <summary>Switching what it mutes clears the ticks, which were ids of the other kind.</summary>
+    private void SetWindowScope(ChangeEventArgs args)
+    {
+        var scope = Enum.TryParse<MuteScope>(args.Value?.ToString(), out var parsed) ? parsed : MuteScope.Everything;
+        if (_windowDraft is { } draft && draft.Scope != scope)
+            _windowDraft = draft with { Scope = scope, Targets = [] };
+    }
+
+    private async Task SaveWindowAsync()
+    {
+        if (_windowDraft is not { } window)
+            return;
+
+        if (window.Problem() is { } problem)
+        {
+            _windowValidation = problem;
+            return;
+        }
+
+        await Offload.Run(async ct =>
+        {
+            await Mutes.SaveAsync(window with { Name = window.Name.Trim() }, ct);
+            return true;
+        });
+        _windowDraft = null;
+    }
+
+    private async Task DeleteWindowConfirmedAsync()
+    {
+        if (_confirmDeleteWindow is { } window)
+        {
+            await Offload.Run(async ct =>
+            {
+                await Mutes.DeleteAsync(window.Id, ct);
+                return true;
+            });
+        }
+        _confirmDeleteWindow = null;
     }
 
     /// <summary>
@@ -513,7 +931,9 @@ else
         _channels = [.. (await Alerts.ChannelsAsync()).Select(pair => pair.Connection)];
         _channelCount = _channels.Count;
         _policy = AlertPolicy.From(await AppSettings.AllAsync());
+        _escalation = EscalationPolicy.From(await AppSettings.AllAsync());
         _units = Units.Preferences.From(await AppSettings.AllAsync());
+        _windows = await Offload.Run(ct => Mutes.AllAsync(ct));
         LoadSuggestions();
         LoadMetrics(_draft?.ConnectionId);
     }
@@ -947,6 +1367,7 @@ else
     public void Dispose()
     {
         Rules.Changed -= OnChanged;
+        Mutes.Changed -= OnChanged;
         Evaluator.Updated -= OnChanged;
         _recordedMetrics?.Dispose();
     }

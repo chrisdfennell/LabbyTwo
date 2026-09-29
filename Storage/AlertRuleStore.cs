@@ -32,7 +32,8 @@ public sealed class AlertRuleStore(Db db)
             var cmd = connection.CreateCommand();
             cmd.CommandText = """
                 SELECT id, name, connection_id, metric, comparison, threshold, clear_threshold,
-                       for_minutes, enabled, channel_id, kind, unusual_by
+                       for_minutes, enabled, channel_id, kind, unusual_by,
+                       escalate_after, escalate_to, escalate_repeat
                 FROM alert_rules ORDER BY name, metric
                 """;
             var list = new List<AlertRule>();
@@ -53,6 +54,9 @@ public sealed class AlertRuleStore(Db db)
                     ChannelId = reader.IsDBNull(9) ? null : reader.GetString(9),
                     Kind = AlertRule.ParseKind(reader.GetString(10)),
                     UnusualBy = AlertRule.ParseUnusualBy(reader.IsDBNull(11) ? null : reader.GetString(11)),
+                    EscalateAfterMinutes = reader.IsDBNull(12) ? null : reader.GetInt32(12),
+                    EscalateTo = reader.GetString(13),
+                    EscalateRepeatMinutes = reader.GetInt32(14),
                 });
             }
             return _cache.Store(list, version);
@@ -73,15 +77,18 @@ public sealed class AlertRuleStore(Db db)
         cmd.CommandText = """
             INSERT INTO alert_rules
                 (id, name, connection_id, metric, comparison, threshold, clear_threshold,
-                 for_minutes, enabled, channel_id, kind, unusual_by)
+                 for_minutes, enabled, channel_id, kind, unusual_by,
+                 escalate_after, escalate_to, escalate_repeat)
             VALUES ($id, $name, $conn, $metric, $comparison, $threshold, $clear, $for, $enabled, $channel,
-                    $kind, $by)
+                    $kind, $by, $escAfter, $escTo, $escRepeat)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, connection_id = excluded.connection_id,
                 metric = excluded.metric, comparison = excluded.comparison,
                 threshold = excluded.threshold, clear_threshold = excluded.clear_threshold,
                 for_minutes = excluded.for_minutes, enabled = excluded.enabled,
-                channel_id = excluded.channel_id, kind = excluded.kind, unusual_by = excluded.unusual_by
+                channel_id = excluded.channel_id, kind = excluded.kind, unusual_by = excluded.unusual_by,
+                escalate_after = excluded.escalate_after, escalate_to = excluded.escalate_to,
+                escalate_repeat = excluded.escalate_repeat
             """;
         cmd.Parameters.AddWithValue("$id", rule.Id);
         cmd.Parameters.AddWithValue("$name", rule.Name);
@@ -95,6 +102,9 @@ public sealed class AlertRuleStore(Db db)
         cmd.Parameters.AddWithValue("$channel", (object?)rule.ChannelId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$kind", AlertRule.StoredKind(rule.Kind));
         cmd.Parameters.AddWithValue("$by", rule.IsUnusual ? AlertRule.StoredUnusualBy(rule.UnusualBy) : DBNull.Value);
+        cmd.Parameters.AddWithValue("$escAfter", (object?)rule.EscalateAfterMinutes ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$escTo", rule.EscalateTo);
+        cmd.Parameters.AddWithValue("$escRepeat", Math.Max(0, rule.EscalateRepeatMinutes));
         await cmd.ExecuteNonQueryAsync(ct);
         Invalidate();
     }

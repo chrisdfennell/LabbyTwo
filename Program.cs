@@ -112,6 +112,8 @@ builder.Services.AddSingleton<Db>();
 builder.Services.AddSingleton<AppSettingsStore>();
 builder.Services.AddSingleton<DisplayUnits>();
 builder.Services.AddSingleton<AlertRuleStore>();
+builder.Services.AddSingleton<MuteWindowStore>();
+builder.Services.AddSingleton<FiringAlertStore>();
 builder.Services.AddSingleton<ConfigStore>();
 builder.Services.AddSingleton<HistoryStore>();
 builder.Services.AddSingleton<LatestReadings>();
