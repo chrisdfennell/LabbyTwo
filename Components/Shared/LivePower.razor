@@ -1,0 +1,144 @@
+@implements IDisposable
+@inject PowerCosts Power
+@inject HealthMonitor Health
+@inject Offload Offload
+
+@* {{power}}: what the lab's electricity has cost this month so far — the Power page's total,
+   in a sentence. {{power: "NAS plug"}} for one source (by its name on the Power page or its
+   connection's), or {{power: Plex}} for a service a plug has been split between.
+   period=today|week|month|30d|projected and show=cost|kwh|watts choose the number.
+
+   The figures are worked out by PowerCosts, off the render thread, and shared by every
+   page for a couple of minutes; this asks again at most that often, on the monitor's
+   sweep, so a wall display showing it costs nothing extra. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_text is null)
+{
+    <span class="sc-value is-waiting" title="Loading…">…</span>
+}
+else
+{
+    <a class="sc-value md-power" href="power" title="@_title">@_text</a>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>Not used — names here are power sources and services, not connections — but every shortcode is handed one.</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private BackgroundLoad _load = default!;
+    private PowerCosts.Snapshot? _snapshot;
+    private DateTimeOffset _askedAt;
+    private string? _problem;
+    private string? _text;
+    private string? _title;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnSweep;
+        Power.Changed += OnPowerChanged;
+    }
+
+    protected override void OnParametersSet()
+    {
+        Show();
+        Load(refresh: false);
+    }
+
+    private void Load(bool refresh)
+    {
+        _askedAt = DateTimeOffset.UtcNow;
+        Task<PowerCosts.Snapshot> Fetch(CancellationToken ct) => Offload.Run(c => Power.GetAsync(c), ct);
+        void Apply(PowerCosts.Snapshot snapshot)
+        {
+            _snapshot = snapshot;
+            Show();
+        }
+
+        if (refresh)
+            _ = _load.Refresh("power", Fetch, Apply);
+        else
+            _ = _load.Load("power", Fetch, Apply);
+    }
+
+    /// <summary>Works out the words from the options and whatever figures have arrived.</summary>
+    private void Show()
+    {
+        _problem = _text = _title = null;
+
+        if (PowerShortcode.ParsePeriod(Code.Option("period")) is not { } period)
+        {
+            _problem = $"“{Code.Option("period")}” is not a period: today, week, month, 30d or projected. ({Code.Source})";
+            return;
+        }
+        if (PowerShortcode.ParseShow(Code.Option("show")) is not { } show)
+        {
+            _problem = $"“{Code.Option("show")}” is not something to show: cost, kwh or watts. ({Code.Source})";
+            return;
+        }
+        if (_snapshot is not { } snapshot)
+            return;
+
+        var tariff = snapshot.Tariff;
+        var name = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("source");
+        if (name.Length == 0)
+        {
+            if (snapshot.Reports.Count == 0)
+            {
+                _problem = $"Nothing reports power yet — add a smart plug or a UPS, then see the Power page. ({Code.Source})";
+                return;
+            }
+            _text = PowerShortcode.Text(snapshot.Totals, show, period, tariff);
+            _title = $"Everything measured, {PowerShortcode.Describe(period)}. An estimate — see the Power page.";
+            return;
+        }
+
+        if (snapshot.Report(name) is { } report)
+        {
+            _text = PowerShortcode.Text(PowerTotals.Of(report), show, period, tariff);
+            _title = $"{report.Name}, {PowerShortcode.Describe(period)}. An estimate — see the Power page.";
+            return;
+        }
+
+        if (snapshot.Service(name) is { } service)
+        {
+            // A service's share is worked out for the month; a plug's day or average watts
+            // split between what is on it would claim more precision than there is.
+            if (period is not (PowerShortcode.Period.Month or PowerShortcode.Period.Projected) || show == PowerShortcode.Show.Watts)
+            {
+                _problem = $"A service's share is worked out for the month: use period=month or projected, and cost or kwh. ({Code.Source})";
+                return;
+            }
+            var projected = period == PowerShortcode.Period.Projected;
+            _text = show == PowerShortcode.Show.Kwh
+                ? PowerShortcode.Kwh(projected ? service.ProjectedMonthKwh : service.MonthKwh)
+                : tariff.Money(projected ? service.ProjectedMonthCost : service.MonthCost);
+            _title = $"{service.Name}'s share of {string.Join(", ", service.Sources)}, {PowerShortcode.Describe(period)}. An estimate.";
+            return;
+        }
+
+        _problem = $"No power source or service called “{name}”. The Power page lists them. ({Code.Source})";
+    }
+
+    private void OnSweep()
+    {
+        if (DateTimeOffset.UtcNow - _askedAt < PowerCosts.CacheFor)
+            return;
+        _ = InvokeAsync(() => Load(refresh: true));
+    }
+
+    private void OnPowerChanged() => _ = InvokeAsync(() => Load(refresh: true));
+
+    public void Dispose()
+    {
+        Health.Updated -= OnSweep;
+        Power.Changed -= OnPowerChanged;
+        _load.Dispose();
+    }
+}

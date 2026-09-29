@@ -106,6 +106,13 @@ public sealed record CapacityLine(
 /// </summary>
 public sealed record ExpiryLine(string Name, string What, double DaysLeft, int Overdue = 0);
 
+/// <summary>
+/// A week of electricity, as the Power page works it out: the whole lab, the dearest
+/// sources, and the month's projection with its fixed charge.
+/// </summary>
+public sealed record PowerWeek(
+    double Kwh, double Cost, string Currency, IReadOnlyList<(string Name, double Cost)> Top, double? ProjectedMonth = null);
+
 /// <summary>A week of internet speed tests on one connection, as averages.</summary>
 public sealed record SpeedWeek(string Name, double? Download, double? DownloadLowest, double? Upload, double? Ping);
 
@@ -129,6 +136,9 @@ public sealed record WeeklySummaryData
 
     public IReadOnlyList<ExpiryLine> Expiries { get; init; } = [];
     public IReadOnlyList<SpeedWeek> Speed { get; init; } = [];
+
+    /// <summary>The week's electricity, when anything reports power. Null leaves the section out.</summary>
+    public PowerWeek? Power { get; init; }
 
     /// <summary>Connections that appeared or went away since the last summary.</summary>
     public IReadOnlyList<string> Added { get; init; } = [];
@@ -206,6 +216,7 @@ public static class WeeklySummary
         Add(sections, CapacitySection(data));
         Add(sections, ExpirySection(data));
         Add(sections, SpeedSection(data));
+        Add(sections, PowerSection(data));
         Add(sections, ChangesSection(data));
 
         var text = new StringBuilder(headline);
@@ -466,6 +477,36 @@ public static class WeeklySummary
             // The name only earns its place when there is more than one to tell apart.
             section.Plain.Add(tests.Count > 1 ? $"{speed.Name} — {detail}" : detail);
             section.Markdown.Add(tests.Count > 1 ? $"**{Escape(speed.Name)}** — {detail}" : detail);
+        }
+        return section;
+    }
+
+    /// <summary>The most power sources named in the summary; the rest are in the total.</summary>
+    public const int MaxPower = 3;
+
+    /// <summary>
+    /// One sentence for the week's electricity and, when there is more than one source, the
+    /// few that cost the most. Nothing when nothing reports power, or nothing was used —
+    /// "0.00 kWh" every Monday would be noise for an install without a smart plug.
+    /// </summary>
+    private static Section? PowerSection(WeeklySummaryData data)
+    {
+        if (data.Power is not { Kwh: > 0 } power)
+            return null;
+
+        var section = new Section("⚡", "Power", [], []);
+        var line = $"{PowerShortcode.Kwh(power.Kwh)}, about {PowerTariff.FormatMoney(power.Cost, power.Currency)} this week";
+        if (power.ProjectedMonth is { } projected)
+            line += $" — on course for {PowerTariff.FormatMoney(projected, power.Currency)} this month";
+        section.Plain.Add(line);
+        section.Markdown.Add(line);
+
+        var top = power.Top.Where(t => t.Cost > 0).Take(MaxPower).ToList();
+        if (top.Count > 1)
+        {
+            var names = string.Join(", ", top.Select(t => $"{t.Name} {PowerTariff.FormatMoney(t.Cost, power.Currency)}"));
+            section.Plain.Add("Most: " + names);
+            section.Markdown.Add("Most: " + string.Join(", ", top.Select(t => $"{Escape(t.Name)} {PowerTariff.FormatMoney(t.Cost, power.Currency)}")));
         }
         return section;
     }

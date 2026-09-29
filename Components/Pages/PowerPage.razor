@@ -1,0 +1,538 @@
+@page "/power"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject PowerCosts Power
+@inject Offload Offload
+@using System.Globalization
+
+<PageTitle>Power · LabbyTwo</PageTitle>
+
+@* What the lab's electricity costs: every smart plug, UPS and energy sensor that reports
+   watts or a kWh total, with today, this month, the last 30 days and where the month is
+   heading — and, for plugs somebody has said what is on, a share per service.
+
+   The figures come from PowerCosts, worked out off the render thread and shared for a
+   couple of minutes; the page asks again when the settings change and every few minutes
+   while it is open. Every number is an estimate and says so: a plug measures what it
+   delivered, not what each thing behind it used, and anything not on a plug is not here. *@
+
+<div class="page-head">
+    <div>
+        <h1>⚡ Power</h1>
+        <p class="subtitle">What the lab's electricity costs — from the plugs, UPSes and energy sensors that report it.</p>
+    </div>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Chart range">
+            <button class="btn @(_chartDays == 30 ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(_chartDays == 30)"
+                    @onclick="() => _chartDays = 30">30 days</button>
+            <button class="btn @(_chartDays == 90 ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(_chartDays == 90)"
+                    @onclick="() => _chartDays = 90">90 days</button>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ToggleSettings" aria-expanded="@(_editing ? "true" : "false")">
+            @(_editing ? "Close settings" : "Prices and sources…")
+        </button>
+    </div>
+</div>
+
+@if (_editing && _snapshot is not null)
+{
+    <div class="panel p-3 mb-3">
+        <h2 class="h6">Prices</h2>
+        <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1" for="power-currency">Currency</label>
+                <input id="power-currency" class="form-control form-control-sm" maxlength="6" @bind="_currency" />
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1" for="power-price">Price per kWh</label>
+                <input id="power-price" class="form-control form-control-sm" inputmode="decimal" @bind="_price" />
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label small mb-1" for="power-fee">Fixed charge per month (optional)</label>
+                <input id="power-fee" class="form-control form-control-sm" inputmode="decimal" placeholder="0" @bind="_fee" />
+            </div>
+        </div>
+        <p class="tile-meta mt-1 mb-3">
+            The fixed charge is added to the projected bill but never shared out between devices — you pay it whether they are plugged in or not.
+        </p>
+
+        <h2 class="h6">Time-of-use rates (optional)</h2>
+        <p class="tile-meta">
+            A different price at certain times, checked top to bottom — the first that matches wins, and any other time is charged the price above.
+            A window that ends earlier than it starts runs past midnight: Friday 23:00 to 07:00 covers Saturday morning too.
+            Start and end the same for the whole day.
+        </p>
+        @foreach (var window in _windows)
+        {
+            <div class="row g-2 align-items-end mb-2" @key="window">
+                <div class="col-12 col-md-2">
+                    <label class="form-label small mb-1">Name</label>
+                    <input class="form-control form-control-sm" placeholder="Peak" @bind="window.Name" />
+                </div>
+                <div class="col-4 col-md-2">
+                    <label class="form-label small mb-1">Price per kWh</label>
+                    <input class="form-control form-control-sm" inputmode="decimal" @bind="window.Price" />
+                </div>
+                <div class="col-4 col-md-2">
+                    <label class="form-label small mb-1">From</label>
+                    <input type="time" class="form-control form-control-sm" @bind="window.Start" />
+                </div>
+                <div class="col-4 col-md-2">
+                    <label class="form-label small mb-1">Until</label>
+                    <input type="time" class="form-control form-control-sm" @bind="window.End" />
+                </div>
+                <div class="col-10 col-md-3 d-flex flex-wrap gap-2 small">
+                    @foreach (var day in TimeOfUseWindow.EveryDay)
+                    {
+                        var d = day;
+                        <label class="form-check-label">
+                            <input type="checkbox" class="form-check-input" checked="@window.Days.Contains(d)"
+                                   @onchange="e => ToggleDay(window, d, e.Value is true)" />
+                            @d.ToString()[..3]
+                        </label>
+                    }
+                </div>
+                <div class="col-2 col-md-1 text-end">
+                    <button type="button" class="btn btn-sm btn-outline-danger" title="Remove this window" aria-label="Remove this window"
+                            @onclick="() => _windows.Remove(window)">✕</button>
+                </div>
+            </div>
+        }
+        <button type="button" class="btn btn-sm btn-outline-secondary mb-3" @onclick="AddWindow">Add a window</button>
+
+        <h2 class="h6">Sources</h2>
+        @if (_sources.Count == 0)
+        {
+            <p class="tile-meta">Nothing reports power yet.</p>
+        }
+        else
+        {
+            <p class="tile-meta">
+                Untick anything counted twice — a plug that sits behind a UPS is already inside the UPS's load.
+                <strong>What's on it</strong> splits a plug's cost between services: <code>NAS, Plex, Frigate</code> evenly,
+                or <code>NAS=2, Plex=1</code> by weight.
+            </p>
+            <div class="table-responsive">
+                <table class="table table-sm small align-middle mb-2">
+                    <thead>
+                        <tr><th>Count it</th><th>Name</th><th>Measured by</th><th>What's on it (optional)</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var source in _sources)
+                        {
+                            <tr @key="source.Key">
+                                <td><input type="checkbox" class="form-check-input" aria-label="Count @source.DefaultName" @bind="source.Include" /></td>
+                                <td><input class="form-control form-control-sm" placeholder="@source.DefaultName" @bind="source.Name" /></td>
+                                <td class="tile-meta">@source.Measures</td>
+                                <td><input class="form-control form-control-sm" placeholder="NAS, Plex, Frigate" @bind="source.Services" /></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @if (_saveProblem is not null)
+        {
+            <p class="text-danger small mb-2">@_saveProblem</p>
+        }
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-primary" disabled="@_saving" @onclick="SaveAsync">Save</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ToggleSettings">Cancel</button>
+        </div>
+    </div>
+}
+
+@if (!_load.Ready)
+{
+    <div class="panel p-3"><div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div></div>
+}
+else if (_snapshot is null)
+{
+    <div class="panel p-3 text-danger">The power figures could not be worked out. The log says why.</div>
+}
+else if (_snapshot.Sources.Count == 0)
+{
+    <div class="panel p-3">
+        <p class="mb-2">Nothing reports power yet.</p>
+        <p class="tile-meta mb-0">
+            Add a <strong>Shelly plug</strong>, a <strong>UPS</strong> through Network UPS Tools, or a Home Assistant or MQTT sensor
+            whose name ends in <code>_watts</code> or <code>_kwh</code>, and it appears here once it has been read.
+        </p>
+    </div>
+}
+else
+{
+    var snapshot = _snapshot;
+    var tariff = snapshot.Tariff;
+
+    <div class="stat-grid mb-3">
+        <div class="widget">
+            <div class="tile-meta">Today so far</div>
+            <div class="stat-value">@tariff.Money(snapshot.Today.Cost)</div>
+            <div class="tile-meta">@PowerShortcode.Kwh(snapshot.Today.Kwh) · @PowerShortcode.Watts(snapshot.Today.AverageWatts) average</div>
+        </div>
+        <div class="widget">
+            <div class="tile-meta">This month so far</div>
+            <div class="stat-value">@tariff.Money(snapshot.Month.Cost)</div>
+            <div class="tile-meta">@PowerShortcode.Kwh(snapshot.Month.Kwh) · @PowerShortcode.Watts(snapshot.Month.AverageWatts) average</div>
+        </div>
+        <div class="widget">
+            <div class="tile-meta">Last 30 days</div>
+            <div class="stat-value">@tariff.Money(snapshot.Last30.Cost)</div>
+            <div class="tile-meta">@PowerShortcode.Kwh(snapshot.Last30.Kwh) · @PowerShortcode.Watts(snapshot.Last30.AverageWatts) average</div>
+        </div>
+        <div class="widget">
+            <div class="tile-meta">This month, projected</div>
+            <div class="stat-value">@tariff.Money(snapshot.ProjectedMonthCost + tariff.MonthlyFee)</div>
+            <div class="tile-meta">
+                @PowerShortcode.Kwh(snapshot.ProjectedMonthKwh)@(tariff.MonthlyFee > 0 ? $" · including the {tariff.Money(tariff.MonthlyFee)} fixed charge" : "")
+            </div>
+        </div>
+    </div>
+
+    <div class="widget mb-3">
+        <div class="widget-head"><h2 class="widget-title">📊 Cost per day</h2></div>
+        <div class="widget-body">
+            @{
+                var days = snapshot.Days.TakeLast(_chartDays).ToList();
+                var peak = days.Count == 0 ? 0 : days.Max(d => d.Cost);
+            }
+            @if (peak <= 0)
+            {
+                <p class="tile-meta mb-0">Nothing measured in the last @_chartDays days yet.</p>
+            }
+            else
+            {
+                var step = 100d / days.Count;
+                <div class="d-flex justify-content-between tile-meta mb-1">
+                    <span>Cost of what was measured, per day</span>
+                    <span>highest @tariff.Money(peak)</span>
+                </div>
+                <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%; height:160px" role="img"
+                     aria-label="Electricity cost per day over the last @_chartDays days">
+                    @foreach (var fraction in new[] { 0.25, 0.5, 0.75 })
+                    {
+                        var y = N(40 - fraction * 38);
+                        <line x1="0" y1="@y" x2="100" y2="@y" stroke="var(--edge)" stroke-width="0.4" vector-effect="non-scaling-stroke" />
+                    }
+                    @for (var i = 0; i < days.Count; i++)
+                    {
+                        var day = days[i];
+                        if (day.Cost <= 0)
+                            continue;
+                        var height = day.Cost / peak * 38;
+                        <rect x="@N(i * step + step * 0.1)" y="@N(40 - height)" width="@N(step * 0.8)" height="@N(height)"
+                              fill="var(--accent)" opacity="0.85">
+                            <title>@($"{day.Date:ddd d MMM} — {tariff.Money(day.Cost)} · {PowerShortcode.Kwh(day.Kwh)}")</title>
+                        </rect>
+                    }
+                </svg>
+                <div class="d-flex justify-content-between tile-meta">
+                    <span>@days[0].Date.ToString("d MMM")</span>
+                    <span>@days[^1].Date.ToString("d MMM")</span>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="widget mb-3">
+        <div class="widget-head"><h2 class="widget-title">🔌 By source</h2></div>
+        <div class="widget-body">
+            <div class="table-responsive">
+                <table class="table table-sm small align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Source</th>
+                            <th class="text-end">Average</th>
+                            <th class="text-end">Today</th>
+                            <th class="text-end">This month</th>
+                            <th class="text-end">Last 30 days</th>
+                            <th class="text-end">Projected month</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var report in snapshot.Reports)
+                        {
+                            var source = snapshot.Sources.FirstOrDefault(s => s.Key == report.Key);
+                            <tr @key="report.Key">
+                                <td>
+                                    <div>@report.Name</div>
+                                    <div class="tile-meta">
+                                        @(report.FromCounter ? "its own meter" : "from its watts")@Coverage(report.Month, "of the month")
+                                    </div>
+                                </td>
+                                <td class="text-end" title="Average over the part of the last 30 days that was measured">@PowerShortcode.Watts(report.Last30.AverageWatts)</td>
+                                <td class="text-end">@Cell(report.Today, tariff)</td>
+                                <td class="text-end">@Cell(report.Month, tariff)</td>
+                                <td class="text-end">@Cell(report.Last30, tariff)</td>
+                                <td class="text-end">@tariff.Money(report.ProjectedMonthCost)<div class="tile-meta">@PowerShortcode.Kwh(report.ProjectedMonthKwh)</div></td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr class="fw-semibold">
+                            <td>All of it</td>
+                            <td class="text-end">@PowerShortcode.Watts(snapshot.Last30.AverageWatts)</td>
+                            <td class="text-end">@Cell(snapshot.Today, tariff)</td>
+                            <td class="text-end">@Cell(snapshot.Month, tariff)</td>
+                            <td class="text-end">@Cell(snapshot.Last30, tariff)</td>
+                            <td class="text-end">@tariff.Money(snapshot.ProjectedMonthCost)<div class="tile-meta">@PowerShortcode.Kwh(snapshot.ProjectedMonthKwh)</div></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            @{
+                var left = snapshot.Sources.Where(s => !s.Include).Select(s => s.Name).ToList();
+            }
+            <p class="tile-meta mt-2 mb-0">
+                <strong>Untracked:</strong> only what is on a plug, a UPS or an energy sensor is counted — the fridge, the router on the wall and
+                anything else not measured is not in these figures, so the bill will be higher.
+                @if (left.Count > 0)
+                {
+                    <span>Left out by choice: @string.Join(", ", left).</span>
+                }
+                Time a source could not be read is not guessed at, so a month with a gap in it reads low; the coverage under each name says how much was measured.
+            </p>
+        </div>
+    </div>
+
+    @if (snapshot.Services.Count > 0)
+    {
+        <div class="widget mb-3">
+            <div class="widget-head"><h2 class="widget-title">🧩 By service <span class="tile-meta fw-normal">(an estimate)</span></h2></div>
+            <div class="widget-body">
+                <table class="table table-sm small align-middle mb-0">
+                    <thead>
+                        <tr><th>Service</th><th>On</th><th class="text-end">This month</th><th class="text-end">Projected month</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var service in snapshot.Services)
+                        {
+                            <tr @key="service.Name">
+                                <td>@service.Name</td>
+                                <td class="tile-meta">@string.Join(", ", service.Sources)</td>
+                                <td class="text-end">@tariff.Money(service.MonthCost)<div class="tile-meta">@PowerShortcode.Kwh(service.MonthKwh)</div></td>
+                                <td class="text-end">@tariff.Money(service.ProjectedMonthCost)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <p class="tile-meta mt-2 mb-0">
+                    A plug knows what it delivered, not which program on the machine behind it asked for it, so each service's figure is its share
+                    of the plug — even, or by the weights you gave — not a measurement.
+                </p>
+            </div>
+        </div>
+    }
+
+    <details class="panel p-3 mb-3">
+        <summary class="tile-meta">How these are worked out</summary>
+        <ul class="tile-meta mb-0 mt-2">
+            <li>A device that keeps its own running total (kWh) is read from that: the rise between readings is what it used, even across time
+                LabbyTwo was not looking. A total that goes back down was reset, and what it reads after the reset counts from zero.</li>
+            <li>Otherwise its watts are integrated — joined reading to reading in straight lines. A gap longer than
+                @Energy.MinimumGap.TotalMinutes minutes (or three probe intervals, if that is longer) is left out, not filled in: nobody knows
+                what it drew while it could not be read.</li>
+            <li>Older history is kept as hourly averages; those count for the part of the hour their readings covered.</li>
+            <li>Each hour is charged at its own price, so time-of-use rates apply to the hours they cover.</li>
+            <li>The projection is the month so far plus the rest of the month at the last 7 days' rate.</li>
+        </ul>
+    </details>
+}
+
+@code {
+    private BackgroundLoad _load = default!;
+    private PowerCosts.Snapshot? _snapshot;
+    private int _chartDays = 30;
+    private Timer? _refresh;
+    private bool _disposed;
+
+    private bool _editing;
+    private bool _saving;
+    private string? _saveProblem;
+    private string _currency = "";
+    private string _price = "";
+    private string _fee = "";
+    private List<WindowEdit> _windows = [];
+    private List<SourceEdit> _sources = [];
+
+    private sealed class WindowEdit
+    {
+        public string Name { get; set; } = "";
+        public string Price { get; set; } = "";
+        public TimeOnly Start { get; set; } = new(16, 0);
+        public TimeOnly End { get; set; } = new(21, 0);
+        public HashSet<DayOfWeek> Days { get; set; } = [.. TimeOfUseWindow.EveryDay];
+    }
+
+    private sealed class SourceEdit
+    {
+        public string Key { get; init; } = "";
+        public string DefaultName { get; init; } = "";
+        public string Measures { get; init; } = "";
+        public string Name { get; set; } = "";
+        public bool Include { get; set; } = true;
+        public string Services { get; set; } = "";
+    }
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Power.Changed += OnPowerChanged;
+        Load(refresh: false);
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // The figures move slowly; asking again every few minutes keeps an open page current
+        // without it being a query per sweep.
+        if (firstRender && RendererInfo.IsInteractive)
+            _refresh = new Timer(_ => OnPowerChanged(), null, PowerCosts.CacheFor, PowerCosts.CacheFor);
+    }
+
+    private void Load(bool refresh)
+    {
+        Task<PowerCosts.Snapshot> Fetch(CancellationToken ct) => Offload.Run(c => Power.GetAsync(c), ct);
+        void Apply(PowerCosts.Snapshot snapshot) => _snapshot = snapshot;
+        if (refresh)
+            _ = _load.Refresh("power", Fetch, Apply);
+        else
+            _ = _load.Load("power", Fetch, Apply);
+    }
+
+    private void OnPowerChanged()
+    {
+        if (!_disposed)
+            _ = InvokeAsync(() => Load(refresh: true));
+    }
+
+    private static string N(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static string Coverage(PeriodEnergy period, string of) =>
+        period.Hours > 0 && period.Coverage < 0.95 ? $" · measured {period.Coverage * 100:0}% {of}" : "";
+
+    private static RenderFragment Cell(PeriodEnergy period, PowerTariff tariff) => @<text>@tariff.Money(period.Cost)<div class="tile-meta">@PowerShortcode.Kwh(period.Kwh)</div></text>;
+
+    private void ToggleSettings()
+    {
+        _editing = !_editing;
+        _saveProblem = null;
+        if (_editing && _snapshot is { } snapshot)
+            Fill(snapshot);
+    }
+
+    /// <summary>The form, filled from what is saved and what was found.</summary>
+    private void Fill(PowerCosts.Snapshot snapshot)
+    {
+        var tariff = snapshot.Tariff;
+        _currency = tariff.Currency;
+        _price = tariff.PricePerKwh.ToString(CultureInfo.InvariantCulture);
+        _fee = tariff.MonthlyFee > 0 ? tariff.MonthlyFee.ToString(CultureInfo.InvariantCulture) : "";
+        _windows = [.. tariff.Windows.Select(w => new WindowEdit
+        {
+            Name = w.Name,
+            Price = w.Price.ToString(CultureInfo.InvariantCulture),
+            Start = w.Start,
+            End = w.End,
+            Days = [.. w.Days],
+        })];
+        _sources = [.. snapshot.Sources.Select(s => new SourceEdit
+        {
+            Key = s.Key,
+            DefaultName = DefaultName(snapshot, s),
+            Measures = s.Measures,
+            Name = s.Settings?.Name ?? "",
+            Include = s.Include,
+            Services = s.Settings is { } saved ? ServiceShare.Format(saved.Services, saved.Weighted) : "",
+        })];
+    }
+
+    /// <summary>What a source is called when nobody has named it.</summary>
+    private static string DefaultName(PowerCosts.Snapshot snapshot, PowerCosts.Source source) =>
+        snapshot.Sources.Count(s => s.Connection.Id == source.Connection.Id) == 1
+            ? source.Connection.Name
+            : $"{source.Connection.Name} · {(source.Power ?? source.Counter)!.Label}";
+
+    private void AddWindow() => _windows.Add(new WindowEdit { Name = _windows.Count == 0 ? "Peak" : "" });
+
+    private static void ToggleDay(WindowEdit window, DayOfWeek day, bool on)
+    {
+        if (on)
+            window.Days.Add(day);
+        else
+            window.Days.Remove(day);
+    }
+
+    private async Task SaveAsync()
+    {
+        _saveProblem = null;
+        if (!TryNumber(_price, out var price))
+        {
+            _saveProblem = "The price per kWh needs to be a number, like 0.15.";
+            return;
+        }
+        var fee = 0d;
+        if (_fee.Trim().Length > 0 && !TryNumber(_fee, out fee))
+        {
+            _saveProblem = "The fixed charge needs to be a number, or left empty.";
+            return;
+        }
+
+        var windows = new List<TimeOfUseWindow>();
+        foreach (var window in _windows)
+        {
+            if (!TryNumber(window.Price, out var windowPrice))
+            {
+                _saveProblem = $"The price for “{(window.Name.Length > 0 ? window.Name : "a window")}” needs to be a number.";
+                return;
+            }
+            if (window.Days.Count == 0)
+            {
+                _saveProblem = $"“{(window.Name.Length > 0 ? window.Name : "A window")}” needs at least one day.";
+                return;
+            }
+            windows.Add(new TimeOfUseWindow(window.Name.Trim(), windowPrice,
+                [.. TimeOfUseWindow.EveryDay.Where(window.Days.Contains)], window.Start, window.End));
+        }
+
+        var tariff = new PowerTariff(price, _currency.Trim().Length > 0 ? _currency.Trim() : PowerTariff.Default.Currency, fee, windows);
+        var setup = new PowerSetup([.. _sources.Select(s =>
+        {
+            var (services, weighted) = ServiceShare.Parse(s.Services);
+            return new PowerSourceSettings(s.Key, s.Name.Trim(), s.Include, services, weighted);
+        })]);
+
+        _saving = true;
+        try
+        {
+            await Offload.Run(async ct =>
+            {
+                await Power.SaveAsync(tariff, setup, ct);
+                return true;
+            });
+            _editing = false;
+        }
+        catch (Exception)
+        {
+            _saveProblem = "The settings could not be saved. The log may say why.";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    /// <summary>A price as typed: a full stop or a comma for the decimals, never negative.</summary>
+    private static bool TryNumber(string text, out double value) =>
+        double.TryParse(text.Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+        && value >= 0 && double.IsFinite(value);
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Power.Changed -= OnPowerChanged;
+        _refresh?.Dispose();
+        _load.Dispose();
+    }
+}
