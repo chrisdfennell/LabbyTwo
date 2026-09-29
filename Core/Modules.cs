@@ -250,10 +250,14 @@ public static class Modules
             .Any(reference => reference.Name == typeof(Modules).Assembly.GetName().Name);
 
         if (providers.Count + widgets.Count + tabKinds.Count + importers.Count
-            + endpoints.Count + jobs.Count == 0 && isPlugin && !isLibrary)
+            + endpoints.Count + jobs.Count == 0 && isPlugin)
         {
-            catalog.Failures.Add(new ModuleFailure(assembly.Location,
-                "Loaded, but declares no providers, widgets, tab kinds, importers, endpoints or jobs."));
+            // A library is not listed at all — not as a failure, and not as a plugin either,
+            // where its own version number (2.7.0, 2026.0.0.1) was then compared with
+            // LabbyTwo's and reported as "built for a different version".
+            if (!isLibrary)
+                catalog.Failures.Add(new ModuleFailure(assembly.Location,
+                    "Loaded, but declares no providers, widgets, tab kinds, importers, endpoints or jobs."));
             return;
         }
 

@@ -53,6 +53,15 @@ public sealed class BigDatabaseTimings
             await TimeAsync(lines, "metrics", connections, id => history.MetricsAsync(id));
             await TimeAsync(lines, "latest", connections, id => history.LatestReadingsAsync(id, TimeSpan.FromDays(1)));
             await TimeAsync(lines, "chart30", connections, id => history.SamplesAsync(id, "cpu_percent", month));
+            // What the monitor reads before it can start watching anything after a restart.
+            // It was a full-table GROUP BY, and on a 580 MB install it held monitoring up for
+            // sixteen minutes; every page budget here passed, because pages never asked it.
+            {
+                var restoreClock = Stopwatch.StartNew();
+                await history.LastSampleAtAsync(connections);
+                restoreClock.Stop();
+                lines.Add(Line("restore", restoreClock.Elapsed, $"last sample time for {connections.Count} connections"));
+            }
             await TimeAsync(lines, "uptime30", connections, async id =>
             {
                 await history.UptimeAsync(id, month);
