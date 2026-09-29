@@ -190,6 +190,11 @@ builder.Services.AddSingleton<ChangeWatcher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChangeWatcher>());
 builder.Services.AddSingleton<IncidentTracker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IncidentTracker>());
+// "Probably caused by" for each incident, read from the feed and the lab's shape, and the
+// one-click write-up that turns an incident into a note.
+builder.Services.AddSingleton<ProbableCauses>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProbableCauses>());
+builder.Services.AddSingleton<IncidentWriteUps>();
 
 // The family status page: a read-only "is Plex working?" for the household, reachable by a
 // share link without signing in, and the "something's broken" reports it sends. The
