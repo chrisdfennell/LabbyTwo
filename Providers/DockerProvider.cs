@@ -91,8 +91,13 @@ public sealed class DockerProvider : IConnectionProvider
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var containers = await ContainersAsync(connection, ct);
+            // The full list rather than ContainersAsync's short form, because it is shared:
+            // the change watcher diffs it after the sweep, and a runbook's {{containers}}
+            // draws from it, and neither then has to ask the host again.
+            var endpoint = connection.Settings.Get("endpoint", DockerSocket.DefaultEndpoint);
+            var containers = DockerContainers.ParseList(await GetAsync(connection, "/containers/json?all=1", ct));
             stopwatch.Stop();
+            DockerContainers.Remember(endpoint, containers);
 
             var running = containers.Count(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase));
             return ProbeResult.Up(stopwatch.Elapsed,

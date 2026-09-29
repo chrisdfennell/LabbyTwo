@@ -1,0 +1,120 @@
+@implements IDisposable
+@inject ChangeStore Changes
+@inject Offload Offload
+
+@* {{changes}}: the change feed in a runbook — what went down, restarted, pulled a new image,
+   fired or was renewed in the last day, newest first. Which options mean what is
+   ChangeLists.Changes, where it is tested.
+
+   The feed is in the database, so it is read off the render thread and shows "…" for the
+   moment that takes; after that it is read again whenever a change is recorded, and only
+   then. *@
+
+@if (Scope is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else if (_problem is not null)
+{
+    <div class="md-down md-changes" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_problem} ({Code.Source})")" aria-label="@_problem">?</span>
+            <span class="tile-meta">@_problem</span>
+        </div>
+    </div>
+}
+else if (!_load.Ready || _options is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else
+{
+    <div class="md-down md-changes" role="list" aria-label="What changed">
+        @if (_changes.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>Nothing changed in the last @ChangeWindow.Describe(_options.Window)</span>
+            </div>
+        }
+        @foreach (var change in _changes)
+        {
+            var where = ChangeLists.Where(change, Scope.Connections);
+            <div class="md-down-row" role="listitem" @key="change.Id">
+                <span class="status-dot @change.Dot" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div>
+                        <span>@change.Title</span>
+                        @if (where is not null)
+                        {
+                            <span class="tile-meta"> · @where</span>
+                        }
+                        <span class="tile-meta md-change-when" title="@change.At.ToLocalTime().ToString("f")"> · @change.At.ToLocalTime().ToString("HH:mm"), @Ago.Since(change.At)</span>
+                    </div>
+                    @if (change.Detail.Length > 0)
+                    {
+                        <div class="tile-meta md-down-message">@change.Detail</div>
+                    }
+                </div>
+            </div>
+        }
+        <div class="md-down-row"><a class="tile-meta" href="changes">Everything that changed</a></div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private ChangeListOptions? _options;
+    private string? _problem;
+    private IReadOnlyList<Change> _changes = [];
+    private BackgroundLoad _load = default!;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Changes.Recorded += OnRecorded;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (Scope is null)
+            return;
+        _options = ChangeLists.Changes(Code, Scope.Connections, out _problem);
+        Load(refresh: false);
+    }
+
+    private void Load(bool refresh)
+    {
+        if (_options is not { } options)
+            return;
+
+        // Asked for generously when connections are named, since those are picked out of
+        // whatever the time index yields; one connection is filtered by the query itself.
+        var single = options.Only is { Count: 1 } one ? one.First() : null;
+        var query = new ChangeQuery(DateTimeOffset.Now - options.Window, DateTimeOffset.Now, options.Kinds, single,
+            options.Only is null || single is not null ? options.Limit : Math.Min(options.Limit * 20, 2000));
+
+        Task<IReadOnlyList<Change>> Fetch(CancellationToken ct) => Offload.Run(async c =>
+            ChangeLists.Narrow(await Changes.QueryAsync(query, c), options.Only, options.Limit), ct);
+
+        // The window is measured from now, so the key leaves the time out: otherwise every
+        // render would be "a new query" and start another read.
+        var key = (Code.Source, string.Join(",", options.Only ?? []));
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, list => _changes = list);
+        else
+            _ = _load.Load(key, Fetch, list => _changes = list);
+    }
+
+    private void OnRecorded(Change change) => _ = InvokeAsync(() => Load(refresh: true));
+
+    public void Dispose()
+    {
+        Changes.Recorded -= OnRecorded;
+        _load.Dispose();
+    }
+}

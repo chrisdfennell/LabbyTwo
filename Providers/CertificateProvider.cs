@@ -44,6 +44,12 @@ public sealed class CertificateProvider : IConnectionProvider
     /// </summary>
     public TimeSpan MinimumInterval => TimeSpan.FromHours(6);
 
+    /// <summary>The probe's detail keys naming the certificate served, which the change feed compares.</summary>
+    public const string SerialDetail = "cert_serial";
+    public const string NotBeforeDetail = "cert_not_before";
+    public const string NotAfterDetail = "cert_not_after";
+    public const string IssuerDetail = "cert_issuer";
+
     public IReadOnlyList<MetricSpec> Metrics =>
     [
         new("cert_days_left", "Certificate expires in", " days"),
@@ -124,6 +130,18 @@ public sealed class CertificateProvider : IConnectionProvider
             if (string.IsNullOrWhiteSpace(issuer))
                 issuer = served.Issuer;
 
+            // Which certificate this is, not only how long it has left. The change feed
+            // compares these between probes: a new serial is a renewal — or a certificate
+            // replaced by something else entirely, which is exactly what to see first when
+            // a site stops working the morning after.
+            var details = new Dictionary<string, string>
+            {
+                [SerialDetail] = served.SerialNumber,
+                [NotBeforeDetail] = starts.ToUniversalTime().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                [NotAfterDetail] = expires.ToUniversalTime().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                [IssuerDetail] = issuer,
+            };
+
             // Down only for a certificate that is actually invalid *by date*, which is the
             // failure this exists to catch and is not a matter of taste. An untrusted chain
             // is reported and charted but is not "down": self-signed is normal on a LAN, and
@@ -139,16 +157,16 @@ public sealed class CertificateProvider : IConnectionProvider
                     ? Ago.Since(expires, now)
                     : $"on {expires:d MMM yyyy}";
 
-                return new ProbeResult(false, $"Expired {lapsed} — {issuer}.", elapsed, readings);
+                return new ProbeResult(false, $"Expired {lapsed} — {issuer}.", elapsed, readings, details);
             }
 
             if (now < starts)
                 return new ProbeResult(false,
-                    $"Not valid until {starts:d MMM yyyy} — {issuer}.", elapsed, readings);
+                    $"Not valid until {starts:d MMM yyyy} — {issuer}.", elapsed, readings, details);
 
             var trust = trusted ? "" : " · self-signed or untrusted";
             return ProbeResult.Up(elapsed,
-                $"{Days(daysLeft)} left — expires {expires:d MMM yyyy}, {issuer}{trust}.", readings);
+                $"{Days(daysLeft)} left — expires {expires:d MMM yyyy}, {issuer}{trust}.", readings, details);
         }
         catch (OperationCanceledException)
         {

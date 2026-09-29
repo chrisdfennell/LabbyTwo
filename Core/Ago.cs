@@ -66,4 +66,22 @@ public static class Ago
     }
 
     public static string Until(DateTimeOffset when) => Until(when, DateTimeOffset.Now);
+
+    /// <summary>
+    /// A length of time in the same two-unit shape, with no "ago": "45s", "12m", "3h 5m",
+    /// "2d 4h". For how long an outage lasted, where the seconds of a short one matter.
+    /// </summary>
+    public static string Duration(TimeSpan span)
+    {
+        if (span < TimeSpan.Zero)
+            span = TimeSpan.Zero;
+        if (span.TotalMinutes < 1)
+            return $"{(int)span.TotalSeconds}s";
+        if (span.TotalHours < 1)
+            return $"{span.Minutes}m";
+        if (span.TotalDays < 1)
+            return span.Minutes == 0 ? $"{span.Hours}h" : $"{span.Hours}h {span.Minutes}m";
+        var days = (int)span.TotalDays;
+        return span.Hours == 0 ? $"{days}d" : $"{days}d {span.Hours}h";
+    }
 }

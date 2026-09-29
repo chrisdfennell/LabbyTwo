@@ -1,0 +1,118 @@
+@implements IDisposable
+@inject IncidentStore Incidents
+@inject HealthMonitor Health
+@inject Offload Offload
+
+@* {{incidents}}: recent outages in a runbook, one line each — what went down first, what
+   followed, when it started and how long it took — open ones marked and counting. The full
+   timeline of each is on the Incidents page, which every line links to.
+
+   Read off the render thread, then read again only when an incident is written; between
+   those the "so far" durations are brought up to date on each sweep, from memory. *@
+
+@if (_problem is not null)
+{
+    <div class="md-down md-incidents" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_problem} ({Code.Source})")" aria-label="@_problem">?</span>
+            <span class="tile-meta">@_problem</span>
+        </div>
+    </div>
+}
+else if (!_load.Ready || _options is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else
+{
+    var now = DateTimeOffset.Now;
+    <div class="md-down md-incidents" role="list" aria-label="Incidents">
+        @if (_incidents.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>@(_options.OpenOnly ? "No incident is open" : $"No incidents in the last {ChangeWindow.Describe(_options.Window)}")</span>
+            </div>
+        }
+        @foreach (var incident in _incidents)
+        {
+            <div class="md-down-row" role="listitem" @key="incident.Id">
+                <span class="status-dot @(incident.IsOpen ? "status-down" : "status-unknown")" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div>
+                        <a href="@($"incidents#incident-{incident.Id}")"><strong>@incident.Title</strong></a>
+                        @if (incident.IsOpen)
+                        {
+                            <span class="badge text-bg-danger ms-1">open</span>
+                        }
+                        @if (incident.Maintenance)
+                        {
+                            <span class="badge text-bg-secondary ms-1" title="Maintenance mode was on while this happened">during maintenance</span>
+                        }
+                    </div>
+                    <div class="tile-meta">@ChangeLists.IncidentWhen(incident, now)</div>
+                    @if (incident.Members.Count > 1)
+                    {
+                        <div class="tile-meta md-down-message">
+                            @string.Join(" · ", incident.Members.OrderBy(m => m.DownAt).Select(m => $"{m.Name}: {ChangeLists.MemberWhen(m, now)}"))
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>Not needed — incidents name what they were called at the time — but every list shortcode is handed it.</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private IncidentListOptions? _options;
+    private string? _problem;
+    private IReadOnlyList<Incident> _incidents = [];
+    private BackgroundLoad _load = default!;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Incidents.Changed += OnIncidentChanged;
+        Health.Updated += OnSweep;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _options = ChangeLists.Incidents(Code, out _problem);
+        Load(refresh: false);
+    }
+
+    private void Load(bool refresh)
+    {
+        if (_options is not { } options)
+            return;
+
+        Task<IReadOnlyList<Incident>> Fetch(CancellationToken ct) =>
+            Offload.Run(c => Incidents.RecentAsync(DateTimeOffset.Now - options.Window, options.Limit, options.OpenOnly, c), ct);
+
+        if (refresh)
+            _ = _load.Refresh(Code.Source, Fetch, list => _incidents = list);
+        else
+            _ = _load.Load(Code.Source, Fetch, list => _incidents = list);
+    }
+
+    private void OnIncidentChanged(Incident incident) => _ = InvokeAsync(() => Load(refresh: true));
+
+    private void OnSweep()
+    {
+        if (_incidents.Any(i => i.IsOpen))
+            _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Incidents.Changed -= OnIncidentChanged;
+        Health.Updated -= OnSweep;
+        _load.Dispose();
+    }
+}

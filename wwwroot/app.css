@@ -1513,6 +1513,30 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .md-down-row > .status-dot { flex: none; }
 .md-down-message { overflow-wrap: anywhere; }
 
+/* The change feed and incident timelines: a time column, a dot, then the sentence. The
+   time is fixed-width so a day of changes lines up down the page like a log. */
+.change-day {
+    font-size: .8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+    margin: 1rem 0 .4rem;
+}
+.change-day:first-child { margin-top: 0; }
+.change-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; }
+.change-row { display: flex; align-items: baseline; gap: .6rem; }
+.change-row > .status-dot { flex: none; }
+.change-time { flex: none; min-width: 4.5rem; font-variant-numeric: tabular-nums; }
+.change-offset { display: block; font-size: .75rem; }
+.change-detail { overflow-wrap: anywhere; }
+.change-row.is-before { opacity: .85; }
+
+.incident.is-open { border-left: 4px solid var(--down); }
+.incident-members { list-style: none; padding: 0; display: grid; gap: .15rem; }
+.incident-members .status-dot { width: .45rem; height: .45rem; margin-right: .25rem; }
+.incident-timeline { border-top: 1px solid var(--edge); padding-top: .75rem; }
+
 /* {{button: NAS / restart}}: a small button that can sit inside a sentence. */
 .md-action { display: inline-flex; align-items: baseline; flex-wrap: wrap; vertical-align: baseline; }
 

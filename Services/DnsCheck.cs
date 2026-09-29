@@ -16,7 +16,7 @@ namespace LabbyTwo.Services;
 /// fault that stopped update checks. A LAN name that will not resolve means the host knows
 /// it through /etc/hosts, NetBIOS or mDNS and the container inherits none of those.
 /// </summary>
-public sealed class DnsCheck(ConfigStore config)
+public sealed class DnsCheck(ConfigStore config, ChangeStore changes, ILogger<DnsCheck> log)
 {
     /// <summary>The name the update check needs, and a fair stand-in for "the internet".</summary>
     public const string PublicProbe = "api.github.com";
@@ -72,9 +72,52 @@ public sealed class DnsCheck(ConfigStore config)
     public async Task<IReadOnlyList<Lookup>> RunAsync(CancellationToken ct = default)
     {
         var targets = TargetsFor(await config.ConnectionsAsync(ct));
-        return await Task.WhenAll(targets.Select(target =>
+        var lookups = await Task.WhenAll(targets.Select(target =>
             ResolveAsync(target, (host, token) => Dns.GetHostAddressesAsync(host, token), Timeout, ct)));
+        await NoteAnswersAsync(lookups, DateTimeOffset.Now, ct);
+        return lookups;
     }
+
+    /// <summary>
+    /// Records a LAN name whose answer is not what it was the last time somebody checked —
+    /// the NAS that moved to a new address after a router swap, the DHCP lease that went
+    /// somewhere else — in the change feed. Only when the check is run, because it only
+    /// runs when asked (see the class summary), and only for names on the LAN: a public
+    /// name behind a CDN answers differently from one minute to the next, and a feed that
+    /// said so every time would be a feed nobody read. A name that did not resolve is not
+    /// an answer, so it neither records a change nor replaces the last good one.
+    /// </summary>
+    public async Task<IReadOnlyList<Change>> NoteAnswersAsync(IEnumerable<Lookup> lookups, DateTimeOffset at, CancellationToken ct)
+    {
+        var recorded = new List<Change>();
+        try
+        {
+            foreach (var lookup in lookups.Where(l => l.Resolved && !l.IsPublic))
+            {
+                var key = $"dns:{lookup.Host.ToLowerInvariant()}";
+                var answer = Answer(lookup.Addresses);
+                var before = await changes.BaselineAsync(key, ct);
+                if (before == answer)
+                    continue;
+                await changes.SetBaselineAsync(key, answer, ct);
+                if (before is null)
+                    continue;
+
+                recorded.Add(await changes.RecordAsync(new Change(at, ChangeKinds.Dns, ChangeActions.Changed, null, lookup.Host,
+                    $"{lookup.Host} now resolves to {answer.Replace(",", ", ")}",
+                    $"It was {before.Replace(",", ", ")}. Used by {string.Join(", ", lookup.UsedBy)}."), ct));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Could not compare DNS answers with the last check");
+        }
+        return recorded;
+    }
+
+    /// <summary>The addresses as one comparable value: sorted, so an answer in another order is the same answer.</summary>
+    public static string Answer(IEnumerable<string> addresses) =>
+        string.Join(',', addresses.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase));
 
     /// <summary>
     /// One lookup, bounded. The resolver is passed in so the timing and failure handling

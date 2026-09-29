@@ -73,7 +73,7 @@ public static class Shortcodes
     ];
 
     /// <summary>A whole card or list, on a line of its own.</summary>
-    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "down", "alerts", "containers", "updates", "renewals"];
+    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "down", "alerts", "containers", "updates", "renewals", "changes", "incidents"];
 
     /// <summary>
     /// The edges of a section: <c>{{if …}}</c> shown only while something is true, and
@@ -87,7 +87,7 @@ public static class Shortcodes
     /// few words — the colon still has to be there for anything else, so a Go template's
     /// <c>{{ .Name }}</c> stays text.
     /// </summary>
-    public static readonly IReadOnlyList<string> BareKinds = ["down", "else", "end", "alerts", "containers", "updates", "renewals", "today"];
+    public static readonly IReadOnlyList<string> BareKinds = ["down", "else", "end", "alerts", "containers", "updates", "renewals", "changes", "incidents", "today"];
 
     /// <summary>Where a shortcode sits in the text it was found in.</summary>
     public sealed record Found(int Index, int Length, Shortcode Code);
