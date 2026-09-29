@@ -1,5 +1,6 @@
 @inject ConfigStore Config
 @inject Registry Registry
+@inject ActionRunner Runner
 
 @* Sits under a Markdown box and points at lines that will not render the way they look.
    Shown wherever Markdown is edited, so the notes page and a Markdown widget behave the
@@ -55,6 +56,7 @@
     <div class="d-flex align-items-center gap-2 flex-wrap">
         <span class="tile-meta">
             Live values: <code>{{status: NAS}}</code>, <code>{{metric: NAS / cpu_percent}}</code>, <code>{{widget: card title}}</code>.
+            Runbooks: <code>{{down}}</code>, <code>{{if down: NAS}}</code> … <code>{{end}}</code>, <code>{{button: NAS / restart}}</code>.
         </span>
         <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAsync" aria-expanded="@(_open ? "true" : "false")">
             @(_open ? "Close" : "Insert live value…")
@@ -81,10 +83,19 @@
                             <option value="since">Time since it changed</option>
                             <option value="gauge">A gauge card</option>
                             <option value="widget">An existing card</option>
+                            <option value="down">What’s down right now</option>
+                            <option value="if-down">A section shown while it’s down</option>
+                            <option value="button">One of its action buttons</option>
                         </select>
                     </div>
 
-                    @if (_kind == "widget")
+                    @if (_kind == "down")
+                    {
+                        <div class="col-sm-8 tile-meta">
+                            Every monitored connection that is down, with how long and why — or “Everything’s up”.
+                        </div>
+                    }
+                    else if (_kind == "widget")
                     {
                         <div class="col-sm-8">
                             <label class="form-label small mb-1" for="@Id("widget")">Card</label>
@@ -109,6 +120,19 @@
                                 }
                             </select>
                         </div>
+                        @if (_kind == "button")
+                        {
+                            <div class="col-sm-4">
+                                <label class="form-label small mb-1" for="@Id("action")">Action</label>
+                                <select id="@Id("action")" class="form-select form-select-sm" @bind="_action">
+                                    <option value="">@(ActionChoices.Count == 0 && _connectionName.Length > 0 ? "It has none" : "Choose…")</option>
+                                    @foreach (var action in ActionChoices)
+                                    {
+                                        <option value="@action.Id">@action.Label</option>
+                                    }
+                                </select>
+                            </div>
+                        }
                         @if (_kind is "metric" or "gauge" or "forecast")
                         {
                             <div class="col-sm-4">
@@ -150,6 +174,7 @@
     private string _connectionName = "";
     private string _metric = "";
     private string _widgetTitle = "";
+    private string _action = "";
 
     // Recomputed when the text changes rather than in the markup, so a long note is not
     // re-scanned on every unrelated render of the form around it.
@@ -166,18 +191,43 @@
             ? Registry.MetricsFor(connection).Where(m => _kind != "forecast" || m.Capacity is not null)
             : [];
 
+    /// <summary>
+    /// What the chosen connection can do right now — the same list its Controls card and
+    /// the {{button}} it writes will use. In memory: the provider answers from settings.
+    /// </summary>
+    private IReadOnlyList<ProviderAction> ActionChoices =>
+        _connections?.FirstOrDefault(c => c.Name == _connectionName) is { } connection
+            ? Runner.ActionsFor(connection)
+            : [];
+
     /// <summary>The shortcode the form describes, or null until it describes one.</summary>
     private string? Preview => _kind switch
     {
+        "down" => Shortcodes.Write("down", []),
         "widget" => _widgetTitle.Length > 0 ? Shortcodes.Write("widget", [_widgetTitle]) : null,
         _ when _connectionName.Length == 0 => null,
         "metric" => _metric.Trim().Length > 0 ? Shortcodes.Write("metric", [_connectionName, _metric.Trim()]) : null,
         "forecast" => Shortcodes.Write("forecast", [_connectionName, _metric.Trim()]),
+        "if-down" => IfDown(_connectionName),
+        "button" => _action.Length > 0 && ActionChoices.Any(a => a.Id == _action)
+            ? Shortcodes.Write("button", [_connectionName, _action])
+            : null,
         "gauge" => _metric.Trim().Length > 0
             ? Shortcodes.Write("card", ["gauge"], [new("connection", _connectionName), new("metric", _metric.Trim())])
             : null,
         _ => Shortcodes.Write(_kind, [_connectionName]),
     };
+
+    /// <summary>
+    /// The skeleton of a section for when one connection is down: a heading to fill in, a
+    /// line that says it is fine otherwise. The name is quoted exactly as the parser wants
+    /// it, which is why this is built with Shortcodes.QuoteTarget rather than by hand.
+    /// </summary>
+    private static string IfDown(string name)
+    {
+        var quoted = Shortcodes.QuoteTarget(name);
+        return $"{{{{if down: {quoted}}}}}\n### {name} is down\n\n1. What to check first…\n{{{{else}}}}\n{name} is fine.\n{{{{end}}}}";
+    }
 
     /// <summary>
     /// The lists are read when the helper is opened, not when the editor is, so a form with
@@ -211,7 +261,7 @@
         var last = text[(text.LastIndexOf('\n') + 1)..].TrimStart();
         var structural = last.Length > 0
             && (last[0] is '#' or '-' or '*' or '+' or '>' or '|' || System.Text.RegularExpressions.Regex.IsMatch(last, @"^\d+[.)]\s"));
-        var block = _kind is "widget" or "gauge";
+        var block = _kind is "widget" or "gauge" or "down" or "if-down";
         var joined = text.Length == 0 ? code : text + (block || structural ? "\n\n" : " ") + code;
         Value = joined;
         OnParametersSet();

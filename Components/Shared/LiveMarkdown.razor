@@ -4,6 +4,9 @@
 @using Microsoft.Extensions.Logging
 @inject Markdown Markdown
 @inject ConfigStore Config
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject Registry Registry
 @inject ILogger<LiveMarkdown> Log
 
 @* Markdown with live values in it. Drop-in for the old (MarkupString)Markdown.ToHtml(…):
@@ -13,7 +16,13 @@
    With shortcodes, the renderer's HTML is read back into elements (see MarkupTree) and
    each placeholder becomes a component — LiveValue inside a sentence, EmbeddedCard on a
    line of its own. Those components subscribe to the live state themselves, so a value
-   changes in place without this document being rendered again. *@
+   changes in place without this document being rendered again.
+
+   {{if …}} sections are cut out of the source before any of it is rendered (see Runbook
+   and Markdown.PreparePage), so each branch is its own rendered piece and a branch that
+   does not apply is simply not drawn — it is not in the page to be read or copied. Whether
+   each one applies is decided here, from memory, whenever a sweep lands or a reading
+   arrives, and only a change of mind redraws the page. *@
 
 @Body
 
@@ -26,27 +35,80 @@
     [CascadingParameter] public EmbedChain? Chain { get; set; }
 
     private string? _content;
-    private LiveDocument _document = LiveDocument.Empty;
-    private IReadOnlyList<MarkupNode> _nodes = [];
+    private LivePage _page = LivePage.Empty;
+    private bool _live;
     private ShortcodeScope? _scope;
     private bool _loading;
     private bool _stale;
     private bool _disposed;
 
-    protected override void OnInitialized() => Config.Changed += OnConfigChanged;
+    private RunbookFacts _facts = default!;
+    private Dictionary<LiveIf, ConditionResult> _results = [];
+
+    protected override void OnInitialized()
+    {
+        _facts = new RunbookFacts(Registry, Health, Latest);
+        Config.Changed += OnConfigChanged;
+        Health.Updated += OnLabChanged;
+        Latest.Changed += OnReadingsChanged;
+    }
 
     protected override void OnParametersSet()
     {
         if (_content != Content)
         {
             _content = Content;
-            _document = Markdown.Prepare(Content);
-            _nodes = _document.Shortcodes.Count > 0 ? MarkupTree.Parse(_document.Html) : [];
+            _page = Markdown.PreparePage(Content);
+            // Anything but one plain piece of Markdown needs drawing part by part, and
+            // names looked up: a shortcode in any piece, a section, a note about a mistake.
+            _live = _page.Parts is not ([] or [LiveSection { Document.Shortcodes.Count: 0 }]);
+            Decide();
         }
 
-        if (_document.Shortcodes.Count > 0 && _scope is null)
+        if (_live && _scope is null)
             LoadScope();
     }
+
+    /// <summary>
+    /// Works out every section's condition again. True when any answer changed, which is
+    /// the only time the page is worth drawing again: a sweep lands every thirty seconds and
+    /// almost never changes what a runbook shows.
+    /// </summary>
+    private bool Decide()
+    {
+        if (!_page.HasSections)
+        {
+            var had = _results.Count > 0;
+            _results = [];
+            return had;
+        }
+        if (_scope is null)
+            return false;
+
+        var results = new Dictionary<LiveIf, ConditionResult>();
+        foreach (var section in _page.Sections())
+        {
+            if (section.Section.Condition is { } condition)
+                results[section] = _facts.Evaluate(condition, _scope.Connections);
+        }
+        var changed = results.Count != _results.Count
+            || results.Any(r => !_results.TryGetValue(r.Key, out var before) || before != r.Value);
+        _results = results;
+        return changed;
+    }
+
+    private void OnLabChanged()
+    {
+        if (_disposed || !_page.HasSections)
+            return;
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed && Decide())
+                StateHasChanged();
+        });
+    }
+
+    private void OnReadingsChanged(string connectionId) => OnLabChanged();
 
     /// <summary>
     /// Every connection, card and tab, for the shortcodes to look names up in. The store
@@ -90,7 +152,10 @@
                     if (_disposed)
                         return;
                     if (scope is not null)
+                    {
                         _scope = scope;
+                        Decide();
+                    }
                     if (_stale)
                         LoadScope();
                     StateHasChanged();
@@ -106,16 +171,18 @@
     /// <summary>A connection renamed, a card retitled — the names the shortcodes use may mean something else now.</summary>
     private void OnConfigChanged()
     {
-        if (_disposed || _document.Shortcodes.Count == 0)
+        if (_disposed || !_live)
             return;
         _ = InvokeAsync(LoadScope);
     }
 
     private RenderFragment Body => builder =>
     {
-        if (_document.Shortcodes.Count == 0)
+        if (!_live)
         {
-            builder.AddMarkupContent(0, _document.Html);
+            // No shortcodes and no sections: the renderer's HTML, exactly as it always was.
+            foreach (var section in _page.Parts.OfType<LiveSection>())
+                builder.AddMarkupContent(0, section.Document.Html);
             return;
         }
 
@@ -123,9 +190,86 @@
         // somebody else's widget component, which has never heard of it.
         builder.OpenComponent<CascadingValue<EmbedChain>>(1);
         builder.AddComponentParameter(2, nameof(CascadingValue<EmbedChain>.Value), (Chain ?? EmbedChain.Empty).With(OwnerId));
-        builder.AddComponentParameter(3, nameof(CascadingValue<EmbedChain>.ChildContent), (RenderFragment)(inner => RenderNodes(inner, _nodes, blockAllowed: true)));
+        builder.AddComponentParameter(3, nameof(CascadingValue<EmbedChain>.ChildContent), (RenderFragment)(inner => RenderParts(inner, _page.Parts)));
         builder.CloseComponent();
     };
+
+    /// <summary>
+    /// The page's pieces in order, each in a region of its own numbered by its ordinal, so a
+    /// section appearing or going away does not make the renderer re-match every card and
+    /// value after it against the wrong ones.
+    /// </summary>
+    private void RenderParts(RenderTreeBuilder builder, IReadOnlyList<LivePart> parts)
+    {
+        foreach (var part in parts)
+        {
+            builder.OpenRegion(part.Ordinal);
+            switch (part)
+            {
+                case LiveSection { Document.Shortcodes.Count: 0 } plain:
+                    builder.AddMarkupContent(0, plain.Document.Html);
+                    break;
+                case LiveSection section:
+                    RenderNodes(builder, section.Document, section.Nodes, blockAllowed: true);
+                    break;
+                case LiveProblem problem:
+                    RenderNote(builder, problem.Message);
+                    break;
+                case LiveIf branch:
+                    RenderSection(builder, branch);
+                    break;
+            }
+            builder.CloseRegion();
+        }
+    }
+
+    private void RenderSection(RenderTreeBuilder builder, LiveIf branch)
+    {
+        foreach (var note in branch.Section.Notes)
+            RenderNote(builder, note);
+
+        if (branch.Section.Problem is { } problem)
+        {
+            RenderNote(builder, problem);
+            return;
+        }
+
+        // Until the names are known neither part is drawn — for the moment that takes —
+        // rather than the "otherwise" part flashing up on every page load.
+        if (!_results.TryGetValue(branch, out var result))
+            return;
+
+        if (result.Problem is { } broken)
+        {
+            // Neither part: the condition names nothing, so "otherwise" would be a guess.
+            RenderNote(builder, $"{broken} ({branch.Section.Source})");
+            return;
+        }
+
+        // Each branch in a region of its own, so switching from one to the other replaces
+        // it wholesale rather than diffing a NAS-is-down page into a NAS-is-fine one.
+        builder.OpenRegion(result.Holds ? 1 : 2);
+        RenderParts(builder, result.Holds ? branch.Then : branch.Else);
+        builder.CloseRegion();
+    }
+
+    /// <summary>A mistake in the page, said where it is — the same frame a card that names nothing gets.</summary>
+    private static void RenderNote(RenderTreeBuilder builder, string message)
+    {
+        builder.OpenElement(60, "div");
+        builder.AddAttribute(61, "class", "md-embed is-problem");
+        builder.AddAttribute(62, "role", "note");
+        builder.OpenElement(63, "span");
+        builder.AddAttribute(64, "class", "sc-problem");
+        builder.AddAttribute(65, "aria-hidden", "true");
+        builder.AddContent(66, "?");
+        builder.CloseElement();
+        builder.OpenElement(67, "span");
+        builder.AddAttribute(68, "class", "tile-meta");
+        builder.AddContent(69, message);
+        builder.CloseElement();
+        builder.CloseElement();
+    }
 
     /// <summary>
     /// Elements whose text may hold a whole card: a list item or a quote holding nothing
@@ -134,14 +278,14 @@
     /// </summary>
     private static readonly HashSet<string> BlockParents = new(StringComparer.Ordinal) { "li", "blockquote", "td", "th", "div" };
 
-    private void RenderNodes(RenderTreeBuilder builder, IReadOnlyList<MarkupNode> nodes, bool blockAllowed)
+    private void RenderNodes(RenderTreeBuilder builder, LiveDocument document, IReadOnlyList<MarkupNode> nodes, bool blockAllowed)
     {
         foreach (var node in nodes)
         {
             switch (node)
             {
                 case MarkupText text:
-                    RenderText(builder, text.Html, blockAllowed);
+                    RenderText(builder, document, text.Html, blockAllowed);
                     break;
 
                 case MarkupElement element when !Markdown.Placeholders.IsMatch(element.OuterHtml):
@@ -149,10 +293,10 @@
                     builder.AddMarkupContent(10, element.OuterHtml);
                     break;
 
-                case MarkupElement { Name: "p" } element when SoleBlock(element) is { } index:
+                case MarkupElement { Name: "p" } element when SoleBlock(document, element) is { } index:
                     // A card on a line of its own is a paragraph to Markdown, and a <div>
                     // inside a <p> is not something a browser will keep. The paragraph goes.
-                    RenderShortcode(builder, index);
+                    RenderShortcode(builder, document, index);
                     break;
 
                 case MarkupElement element:
@@ -161,9 +305,9 @@
                     {
                         // A shortcode inside a link's address or an image's alt text has
                         // nowhere to draw a component, so it reads as what was written.
-                        builder.AddAttribute(21, name, Markdown.Placeholders.Replace(value, m => Source(m)));
+                        builder.AddAttribute(21, name, Markdown.Placeholders.Replace(value, m => Source(document, m)));
                     }
-                    RenderNodes(builder, element.Children, BlockParents.Contains(element.Name));
+                    RenderNodes(builder, document, element.Children, BlockParents.Contains(element.Name));
                     builder.CloseElement();
                     break;
             }
@@ -174,7 +318,7 @@
     /// Text around placeholders. Decoded and written as text, not markup — the render tree
     /// encodes it again — so nothing in it can become a tag even in principle.
     /// </summary>
-    private void RenderText(RenderTreeBuilder builder, string html, bool blockAllowed)
+    private void RenderText(RenderTreeBuilder builder, LiveDocument document, string html, bool blockAllowed)
     {
         // A card only where it is all the text there is: "- {{widget: CPU}}" is a card in a
         // list, "- see {{widget: CPU}}" is a card in a sentence.
@@ -187,18 +331,35 @@
                 builder.AddContent(30, WebUtility.HtmlDecode(html[at..match.Index]));
             at = match.Index + match.Length;
 
-            if (Index(match) is { } index)
-                RenderShortcode(builder, index, blockAllowed: alone);
+            if (Index(document, match) is { } index)
+                RenderShortcode(builder, document, index, blockAllowed: alone);
         }
         if (at < html.Length)
             builder.AddContent(31, WebUtility.HtmlDecode(html[at..]));
     }
 
-    private void RenderShortcode(RenderTreeBuilder builder, int index, bool blockAllowed = true)
+    private void RenderShortcode(RenderTreeBuilder builder, LiveDocument document, int index, bool blockAllowed = true)
     {
-        var code = _document.Shortcodes[index];
+        var code = document.Shortcodes[index];
+        if (code.Kind == "button")
+        {
+            // A button reads the same in a sentence or on a line of its own.
+            builder.OpenComponent<RunbookButton>(70);
+            builder.SetKey(index);
+            builder.AddComponentParameter(71, nameof(RunbookButton.Code), code);
+            builder.AddComponentParameter(72, nameof(RunbookButton.Scope), _scope);
+            builder.CloseComponent();
+        }
+        else if (code.Kind == "down" && blockAllowed)
+        {
+            builder.OpenComponent<RunbookDown>(80);
+            builder.SetKey(index);
+            builder.AddComponentParameter(81, nameof(RunbookDown.Code), code);
+            builder.AddComponentParameter(82, nameof(RunbookDown.Scope), _scope);
+            builder.CloseComponent();
+        }
         // A card where a card cannot go is handed to LiveValue, which says so with a "?".
-        if (code.IsBlock && blockAllowed)
+        else if (code.IsBlock && blockAllowed)
         {
             builder.OpenComponent<EmbeddedCard>(40);
             builder.SetKey(index);
@@ -217,26 +378,28 @@
     }
 
     /// <summary>The block shortcode a paragraph consists of, if that is all it is.</summary>
-    private int? SoleBlock(MarkupElement paragraph)
+    private int? SoleBlock(LiveDocument document, MarkupElement paragraph)
     {
         if (paragraph.Children is not [MarkupText { Html: var html }])
             return null;
         var match = Markdown.Placeholders.Match(html.Trim());
-        return match.Success && match.Length == html.Trim().Length && Index(match) is { } index
-               && _document.Shortcodes[index].IsBlock
+        return match.Success && match.Length == html.Trim().Length && Index(document, match) is { } index
+               && document.Shortcodes[index].IsBlock
             ? index
             : null;
     }
 
-    private int? Index(System.Text.RegularExpressions.Match match) =>
-        int.TryParse(match.Groups[1].Value, out var index) && index < _document.Shortcodes.Count ? index : null;
+    private static int? Index(LiveDocument document, System.Text.RegularExpressions.Match match) =>
+        int.TryParse(match.Groups[1].Value, out var index) && index < document.Shortcodes.Count ? index : null;
 
-    private string Source(System.Text.RegularExpressions.Match match) =>
-        Index(match) is { } index ? _document.Shortcodes[index].Source : "";
+    private static string Source(LiveDocument document, System.Text.RegularExpressions.Match match) =>
+        Index(document, match) is { } index ? document.Shortcodes[index].Source : "";
 
     public void Dispose()
     {
         _disposed = true;
         Config.Changed -= OnConfigChanged;
+        Health.Updated -= OnLabChanged;
+        Latest.Changed -= OnReadingsChanged;
     }
 }

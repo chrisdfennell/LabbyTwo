@@ -76,6 +76,73 @@ public sealed partial class Markdown
         return new LiveDocument(Markdig.Markdown.ToHtml(text.ToString(), _pipeline), codes);
     }
 
+    /// <summary>
+    /// Markdown that may have <c>{{if …}}</c> sections in it, cut into its sections first
+    /// (see <see cref="Runbook"/>) and each piece rendered on its own by <see cref="Prepare"/>.
+    /// A note with no sections comes back as one piece that is exactly what
+    /// <see cref="Prepare"/> would have made of it, so nothing changes for a note that has
+    /// never heard of them.
+    /// </summary>
+    public LivePage PreparePage(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+            return LivePage.Empty;
+        if (!Runbook.MayHaveSections(markdown))
+            return new LivePage([Section(Prepare(markdown), 0)]);
+
+        var parts = Runbook.Parse(markdown, CodeRanges(markdown));
+        var ordinal = 0;
+        var usedIds = new HashSet<string>(StringComparer.Ordinal);
+        return new LivePage(Convert(parts));
+
+        IReadOnlyList<LivePart> Convert(IReadOnlyList<RunbookPart> pieces)
+        {
+            var converted = new List<LivePart>();
+            foreach (var piece in pieces)
+            {
+                switch (piece)
+                {
+                    case RunbookText text:
+                        var document = Prepare(text.Markdown);
+                        // Each piece is its own document to the renderer, so two pieces with
+                        // a "Steps" heading would both call it #steps. Later ones are
+                        // numbered on, as the renderer does within one document, so every
+                        // heading can still be linked to.
+                        document = document with { Html = HeadingId().Replace(document.Html, m => UniqueId(m, usedIds)) };
+                        converted.Add(Section(document, ordinal++));
+                        break;
+                    case RunbookProblem problem:
+                        converted.Add(new LiveProblem(problem.Message, ordinal++));
+                        break;
+                    case RunbookIf section:
+                        var at = ordinal++;
+                        converted.Add(new LiveIf(section, Convert(section.Then), Convert(section.Else), at));
+                        break;
+                }
+            }
+            return converted;
+        }
+    }
+
+    private static LiveSection Section(LiveDocument document, int ordinal) =>
+        new(document, document.Shortcodes.Count > 0 ? MarkupTree.Parse(document.Html) : [], ordinal);
+
+    /// <summary>
+    /// The renderer's own heading id attribute. Its value is the renderer's slug — letters,
+    /// digits, dashes — so appending "-2" to it cannot make it anything but another id.
+    /// </summary>
+    [GeneratedRegex("""(<h[1-6] id=")([^"<>]*)(")""")]
+    private static partial Regex HeadingId();
+
+    private static string UniqueId(Match match, HashSet<string> used)
+    {
+        var id = match.Groups[2].Value;
+        var unique = id;
+        for (var n = 1; !used.Add(unique); n++)
+            unique = $"{id}-{n}";
+        return match.Groups[1].Value + unique + match.Groups[3].Value;
+    }
+
     /// <summary>The word standing in for the nth shortcode.</summary>
     public static string Placeholder(int index) => $"lt{Nonce}q{index}q";
 
@@ -104,6 +171,50 @@ public sealed partial class Markdown
             letters[i] = (char)('a' + bytes[i] % 26);
         return new string(letters);
     }
+}
+
+/// <summary>
+/// A whole Markdown page cut at its <c>{{if …}}</c> sections: rendered pieces, sections
+/// holding more pieces, and notes about mistakes. Each part carries an ordinal, unique in
+/// the page and the same every time the same text is prepared, which the component drawing
+/// it uses to keep each part's components when a section appears or disappears around it.
+/// </summary>
+public sealed record LivePage(IReadOnlyList<LivePart> Parts)
+{
+    public static LivePage Empty { get; } = new([]);
+
+    /// <summary>Whether any part is a section, which is what the page has to watch the lab for.</summary>
+    public bool HasSections => Sections().Any();
+
+    /// <summary>Every section, nested ones included.</summary>
+    public IEnumerable<LiveIf> Sections() => Walk(Parts);
+
+    private static IEnumerable<LiveIf> Walk(IEnumerable<LivePart> parts)
+    {
+        foreach (var part in parts.OfType<LiveIf>())
+        {
+            yield return part;
+            foreach (var inner in Walk(part.Then.Concat(part.Else)))
+                yield return inner;
+        }
+    }
+}
+
+public abstract record LivePart(int Ordinal);
+
+/// <summary>A piece of Markdown, rendered, and read back into elements when it has shortcodes in it.</summary>
+public sealed record LiveSection(LiveDocument Document, IReadOnlyList<MarkupNode> Nodes, int Ordinal) : LivePart(Ordinal);
+
+/// <summary>A mistake in how the sections were written, drawn as a "?" note where it was.</summary>
+public sealed record LiveProblem(string Message, int Ordinal) : LivePart(Ordinal);
+
+/// <summary>A section, with its two branches already prepared; only one is ever drawn.</summary>
+public sealed record LiveIf(RunbookIf Section, IReadOnlyList<LivePart> Then, IReadOnlyList<LivePart> Else, int Ordinal) : LivePart(Ordinal)
+{
+    /// <summary>Records compare by value; two sections with the same text are still two sections.</summary>
+    public bool Equals(LiveIf? other) => ReferenceEquals(this, other);
+
+    public override int GetHashCode() => Ordinal;
 }
 
 /// <summary>

@@ -20,7 +20,15 @@ public sealed record Shortcode(
     /// <summary>Whether this draws a whole card rather than a few words inside a sentence.</summary>
     public bool IsBlock => Shortcodes.BlockKinds.Contains(Kind);
 
-    public bool IsKnown => Shortcodes.InlineKinds.Contains(Kind) || IsBlock;
+    public bool IsKnown => Shortcodes.InlineKinds.Contains(Kind) || IsBlock || IsStructure;
+
+    /// <summary>
+    /// <c>{{if …}}</c>, <c>{{else}}</c> or <c>{{end}}</c>: not something drawn, but the
+    /// edges of a conditional section. On a line of their own they are taken out before the
+    /// Markdown is rendered (see <see cref="Runbook"/>); anywhere else they are a mistake,
+    /// and are drawn as a "?" saying so.
+    /// </summary>
+    public bool IsStructure => Shortcodes.StructureKinds.Contains(Kind);
 
     /// <summary>The nth positional part, or empty.</summary>
     public string Part(int index) => index < Target.Count ? Target[index] : "";
@@ -44,7 +52,9 @@ public sealed record Shortcode(
 /// <list type="bullet">
 /// <item><c>{{</c>, a kind made of letters and dashes, a colon, the arguments, <c>}}</c>, all
 /// on one line. The colon is required, which keeps <c>{{ .Name }}</c> in a pasted Go
-/// template, or a Handlebars <c>{{#if}}</c>, as the text it was.</item>
+/// template, or a Handlebars <c>{{#if}}</c>, as the text it was. The exceptions are the
+/// few words that take nothing — <c>{{down}}</c>, <c>{{else}}</c>, <c>{{end}}</c> — and
+/// <c>{{if …}}</c>, whose condition is read by <see cref="Runbook"/>.</item>
 /// <item>The arguments are words, <c>"quoted words"</c>, slashes and <c>key=value</c>
 /// pairs. Words between slashes make up one part of the target, so a connection called
 /// Home Assistant needs no quotes; a name with a slash in it does.</item>
@@ -55,10 +65,21 @@ public sealed record Shortcode(
 public static class Shortcodes
 {
     /// <summary>A few words inside a sentence.</summary>
-    public static readonly IReadOnlyList<string> InlineKinds = ["status", "metric", "forecast", "uptime", "since"];
+    public static readonly IReadOnlyList<string> InlineKinds = ["status", "metric", "forecast", "uptime", "since", "button"];
 
     /// <summary>A whole card, on a line of its own.</summary>
-    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card"];
+    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "down"];
+
+    /// <summary>The edges of a section shown only while something is true.</summary>
+    public static readonly IReadOnlyList<string> StructureKinds = ["if", "else", "end"];
+
+    /// <summary>
+    /// Kinds that make sense with nothing after them, and so may be written without the
+    /// colon: <c>{{down}}</c>, <c>{{else}}</c>, <c>{{end}}</c>. Only these few words — the
+    /// colon still has to be there for anything else, so a Go template's <c>{{ .Name }}</c>
+    /// stays text.
+    /// </summary>
+    public static readonly IReadOnlyList<string> BareKinds = ["down", "else", "end"];
 
     /// <summary>Where a shortcode sits in the text it was found in.</summary>
     public sealed record Found(int Index, int Length, Shortcode Code);
@@ -103,9 +124,27 @@ public static class Shortcodes
             return null;
 
         var inner = text[2..^2];
+
+        // {{if down: NAS}}: everything after the "if" is the condition, read by Runbook
+        // rather than here, since its own colon and operators are not arguments. It has to
+        // look like one of ours — a colon, or "any down" / "all up" — so Go's {{if .Ready}}
+        // stays the text it was.
+        var trimmed = inner.Trim();
+        if (trimmed.Length > 3 && trimmed.StartsWith("if", StringComparison.OrdinalIgnoreCase) && char.IsWhiteSpace(trimmed[2]))
+        {
+            var condition = trimmed[3..].Trim();
+            if (condition.Contains(':') || Runbook.IsWholeLabCondition(condition))
+                return new Shortcode("if", [condition], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), source);
+            return null;
+        }
+
         var colon = inner.IndexOf(':');
         if (colon < 0)
-            return null;
+        {
+            return BareKinds.Contains(trimmed.ToLowerInvariant())
+                ? new Shortcode(trimmed.ToLowerInvariant(), [], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), source)
+                : null;
+        }
 
         var kind = inner[..colon].Trim();
         if (kind.Length == 0 || !char.IsAsciiLetter(kind[0]) || !kind.All(c => char.IsAsciiLetter(c) || c == '-'))
@@ -122,17 +161,23 @@ public static class Shortcodes
     /// </summary>
     public static string Write(string kind, IEnumerable<string> target, IEnumerable<KeyValuePair<string, string>>? options = null)
     {
+        // {{down}} rather than {{down:}}, which would read back the same but looks like a
+        // mistake to whoever reads the note.
+        var parts = target.Where(p => p.Length > 0).ToList();
+        var pairs = (options ?? []).Where(o => o.Value.Length > 0).ToList();
+        if (parts.Count == 0 && pairs.Count == 0 && BareKinds.Contains(kind))
+            return "{{" + kind + "}}";
+
         var text = new StringBuilder("{{").Append(kind).Append(':');
         var first = true;
-        foreach (var part in target.Where(p => p.Length > 0))
+        foreach (var part in parts)
         {
             text.Append(first ? " " : " / ").Append(QuoteTarget(part));
             first = false;
         }
-        foreach (var (key, value) in options ?? [])
+        foreach (var (key, value) in pairs)
         {
-            if (value.Length > 0)
-                text.Append(' ').Append(key).Append("=\"").Append(value.Replace("\\", "\\\\").Replace("\"", "\\\"")).Append('"');
+            text.Append(' ').Append(key).Append("=\"").Append(value.Replace("\\", "\\\\").Replace("\"", "\\\"")).Append('"');
         }
         return text.Append("}}").ToString();
     }

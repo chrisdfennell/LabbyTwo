@@ -553,6 +553,72 @@ drawn by components after the Markdown is rendered and sanitised, so a shortcode
 smuggle script in. None of this reaches anyone signed out: the public status page shows
 no cards or notes, and an exported tab or card carries the shortcodes as the text they are.
 
+#### Runbooks
+
+Three more turn a note into the page you open when something breaks:
+
+```markdown
+{{down}}
+
+{{if down: QNAP NAS}}
+### The NAS is down
+1. Check the power light…
+{{button: QNAP NAS / restart}}
+{{else}}
+The NAS is fine.
+{{end}}
+```
+
+| Shortcode | Does |
+|---|---|
+| `{{down}}` | lists what is down right now — dot, name, "down for 12m", and what the probe said — or "Everything's up". On a line of its own |
+| `{{down: only="QNAP NAS, Plex"}}` | only those connections |
+| `{{down: include="checking"}}` | also lists what has not been checked yet |
+| `{{down: silenced="hide"}}` | leaves out silenced connections, which are otherwise listed and marked |
+| `{{if …}}` … `{{else}}` … `{{end}}` | shows what is between them only while the condition holds; `{{else}}` is optional |
+| `{{button: QNAP NAS / restart}}` | that connection's own action button, by key or label; `label="Restart the NAS"` renames it |
+
+Conditions:
+
+| Condition | Holds while |
+|---|---|
+| `down: QNAP NAS` | its last verdict is down |
+| `up: QNAP NAS` | its last verdict is up |
+| `any down` | anything monitored is down |
+| `all up` | everything monitored is up, and nothing is still being checked |
+| `metric: QNAP NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=` |
+
+A few rules, all visible when broken rather than silently wrong:
+
+- **Sections wrap whole blocks.** `{{if …}}`, `{{else}}` and `{{end}}` each go on a line of
+  their own, and the Markdown between them is rendered on its own — so a list or table
+  cannot start outside a section and end inside it (one cut in two becomes two lists).
+  They nest, up to eight deep. Headings inside keep their anchors.
+- **A hidden part is not on the page at all**, not merely hidden, and the page switches by
+  itself as sweeps land and readings arrive — no reload.
+- **"Checking" is neither.** Just after a restart, before a connection's first probe,
+  `down:` and `up:` are both false for it, and `all up` is false.
+- **Metrics are compared in their stored unit** — the unit the metric tile shows beside
+  the number (%, ms, °C for temperatures whatever the display preference). A unit written
+  after the number must be that one, or is left off.
+- A condition naming no connection or metric shows a **?** and neither part. An `{{end}}`
+  or `{{else}}` with nothing to belong to shows a **?** where it is; an `{{if}}` never
+  closed shows a **?** and everything after it, rather than hiding the rest of the page.
+- **Buttons are the real thing.** A `{{button}}` is the same button the Connections page and
+  the Controls card draw, run by the same code — it asks for confirmation (a dangerous one
+  always does), shows it is working, says what happened, and silences the connection
+  across a reboot. An action the connection cannot offer yet (Wake on LAN with no MAC
+  address, a Pi-hole with no API token) is not drawn; a **?** says why, and a misspelt one
+  lists what the connection can do. Whoever can see the note can press it, exactly as with
+  the Controls card — so a note is behind the same login as the rest of the dashboard, and
+  the public status page never shows one.
+- `{{down}}` counts what the dashboard counts: enabled connections that are monitored at
+  all (not alert channels). A silenced connection is still down, so it is listed, marked
+  "silenced until 14:05".
+
+The editor's **Insert live value…** writes `{{down}}`, a section for when a chosen
+connection is down, and a button for one of its actions.
+
 ### Weather and radar
 
 **Settings → Where you are** holds one location for the whole install, and the forecast,

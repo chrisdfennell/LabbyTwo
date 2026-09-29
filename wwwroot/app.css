@@ -1218,6 +1218,24 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .md-embed.is-problem { display: flex; align-items: center; gap: .5rem; }
 .md-embed .widget-head { margin-bottom: .5rem; }
 
+/* {{down}}: the outage list at the top of a runbook. Rows rather than a Markdown list, so
+   it keeps its own spacing inside the note's list styles. */
+.md-down {
+    display: grid;
+    gap: .45rem;
+    margin: 0 0 .75rem;
+    padding: .6rem .75rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+}
+.md-down-row { display: flex; align-items: baseline; gap: .5rem; }
+.md-down-row > .status-dot { flex: none; }
+.md-down-message { overflow-wrap: anywhere; }
+
+/* {{button: NAS / restart}}: a small button that can sit inside a sentence. */
+.md-action { display: inline-flex; align-items: baseline; flex-wrap: wrap; vertical-align: baseline; }
+
 .md-insert-form {
     padding: .6rem .75rem;
     border: 1px solid var(--edge);

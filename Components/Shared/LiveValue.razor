@@ -68,7 +68,14 @@ else
 
         if (!Code.IsKnown)
         {
-            _problem = $"“{Code.Kind}” is not a live value. Use one of {string.Join(", ", Shortcodes.InlineKinds)} — or widget and card on a line of their own. ({Code.Source})";
+            _problem = $"“{Code.Kind}” is not a live value. Use one of {string.Join(", ", Shortcodes.InlineKinds)} — or {string.Join(", ", Shortcodes.BlockKinds)} on a line of their own. ({Code.Source})";
+            return;
+        }
+        if (Code.IsStructure)
+        {
+            // Only a line of its own is taken as the edge of a section; one inside a
+            // sentence, a list item or a quote would cut that block in half.
+            _problem = $"{{{{if …}}}}, {{{{else}}}} and {{{{end}}}} each go on a line of their own, around whole paragraphs, lists and tables. ({Code.Source})";
             return;
         }
         if (Code.IsBlock)

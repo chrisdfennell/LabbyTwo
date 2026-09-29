@@ -1,0 +1,84 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject Registry Registry
+
+@* {{down}}: what is down right now, as the top of a runbook wants it — each with its dot,
+   its name, how long, and what the probe said. The rules for what counts (the dashboard's
+   own: enabled and monitored; silenced ones listed but marked) are in RunbookFacts.Down,
+   where they are tested. Drawn from memory on every sweep; nothing here waits on the
+   database. *@
+
+@if (Scope is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else
+{
+    var list = _facts.Down(Code, Scope.Connections, DateTimeOffset.Now);
+    <div class="md-down" role="list" aria-label="What is down">
+        @if (list.Problem is not null)
+        {
+            <div class="md-down-row" role="listitem">
+                <span class="sc-problem" tabindex="0" role="note" title="@($"{list.Problem} ({Code.Source})")" aria-label="@list.Problem">?</span>
+                <span class="tile-meta">@list.Problem</span>
+            </div>
+        }
+        @if (list.Entries.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>Everything’s up</span>
+            </div>
+        }
+        @foreach (var entry in list.Entries)
+        {
+            var (word, dot) = LiveText.Status(entry.Connection, entry.State);
+            <div class="md-down-row" role="listitem" @key="entry.Connection.Id">
+                <span class="status-dot @dot" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div>
+                        <strong>@entry.Connection.Name</strong>
+                        <span class="tile-meta">
+                            @if (entry.State?.ChangedAt is { } changed && entry.State.IsUp == false)
+                            {
+                                <span title="@($"Down since {changed.ToLocalTime():d MMM yyyy HH:mm}")">down for @LiveText.Since(changed, DateTimeOffset.Now)</span>
+                            }
+                            else
+                            {
+                                @word
+                            }
+                        </span>
+                        @if (entry.Silenced is { } until)
+                        {
+                            <span class="badge text-bg-warning ms-1" title="Alerts for it are held">silenced until @until.ToLocalTime().ToString("HH:mm")</span>
+                        }
+                    </div>
+                    @if (entry.State?.Message is { Length: > 0 } message)
+                    {
+                        <div class="tile-meta md-down-message">@message</div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private RunbookFacts _facts = default!;
+
+    protected override void OnInitialized()
+    {
+        _facts = new RunbookFacts(Registry, Health, Latest);
+        Health.Updated += OnUpdated;
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

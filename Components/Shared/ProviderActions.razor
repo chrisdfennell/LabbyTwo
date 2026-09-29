@@ -6,7 +6,33 @@
    result message behave identically whether the button is on the Connections page or on
    somebody's dashboard. *@
 
-@if (_actions.Count > 0)
+@if (_actions.Count > 0 && Only is not null)
+{
+    @* One action written into a runbook, {{button: NAS / restart}}. Inline, because it may
+       sit in the middle of a sentence, where a block would split the paragraph in two. *@
+    var only = _actions[0];
+    <span class="md-action">
+        <button type="button"
+                class="@ButtonClass(only) btn-sm"
+                disabled="@(_busy is not null)"
+                title="@only.Description"
+                @onclick="() => StartAsync(only)">
+            @if (_busy == only.Id)
+            {
+                <span>Working…</span>
+            }
+            else
+            {
+                <span>@only.Icon @(Label is { Length: > 0 } ? Label : only.Label)</span>
+            }
+        </button>
+        @if (_result is { Length: > 0 })
+        {
+            <span class="tile-meta ms-2 @(_failed ? "text-danger" : "text-success")">@_result</span>
+        }
+    </span>
+}
+else if (_actions.Count > 0)
 {
     @* Compact is the connections table, where wrapping was actively harmful: the cell has
        no minimum width, so one long probe message elsewhere in the table squeezed this
@@ -57,7 +83,7 @@
     </Modal>
 }
 
-@if (_result is { Length: > 0 })
+@if (_result is { Length: > 0 } && Only is null)
 {
     <div class="tile-meta mt-2 @(_failed ? "text-danger" : "text-success")">@_result</div>
 }
@@ -67,6 +93,16 @@
 
     /// <summary>Small buttons in a row, for a table cell. Off means full-width, for a card.</summary>
     [Parameter] public bool Compact { get; set; }
+
+    /// <summary>
+    /// Just this one action, by id, as a single small button — what a runbook's
+    /// {{button: …}} draws. Everything else about it (the confirmation, the busy state, the
+    /// runner) is the same code as every other action button, which is the point.
+    /// </summary>
+    [Parameter] public string? Only { get; set; }
+
+    /// <summary>What the button says instead of the action's own label. The confirmation still names the action.</summary>
+    [Parameter] public string? Label { get; set; }
 
     /// <summary>Raised after anything actually ran, so a list can redraw its status.</summary>
     [Parameter] public EventCallback Ran { get; set; }
@@ -82,7 +118,13 @@
     private string _result = "";
     private bool _failed;
 
-    protected override void OnParametersSet() => _actions = Runner.ActionsFor(Connection);
+    protected override void OnParametersSet()
+    {
+        var actions = Runner.ActionsFor(Connection);
+        _actions = Only is null
+            ? actions
+            : [.. actions.Where(a => string.Equals(a.Id, Only, StringComparison.OrdinalIgnoreCase)).Take(1)];
+    }
 
     private async Task StartAsync(ProviderAction action)
     {
