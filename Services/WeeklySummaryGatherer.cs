@@ -118,6 +118,7 @@ public sealed class WeeklySummaryGatherer(
             // Only what somebody has already asked GitHub about. The summary is not a reason
             // to phone home: LabbyTwo checks for updates when asked, and not otherwise.
             UpdateAvailable = updates.Last is { Behind: true, Latest: { Length: > 0 } latestVersion } ? latestVersion : null,
+            Units = Units.Preferences.From(await settings.AllAsync(ct)),
         };
     }
 

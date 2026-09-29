@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject ConfigStore Config
 @inject HealthMonitor Health
 @inject SharedSeries SeriesReads
@@ -26,7 +27,7 @@ else
         @foreach (var series in _series)
         {
             <span class="series-key" style="color: @series.Colour">
-                @series.Name <span class="tile-meta">@Spec.Format(series.Last)</span>
+                @series.Name <span class="tile-meta">@Format(series.Last)</span>
             </span>
         }
     </div>
@@ -43,7 +44,7 @@ else
 
     <div class="d-flex justify-content-between tile-meta">
         <span>@Hours h ago</span>
-        <span>@Spec.Format(_low) – @Spec.Format(_high)</span>
+        <span>@Format(_low) – @Format(_high)</span>
         <span>now</span>
     </div>
 }
@@ -70,6 +71,18 @@ else
     private MetricSpec Spec => _spec;
 
     /// <summary>
+    /// The unit every figure on the card is in. The series are converted once, when they
+    /// arrive, so the key, the range, the lines and the tooltip are all in the reader's
+    /// units and the formatting after that is only decimals.
+    /// </summary>
+    private string _unit = "";
+
+    /// <summary>What was last loaded, kept so a change of units can redraw without a query.</summary>
+    private List<(Connection Connection, IReadOnlyList<HistoryStore.Sample> Samples)>? _loaded;
+
+    private string Format(double shown) => shown.ToString($"F{_spec.Decimals}") + _unit;
+
+    /// <summary>
     /// Distinct hues rather than the accent colour, since telling the lines apart is the
     /// entire point of the card. Ordered so the first few stay far apart on the wheel.
     /// </summary>
@@ -83,6 +96,7 @@ else
     {
         _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUnitsChanged;
     }
 
     // The connection list is memory, not history, so it is fine to wait for; the series are
@@ -127,7 +141,12 @@ else
             return;
         }
 
+        _loaded = loaded;
         _spec = Registry.Metric(loaded[0].Connection, Metric);
+        var units = DisplayUnits.Current;
+        _unit = Units.Display(0, _spec.Unit, units).Unit;
+        loaded = [.. loaded.Select(entry => (entry.Connection,
+            (IReadOnlyList<HistoryStore.Sample>)[.. entry.Samples.Select(s => s with { Value = Units.Display(s.Value, _spec.Unit, units).Value })]))];
 
         // Busiest first, so the line you are looking for is the one at the top of the key.
         loaded = [.. loaded.OrderByDescending(entry => entry.Samples[^1].Value).Take(Limit)];
@@ -158,11 +177,9 @@ else
                 entry.Connection.Name,
                 Palette[index % Palette.Length],
                 [.. entry.Samples.Select(s => s.Value)]))],
-            // Unconverted, and the spec's own unit, because that is what the key above the
-            // chart and the range below it already show — this card formats with
-            // Spec.Format rather than through Units. A tooltip disagreeing with the number
-            // beside it would be worse than one in the wrong unit.
-            _spec.Unit,
+            // Converted with everything else above, so the tooltip and the number beside
+            // it agree.
+            _unit,
             Math.Max(_spec.Decimals, 1),
             loaded.Min(entry => entry.Samples[0].At),
             loaded.Max(entry => entry.Samples[^1].At));
@@ -187,9 +204,17 @@ else
 
     private void OnUpdated() => _ = InvokeAsync(() => LoadAsync(refresh: true));
 
+    private void OnUnitsChanged() => _ = InvokeAsync(() =>
+    {
+        if (_loaded is { } loaded)
+            Apply(loaded);
+        StateHasChanged();
+    });
+
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUnitsChanged;
         _load?.Dispose();
     }
 }

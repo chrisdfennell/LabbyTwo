@@ -2,6 +2,7 @@
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 @inject Registry Registry
+@inject DisplayUnits DisplayUnits
 
 @* A proportion, drawn as one. Everything numeric here is a figure or a line, and neither
    answers "how full is it" at a glance from across the room — which is the only question
@@ -18,8 +19,8 @@ else if (_value is not { } value)
 else
 {
     <div class="d-flex justify-content-between align-items-baseline">
-        <span class="metric-value gauge-value">@Spec.Format(value, Decimals)</span>
-        <span class="tile-meta">of @Spec.Format(Max, 0)</span>
+        <span class="metric-value gauge-value">@Format(value, Decimals)</span>
+        <span class="tile-meta">of @Format(Max, 0)</span>
     </div>
 
     <div class="gauge" role="meter" aria-valuenow="@value" aria-valuemin="0" aria-valuemax="@Max"
@@ -28,7 +29,7 @@ else
         @if (Warn is { } warn && warn > 0 && warn < Max)
         {
             <div class="gauge-mark" style="left: @((warn / Max * 100).ToString("0.#"))%"
-                 title="@($"Warning at {Spec.Format(warn, 0)}")"></div>
+                 title="@($"Warning at {Format(warn, 0)}")"></div>
         }
     </div>
 
@@ -56,6 +57,13 @@ else
             ? set
             : $"{Spec.Label} · {Context.Connection?.Name}";
 
+    /// <summary>
+    /// A figure on the gauge in the reader's units. The maximum and the warning mark are
+    /// set in the metric's stored unit, like everything else about a reading, so they are
+    /// converted with it and the bar's proportions do not move when the setting does.
+    /// </summary>
+    private string Format(double stored, int decimals) => Units.Format(stored, Spec.Unit, decimals, DisplayUnits.Current);
+
     private double Percent(double value) => Math.Clamp(value / Max * 100, 0, 100);
 
     /// <summary>
@@ -75,7 +83,10 @@ else
     {
         Health.Updated += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
+        DisplayUnits.Changed += OnUnitsChanged;
     }
+
+    private void OnUnitsChanged() => _ = InvokeAsync(StateHasChanged);
 
     protected override void OnParametersSet() => Load();
 
@@ -114,5 +125,6 @@ else
     {
         Health.Updated -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
+        DisplayUnits.Changed -= OnUnitsChanged;
     }
 }

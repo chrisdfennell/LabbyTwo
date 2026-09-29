@@ -30,8 +30,11 @@ public enum RunbookTest
 /// <param name="Connection">The connection named, for everything except the two whole-lab tests.</param>
 /// <param name="Metric">The metric's key or label, for <see cref="RunbookTest.Metric"/>.</param>
 /// <param name="Operator">One of <c>&gt; &gt;= &lt; &lt;= == !=</c>.</param>
-/// <param name="Value">The number compared against, in the metric's stored unit.</param>
-/// <param name="Unit">A unit written after the number, if any — checked against the metric's own.</param>
+/// <param name="Value">The number compared against, as written — in <paramref name="Unit"/> when there is one, otherwise the metric's stored unit.</param>
+/// <param name="Unit">
+/// A unit written after the number, if any: the metric's own, or another of the same kind
+/// (°F for a metric stored in °C), which the number is converted from before comparing.
+/// </param>
 public sealed record RunbookCondition(
     RunbookTest Test,
     string Connection = "",

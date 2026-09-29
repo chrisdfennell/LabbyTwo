@@ -2,6 +2,7 @@
 @inject HealthMonitor Health
 @inject QnapProvider Qnap
 @inject CapacityForecasts Forecasts
+@inject DisplayUnits DisplayUnits
 
 @if (Context.Connection is null)
 {
@@ -42,7 +43,7 @@ else
         {
             <div>
                 <div class="tile-meta">CPU temp</div>
-                <div>@($"{temp:0}°C")</div>
+                <div>@Temperature(temp)</div>
             </div>
         }
         @if (_info.Fans.Count > 0)
@@ -118,7 +119,7 @@ else
                         }
                         @if (disk.TempC is { } diskTemp)
                         {
-                            <span class="ms-2">@($"{diskTemp:0}°C")</span>
+                            <span class="ms-2">@Temperature(diskTemp)</span>
                         }
                     </span>
                 </div>
@@ -158,6 +159,12 @@ else
             ?? VolumeMetric.FallbackName(volume);
     }
 
+    /// <summary>
+    /// QTS reports in Celsius, and so does the qnap provider's temp_c; shown in whatever the
+    /// Units setting says, as the same reading is on a metric tile beside this card.
+    /// </summary>
+    private string Temperature(double celsius) => Units.Format(celsius, Units.Celsius, 0, DisplayUnits.Current);
+
     private double SlowestFan => _info is { Fans.Count: > 0 } ? _info.Fans.Min(fan => fan.Rpm) : 0;
 
     private string MemoryText => _info is { TotalMemoryMb: > 0, FreeMemoryMb: not null }
@@ -167,6 +174,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUnitsChanged;
         await LoadAsync();
     }
 
@@ -244,5 +252,11 @@ else
         StateHasChanged();
     });
 
-    public void Dispose() => Health.Updated -= OnUpdated;
+    private void OnUnitsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUnitsChanged;
+    }
 }

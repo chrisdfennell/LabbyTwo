@@ -2,6 +2,7 @@
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 @inject AppSettingsStore AppSettings
+@inject DisplayUnits DisplayUnits
 @inject Registry Registry
 
 @* What is about to happen, next to the station that says what is happening. The two
@@ -82,7 +83,7 @@ else
     private Dictionary<string, double> _readings = [];
     private IReadOnlyList<ForecastProvider.Day> _days = [];
     private DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
-    private Units.Preferences _units = Units.Preferences.Default;
+    private Units.Preferences _units => DisplayUnits.Current;
 
     /// <summary>
     /// How many days the connection fetches is the connection's business; this only trims
@@ -93,11 +94,11 @@ else
             ? [.. _days.Take(wanted)]
             : _days;
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
-        _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
     protected override void OnParametersSet() => Load();
@@ -169,6 +170,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }
 }

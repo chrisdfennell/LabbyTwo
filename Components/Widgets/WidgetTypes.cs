@@ -339,11 +339,57 @@ public sealed class IndoorOutdoorWidget : IWidgetType
 /// <summary>The units toggle is identical on every weather card, so it is declared once.</summary>
 public static class WeatherUnits
 {
-    public static FieldSpec Field => new("units", "Units", FieldKind.Select, Default: "imperial", Options:
+    /// <summary>
+    /// Follow the Units setting. The default for a new card: these cards once had only the
+    /// two presets and started on imperial, so somebody who reads in Celsius everywhere
+    /// else found a weather card in Fahrenheit. A card saved with one of the presets keeps it.
+    /// </summary>
+    public const string FromSettings = "settings";
+
+    public static FieldSpec Field => new("units", "Units", FieldKind.Select, Default: FromSettings, Options:
     [
+        new SelectOption(FromSettings, "As set in Settings → Appearance"),
         new SelectOption("imperial", "°F, mph, inHg"),
         new SelectOption("metric", "°C, km/h, hPa"),
     ]);
+
+    /// <summary>The units this card reads in: its own preset if it has one, otherwise the app's.</summary>
+    public static Units.Preferences Resolve(SettingsBag settings, Units.Preferences app) =>
+        settings.Get("units", FromSettings) switch
+        {
+            Units.Metric => Units.Preferences.Of(Units.Metric),
+            Units.Imperial => Units.Preferences.Of(Units.Imperial),
+            _ => app,
+        };
+
+    // Each quantity at the precision a weather card has always shown it in — a pressure in
+    // inHg needs two decimals to move at all, one in hPa needs none.
+
+    public static string Temperature(double celsius, Units.Preferences prefs) =>
+        Units.Format(celsius, Units.Celsius, 1, prefs);
+
+    /// <summary>A difference of temperatures, converted as an interval — 5 °C warmer is 9 °F warmer.</summary>
+    public static string TemperatureChange(double celsius, Units.Preferences prefs)
+    {
+        var (value, unit) = Units.DisplayChange(celsius, Units.Celsius, prefs);
+        return value.ToString("0.0") + unit;
+    }
+
+    /// <summary>A wind speed and its unit apart, for a card that draws the number large.</summary>
+    public static (double Value, string Unit) Wind(double mph, Units.Preferences prefs)
+    {
+        var (value, unit) = Units.Display(mph, Units.Mph, prefs);
+        return (value, unit.Trim());
+    }
+
+    public static string Pressure(double inHg, Units.Preferences prefs)
+    {
+        var decimals = prefs.Pressure switch { Units.InHg => 2, Units.KPa => 1, _ => 0 };
+        return Units.Format(inHg, " " + Units.InHg, decimals, prefs);
+    }
+
+    public static string Rain(double inches, Units.Preferences prefs) =>
+        Units.Format(inches, " " + Units.Inches, prefs.Rain == Units.Inches ? 2 : 1, prefs);
 }
 
 public sealed class NasWidget : IWidgetType
@@ -715,9 +761,9 @@ public sealed class GaugeWidget : IWidgetType
     [
         new("metric", "Metric", FieldKind.Metric, "disk_percent", Required: true),
         new("max", "Full scale", FieldKind.Number,
-            Help: "Blank uses 100, which is right for anything measured in percent."),
+            Help: "Blank uses 100, which is right for anything measured in percent. In the metric's own unit — °C for a temperature — even when the Units setting shows it in °F."),
         new("warn", "Warning mark", FieldKind.Number,
-            Help: "Optional. Draws a line on the bar and colours it past that point."),
+            Help: "Optional. Draws a line on the bar and colours it past that point. In the metric's own unit, like the full scale."),
         new("caption", "Caption", FieldKind.Text),
         new("decimals", "Decimal places", FieldKind.Number),
     ];

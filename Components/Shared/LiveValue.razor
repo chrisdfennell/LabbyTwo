@@ -5,6 +5,7 @@
 @inject HistoryStore History
 @inject Offload Offload
 @inject Registry Registry
+@inject DisplayUnits DisplayUnits
 
 @* One live value inside a sentence — {{status: NAS}}, {{metric: NAS / disk_percent}} and
    friends. Written on one line each, because whitespace here lands in the middle of
@@ -57,6 +58,7 @@ else
         Health.Updated += OnHealthUpdated;
         Latest.Changed += OnLatestChanged;
         Forecasts.Changed += OnForecastsChanged;
+        DisplayUnits.Changed += OnUnitsChanged;
     }
 
     protected override void OnParametersSet() => Show(refresh: false);
@@ -150,10 +152,12 @@ else
             : stored.TryGetValue(key, out var recorded) ? recorded
             : null;
         var decimals = LiveText.Decimals(int.TryParse(Code.Option("decimals"), out var d) ? d : null, spec);
-        // "suffix" is what the metric tile calls the same setting, so either word works.
-        var unit = Code.Options.TryGetValue("unit", out var written) || Code.Options.TryGetValue("suffix", out written) ? written : spec.Unit;
+        // "suffix" is what the metric tile calls the same setting, so either word works. A
+        // unit of the metric's own kind (°C on a temperature) converts to it; anything else
+        // is only a label, and the number still follows the Units setting.
+        var written = Code.Options.TryGetValue("unit", out var unit) || Code.Options.TryGetValue("suffix", out unit) ? unit : null;
 
-        _text = value is { } v ? LiveText.Metric(v, decimals, unit) : "—";
+        _text = value is { } v ? LiveText.Metric(v, decimals, spec.Unit, DisplayUnits.Current, written) : "—";
         _title = value is null
             ? $"{connection.Name} · {spec.Label}: no reading in the last {StoredWindow.TotalHours:0} hours"
             : $"{connection.Name} · {spec.Label}";
@@ -269,6 +273,12 @@ else
             Redraw();
     }
 
+    private void OnUnitsChanged()
+    {
+        if (Code.Kind == "metric")
+            Redraw();
+    }
+
     private void OnForecastsChanged()
     {
         if (Code.Kind == "forecast")
@@ -280,6 +290,7 @@ else
         Health.Updated -= OnHealthUpdated;
         Latest.Changed -= OnLatestChanged;
         Forecasts.Changed -= OnForecastsChanged;
+        DisplayUnits.Changed -= OnUnitsChanged;
         _uptimeLoad?.Dispose();
     }
 }

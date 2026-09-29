@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 @inject Registry Registry
@@ -68,6 +69,7 @@ else
     protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
 
@@ -97,7 +99,7 @@ else
     }
 
     private string Show(string metric, double value) =>
-        Registry.Metric(Context.Connection, metric) is { } spec ? spec.Format(value) : value.ToString("0.#");
+        Registry.Metric(Context.Connection, metric) is { } spec ? Units.Format(spec, value, DisplayUnits.Current) : value.ToString("0.#");
 
     private void OnUpdated() => _ = InvokeAsync(() =>
     {
@@ -114,6 +116,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }
 }

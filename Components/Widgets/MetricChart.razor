@@ -5,6 +5,7 @@
 @inject Offload Offload
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
+@inject DisplayUnits DisplayUnits
 @using System.Globalization
 
 @if (Context.Connection is null)
@@ -90,7 +91,7 @@ else
     private string _comparePath = "";
     private double _high;
     private string? _hover;
-    private Units.Preferences _units = Units.Preferences.Default;
+    private Units.Preferences _units => DisplayUnits.Current;
 
     private string Metric => Context.Widget.Settings.Get("metric", "latency_ms");
     private string CompareMetric => Context.Widget.Settings.Get("compare");
@@ -106,11 +107,11 @@ else
     private string Reading(double value) =>
         Units.Format(Spec, value, _units, Math.Max(Spec.Decimals, Math.Abs(value) < 100 ? 1 : 0));
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
-        _units = Units.Preferences.From(await AppSettings.AllAsync());
+        DisplayUnits.Changed += OnUpdated;
     }
 
     protected override void OnParametersSet() => Load(refresh: false);
@@ -222,6 +223,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         _load?.Dispose();
     }
 }

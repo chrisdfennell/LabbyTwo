@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject HealthMonitor Health
 @inject LatestReadings Latest
 @using System.Globalization
@@ -61,13 +62,14 @@ else
 
     private IReadOnlyDictionary<string, double>? _metrics;
 
-    private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
-    private string SpeedUnit => Metric ? "km/h" : "mph";
+    /// <summary>The card's own preset, or the Units setting when it follows that.</summary>
+    private Units.Preferences Prefs => WeatherUnits.Resolve(Context.Widget.Settings, DisplayUnits.Current);
+    private string SpeedUnit => WeatherUnits.Wind(0, Prefs).Unit;
 
     private double Direction => _metrics!.GetValueOrDefault("wind_dir");
     private double Speed => Convert(_metrics!.GetValueOrDefault("wind_mph"));
 
-    private double Convert(double mph) => Metric ? mph * 1.60934 : mph;
+    private double Convert(double mph) => WeatherUnits.Wind(mph, Prefs).Value;
 
     private static string N(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
 
@@ -95,6 +97,7 @@ else
     protected override void OnInitialized()
     {
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
     }
 
@@ -138,6 +141,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
     }
 }

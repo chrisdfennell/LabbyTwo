@@ -161,7 +161,7 @@ else
                                       title="@(!rule.Enabled ? "Disabled" : firing ? "Firing" : "OK")"></span>
                             </td>
                             <td>
-                                <div class="tile-name">@rule.Describe(spec.Label, NameOf(rule.ConnectionId))</div>
+                                <div class="tile-name">@rule.Describe(spec, NameOf(rule.ConnectionId), _units)</div>
                                 <div class="tile-meta">
                                     @(rule.ConnectionId is null ? "Any connection reporting this metric" : NameOf(rule.ConnectionId))
                                     @if (rule.ForMinutes > 0)
@@ -436,7 +436,7 @@ else
 @if (_confirmDelete is { } deleting)
 {
     <ConfirmDialog Title="Delete this rule?"
-                   Message="@($"“{deleting.Describe(SpecFor(deleting).Label, NameOf(deleting.ConnectionId))}” will stop being checked.")"
+                   Message="@($"“{deleting.Describe(SpecFor(deleting), NameOf(deleting.ConnectionId), _units)}” will stop being checked.")"
                    ConfirmText="Delete"
                    OnCancel="() => _confirmDelete = null"
                    OnConfirm="DeleteConfirmedAsync" />
@@ -834,7 +834,7 @@ else
         [.. Evaluator.All.Where(b => b.RuleId == rule.Id).OrderByDescending(b => b.Firing).ThenBy(b => NameOf(b.ConnectionId))];
 
     private string Preview(AlertRule rule) =>
-        rule.Describe(SpecFor(rule).Label, NameOf(rule.ConnectionId) is { Length: > 0 } n ? n : null);
+        rule.Describe(SpecFor(rule), NameOf(rule.ConnectionId) is { Length: > 0 } n ? n : null, _units);
 
     private void SetComparison(ChangeEventArgs args)
     {

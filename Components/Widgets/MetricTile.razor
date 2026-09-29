@@ -3,6 +3,7 @@
 @inject SharedSeries Series
 @inject Offload Offload
 @inject Registry Registry
+@inject DisplayUnits DisplayUnits
 
 @if (Context.Connection is null)
 {
@@ -13,8 +14,9 @@ else
     <div class="metric-value">
         @if (_value is { } value)
         {
-            @LiveText.Number(value, Decimals)
-            <span class="metric-unit">@Unit</span>
+            var (shown, unit) = Shown(value);
+            @LiveText.Number(shown, Decimals)
+            <span class="metric-unit">@unit</span>
         }
         else if (_history.Ready)
         {
@@ -32,7 +34,7 @@ else
     @if (Context.Widget.Settings.GetBool("show_sparkline", true))
     {
         <div class="mt-2">
-            <Sparkline Values="_series" Label="@Spec.Label" />
+            <Sparkline Values="ShownSeries" Label="@Spec.Label" Unit="@Shown(0).Unit" Decimals="Decimals" />
         </div>
     }
 }
@@ -56,14 +58,30 @@ else
     // settings still win, so a user can override a unit they disagree with.
     private MetricSpec Spec => Registry.Metric(Context.Connection, Metric);
     private int Decimals => LiveText.Decimals(Context.Widget.Settings.GetInt("decimals", Spec.Decimals), Spec);
-    private string Unit => Context.Widget.Settings.Get("suffix", Spec.Unit);
+
+    /// <summary>
+    /// The card's "suffix" when one is set: a unit of the metric's own kind converts to it,
+    /// anything else is a label on a number that still follows the Units setting — the same
+    /// rule, through the same call, as unit= in a Markdown {{metric: …}}.
+    /// </summary>
+    private string? Suffix => Context.Widget.Settings.Get("suffix") is { Length: > 0 } set ? set : null;
+
+    private (double Value, string Unit) Shown(double stored) => Units.Display(stored, Spec.Unit, DisplayUnits.Current, Suffix);
+
+    /// <summary>The sparkline in the same units as the number above it, so its tooltip agrees.</summary>
+    private IReadOnlyList<double> ShownSeries => Units.IsConvertible(Spec.Unit)
+        ? [.. _series.Select(v => Shown(v).Value)]
+        : _series;
     private bool ShowConnection => Context.Widget.Settings.GetBool("show_connection", true);
 
     protected override void OnInitialized()
     {
         _history = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUnitsChanged;
     }
+
+    private void OnUnitsChanged() => _ = InvokeAsync(StateHasChanged);
 
     protected override void OnParametersSet() => Load(refresh: false);
 
@@ -123,6 +141,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUnitsChanged;
         _history?.Dispose();
     }
 }

@@ -185,6 +185,7 @@ public sealed class MarkdownExtrasRenderTests : IAsyncDisposable
         services.AddSingleton<MetricAlertService>();
         services.AddSingleton<LatestReadings>();
         services.AddSingleton<Offload>();
+        services.AddSingleton<DisplayUnits>();
         services.AddSingleton<SharedSeries>();
         services.AddSingleton<Markdown>();
         services.AddSingleton<ActionRunner>();

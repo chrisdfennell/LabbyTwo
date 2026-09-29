@@ -48,6 +48,7 @@ public sealed class LiveMarkdownRenderTests : IAsyncDisposable
             .AddSingleton(new LatestReadings(history, config, NullLogger<LatestReadings>.Instance))
             .AddSingleton(new CapacityForecasts(config, registry, history, NullLogger<CapacityForecasts>.Instance))
             .AddSingleton(new Offload(NullLogger<Offload>.Instance))
+            .AddSingleton(new DisplayUnits(_host.GetRequiredService<AppSettingsStore>()))
             .BuildServiceProvider();
         _renderer = new HtmlRenderer(_services, NullLoggerFactory.Instance);
     }

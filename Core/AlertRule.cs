@@ -307,6 +307,22 @@ public sealed record AlertRule
     }
 
     /// <summary>
+    /// The same name with the threshold in the reader's units and labelled, which is how it
+    /// has to be said anywhere a reading is shown beside it: "above 60" next to a value in
+    /// °F leaves you to guess that the 60 is Celsius. The rule itself is still stored and
+    /// compared in the metric's own unit; only the words change.
+    /// </summary>
+    public string Describe(MetricSpec spec, string? connectionName, Units.Preferences units)
+    {
+        if (Name is { Length: > 0 } || IsUnusual)
+            return Describe(spec.Label, connectionName);
+
+        var who = string.IsNullOrWhiteSpace(connectionName) ? "Any connection" : connectionName;
+        var (threshold, unit) = Units.Display(Threshold, spec.Unit, units);
+        return $"{who} · {spec.Label} {ComparisonWord} {threshold:0.##}{unit}";
+    }
+
+    /// <summary>
     /// A stored comparison, read back. Anything unrecognised is "above", which is what every
     /// rule was before "below" existed.
     /// </summary>

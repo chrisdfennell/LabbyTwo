@@ -31,15 +31,16 @@ public sealed class MetricAlertServiceTests : IDisposable
         public string Icon => "🧪";
         public string Description => "Test double.";
         public IReadOnlyList<FieldSpec> Fields => [];
-        public IReadOnlyList<MetricSpec> Metrics => [new("disk_percent", "Disk used", "%", 1)];
+        public IReadOnlyList<MetricSpec> Metrics => [new("disk_percent", "Disk used", "%", 1), new("temp_c", "Temperature", "°C", 1)];
 
         public double Value { get; set; }
+        public double Temperature { get; set; } = 20;
         public bool Reachable { get; set; } = true;
 
         public Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct) =>
             Task.FromResult(Reachable
                 ? ProbeResult.Up(TimeSpan.FromMilliseconds(1), "OK",
-                    new Dictionary<string, double> { ["disk_percent"] = Value })
+                    new Dictionary<string, double> { ["disk_percent"] = Value, ["temp_c"] = Temperature })
                 : ProbeResult.Down(TimeSpan.FromMilliseconds(1), "unreachable"));
     }
 
@@ -131,6 +132,22 @@ public sealed class MetricAlertServiceTests : IDisposable
         ForMinutes = forMinutes,
         ClearThreshold = clear,
     };
+
+    [Fact]
+    public async Task ANotificationSaysTheReadingAndTheLimitInTheUnitsChosen()
+    {
+        // Stored and compared in °C, as every rule is; said in °F, as the page says it.
+        var connection = await SetUpAsync(new AlertRule { Metric = "temp_c", Comparison = Comparison.Above, Threshold = 55 });
+        await Get<AppSettingsStore>().SaveAsync(Units.Preferences.SystemKey, Units.Imperial);
+        var start = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+
+        _provider.Temperature = 60;
+        await TickAsync(connection, 50, start);
+
+        var alert = Assert.Single(_channel.Sent);
+        Assert.Equal("NAS · Temperature is 140.0°F", alert.Title);
+        Assert.Contains("went above 131.0°F", alert.Body);
+    }
 
     [Fact]
     public async Task ARuleWithNoSustainWindowFiresOnTheFirstBreach()

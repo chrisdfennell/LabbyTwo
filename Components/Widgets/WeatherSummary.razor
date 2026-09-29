@@ -5,6 +5,7 @@
 @inject LatestReadings Latest
 @inject Registry Registry
 @inject AppSettingsStore AppSettings
+@inject DisplayUnits DisplayUnits
 
 @if (Context.Connection is null)
 {
@@ -58,7 +59,7 @@ else
 
     private List<Cell> _cells = [];
     private SunTimes.Day? _sun;
-    private Units.Preferences _units = Units.Preferences.Default;
+    private Units.Preferences _units => DisplayUnits.Current;
     private BackgroundLoad _history = default!;
 
     /// <summary>The highest and lowest of each metric over the window, once history has answered.</summary>
@@ -72,12 +73,12 @@ else
     private double Latitude => Context.Widget.Settings.GetDouble("latitude");
     private double Longitude => Context.Widget.Settings.GetDouble("longitude");
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         _history = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
         Latest.Changed += OnReadingsLoaded;
-        _units = Units.Preferences.From(await AppSettings.AllAsync());
     }
 
     protected override void OnParametersSet() => Load(refresh: false);
@@ -184,6 +185,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         Latest.Changed -= OnReadingsLoaded;
         _history?.Dispose();
     }

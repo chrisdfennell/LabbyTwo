@@ -1,4 +1,5 @@
 @implements IDisposable
+@inject DisplayUnits DisplayUnits
 @inject HealthMonitor Health
 @inject SharedSeries Series
 @inject Offload Offload
@@ -50,7 +51,7 @@ else
         {
             <div class="col-6">
                 <div class="tile-meta">Rain today</div>
-                <div>@(Metric ? $"{rain * 25.4:0.0} mm" : $"{rain:0.00} in")</div>
+                <div>@(WeatherUnits.Rain(rain, Prefs))</div>
             </div>
         }
         @if (_trend is { } trend)
@@ -73,14 +74,13 @@ else
     private double? _lastRecorded;
     private int _hours;
 
-    private bool Metric => Context.Widget.Settings.Get("units", "imperial") == "metric";
+    /// <summary>The card's own preset, or the Units setting when it follows that.</summary>
+    private Units.Preferences Prefs => WeatherUnits.Resolve(Context.Widget.Settings, DisplayUnits.Current);
 
-    private string FormatTemp(double celsius) =>
-        Metric ? $"{celsius:0.0}°C" : $"{AmbientWeatherProvider.CToF(celsius):0.0}°F";
+    private string FormatTemp(double celsius) => WeatherUnits.Temperature(celsius, Prefs);
 
     /// <summary>A difference, not a reading — so it is a temperature *interval*, and 0°C is not 32°F.</summary>
-    private string FormatDelta(double celsius) =>
-        Metric ? $"{celsius:0.0}°C" : $"{celsius * 9 / 5:0.0}°F";
+    private string FormatDelta(double celsius) => WeatherUnits.TemperatureChange(celsius, Prefs);
 
     private static string Position(double value, double low, double high) =>
         (Math.Clamp((value - low) / (high - low), 0, 1) * 100).ToString("0.#", CultureInfo.InvariantCulture);
@@ -89,6 +89,7 @@ else
     {
         _history = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUnitsChanged;
         Latest.Changed += OnReadingsLoaded;
     }
 
@@ -154,6 +155,8 @@ else
             : null;
     }
 
+    private void OnUnitsChanged() => _ = InvokeAsync(StateHasChanged);
+
     private void OnUpdated() => _ = InvokeAsync(() =>
     {
         Load(refresh: true);
@@ -169,6 +172,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUnitsChanged;
         Latest.Changed -= OnReadingsLoaded;
         _history?.Dispose();
     }

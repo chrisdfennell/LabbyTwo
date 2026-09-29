@@ -200,6 +200,19 @@ public static class LiveText
     /// <summary>A reading with its unit: "42%", "12 ms", "21.5°C".</summary>
     public static string Metric(double value, int decimals, string unit) => Number(value, decimals) + unit;
 
+    /// <summary>
+    /// A stored reading as a sentence shows it: in the reader's units, or in the unit (or
+    /// with the label) written in <paramref name="written"/> — see
+    /// <see cref="Units.Display(double, string, Units.Preferences, string?)"/>. The metric
+    /// tile goes through the same call, so a number in prose and on a card cannot disagree
+    /// about Fahrenheit.
+    /// </summary>
+    public static string Metric(double stored, int decimals, string unit, Units.Preferences prefs, string? written = null)
+    {
+        var (value, shown) = Units.Display(stored, unit, prefs, written);
+        return Metric(value, decimals, shown);
+    }
+
     /// <summary>The word and dot colour for a connection's state, matching the service tile.</summary>
     public static (string Word, string Dot) Status(Connection connection, HealthMonitor.ProbeState? state) =>
         !connection.Enabled ? ("paused", "status-unknown")

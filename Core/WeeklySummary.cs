@@ -140,6 +140,12 @@ public sealed record WeeklySummaryData
 
     /// <summary>A newer LabbyTwo, when somebody has checked and there is one.</summary>
     public string? UpdateAvailable { get; init; }
+
+    /// <summary>
+    /// The units the reader chose, so a reading in the summary says what the dashboard says.
+    /// Everything in the data above stays in the stored unit; only the words convert.
+    /// </summary>
+    public Units.Preferences Units { get; init; } = Core.Units.Preferences.Default;
 }
 
 /// <summary>The finished message: a title, plain text that is safe on any channel, and a Markdown version for the ones that render it.</summary>
@@ -372,9 +378,13 @@ public static class WeeklySummary
 
         foreach (var line in filling.Take(MaxCapacity))
         {
-            var parts = new List<string> { Format(line.Current, line.Unit, line.Decimals) };
-            if (line.WeeklyChange is { } change && Math.Abs(change) >= Math.Pow(10, -line.Decimals) / 2)
-                parts.Add($"{Signed(change, line.Unit, line.Decimals)} a week");
+            // The level converts as a reading and the week's movement as a change, so a
+            // temperature that rose 5 °C says +9.0°F rather than +41.0°F.
+            var (current, unit) = Units.Display(line.Current, line.Unit, data.Units);
+            var parts = new List<string> { Format(current, unit, line.Decimals) };
+            if (line.WeeklyChange is { } stored && Units.DisplayChange(stored, line.Unit, data.Units) is var (change, changeUnit)
+                && Math.Abs(change) >= Math.Pow(10, -line.Decimals) / 2)
+                parts.Add($"{Signed(change, changeUnit, line.Decimals)} a week");
             parts.Add(line.Forecast.Describe()
                       + (line.Forecast is { State: ForecastState.Filling, Confidence: ForecastConfidence.Low } ? " (rough guess)" : ""));
 

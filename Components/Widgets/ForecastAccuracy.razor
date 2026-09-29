@@ -4,6 +4,7 @@
 @inject Offload Offload
 @inject ConfigStore Config
 @inject AppSettingsStore AppSettings
+@inject DisplayUnits DisplayUnits
 
 @* Was the forecast right? Nobody else's dashboard can answer this, because answering it
    needs both a prediction and a thermometer in the same garden — and you have both.
@@ -74,16 +75,16 @@ else
     private Connection? _station;
     private IReadOnlyList<Row> _rows = [];
     private double _averageError;
-    private Units.Preferences _units = Units.Preferences.Default;
+    private Units.Preferences _units => DisplayUnits.Current;
     private BackgroundLoad _load = default!;
 
     private int Days => Math.Clamp(Context.Widget.Settings.GetInt("days", 7), 1, 30);
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
         Health.Updated += OnUpdated;
-        _units = Units.Preferences.From(await AppSettings.AllAsync());
+        DisplayUnits.Changed += OnUpdated;
     }
 
     // The station is looked up from the cached connection list, which is fine to wait
@@ -174,6 +175,7 @@ else
     public void Dispose()
     {
         Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
         _load?.Dispose();
     }
 }

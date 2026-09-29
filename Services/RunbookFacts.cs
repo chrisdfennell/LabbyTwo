@@ -88,9 +88,24 @@ public sealed class RunbookFacts(
         var spec = registry.Metric(connection, key);
         if (condition.Unit.Length > 0 && !SameUnit(condition.Unit, spec.Unit))
         {
-            return ConditionResult.Broken(spec.Unit.Trim().Length > 0
-                ? $"{spec.Label} is compared in its own unit, {spec.Unit.Trim()}; write the number in that, or with no unit."
-                : $"{spec.Label} has no unit; write the number on its own.");
+            // A number written in another unit of the same quantity — "> 122°F" on a metric
+            // stored in °C — is turned into the stored unit once, here, and the comparison
+            // runs on the stored reading as it always has. So "> 122°F" and "> 50°C" are the
+            // same condition, and a runbook means the same thing whichever units the person
+            // reading it has chosen. A bare number is still in the stored unit, as before.
+            if (Units.ConvertsTo(spec.Unit, condition.Unit)
+                && Units.Convert(condition.Value, Units.Parse(condition.Unit)!, spec.Unit) is { } stored)
+            {
+                condition = condition with { Value = stored };
+            }
+            else
+            {
+                return ConditionResult.Broken(!Units.IsConvertible(spec.Unit) && spec.Unit.Trim().Length > 0
+                    ? $"{spec.Label} is compared in its own unit, {spec.Unit.Trim()}; write the number in that, or with no unit."
+                    : Units.IsConvertible(spec.Unit)
+                    ? $"{spec.Label} is in {spec.Unit.Trim()}; write the number in that, in another unit of the same kind, or with no unit to mean {spec.Unit.Trim()}."
+                    : $"{spec.Label} has no unit; write the number on its own.");
+            }
         }
 
         double? value = live.TryGetValue(key, out var now) ? now

@@ -255,7 +255,7 @@ public static class UptimeStrip
 
 /// <summary>One line of <c>{{alerts}}</c>.</summary>
 /// <param name="Name">The rule's own name, or its description when it has none.</param>
-/// <param name="Value">The last reading, in the metric's unit.</param>
+/// <param name="Value">The last reading, in the reader's units.</param>
 /// <param name="Since">When the breach began; null when the evaluator does not know.</param>
 public sealed record AlertLine(string RuleId, string Name, Connection Connection, string Metric, string Value, string Limit, DateTimeOffset? Since);
 
@@ -311,13 +311,18 @@ public static class MarkdownLists
     /// The alert rules firing now — threshold, unusual and forecast rules alike, since they
     /// are all the one evaluator — longest-firing first, as the Active alerts card reads them.
     /// A breach whose rule or connection has since been deleted is left out, not guessed at.
+    ///
+    /// The reading and the limit are both said in <paramref name="units"/>, the way the alert
+    /// rules page shows them, so "is 140°F — above 60" can never appear: the rule was saved
+    /// in the metric's own unit and is only ever converted for reading.
     /// </summary>
     public static IReadOnlyList<AlertLine> Alerts(
         IEnumerable<MetricAlertService.Breach> firing,
         IReadOnlyList<AlertRule> rules,
         IReadOnlyList<Connection> connections,
         Registry registry,
-        HashSet<string>? only)
+        HashSet<string>? only,
+        Units.Preferences units)
     {
         var lines = new List<AlertLine>();
         foreach (var breach in firing.Where(b => b.Firing))
@@ -330,9 +335,9 @@ public static class MarkdownLists
                 continue;
 
             var spec = registry.Metric(connection, rule.Metric);
-            var limit = rule.IsUnusual ? rule.UnusualPhrase() : $"{rule.ComparisonWord} {spec.Format(rule.Threshold)}";
-            lines.Add(new AlertLine(rule.Id, rule.Describe(spec.Label, connection.Name), connection, spec.Label,
-                spec.Format(breach.LastValue, spec.Decimals == 0 && Math.Abs(breach.LastValue) < 100 ? 1 : spec.Decimals),
+            var limit = rule.IsUnusual ? rule.UnusualPhrase() : $"{rule.ComparisonWord} {Units.Format(spec, rule.Threshold, units)}";
+            lines.Add(new AlertLine(rule.Id, rule.Describe(spec, connection.Name, units), connection, spec.Label,
+                Units.Format(spec, breach.LastValue, units, spec.Decimals == 0 && Math.Abs(breach.LastValue) < 100 ? 1 : spec.Decimals),
                 limit, breach.Since));
         }
         return
