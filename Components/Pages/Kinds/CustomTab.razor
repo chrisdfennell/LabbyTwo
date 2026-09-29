@@ -20,16 +20,21 @@
         }
     </div>
     <div class="d-flex gap-2">
-        <button class="btn btn-sm @(_editing ? "btn-primary" : "btn-outline-secondary")"
-                @onclick="ToggleEditing">
-            @(_editing ? "Done" : "Edit layout")
-        </button>
         @if (_editing)
         {
-            <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add block</button>
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => _picking = true">+ Add block</button>
         }
+        <button class="btn btn-sm @(_editing ? "btn-primary" : "btn-outline-secondary")"
+                aria-pressed="@(_editing ? "true" : "false")" @onclick="ToggleEditing">
+            @(_editing ? "✓ Done" : "✎ Edit layout")
+        </button>
     </div>
 </div>
+
+@if (_editing && _moving is null && _blocks.Count > 0)
+{
+    <EditLayoutHint Noun="block" />
+}
 
 @if (_moving is { } moving)
 {
@@ -67,14 +72,13 @@ else
                 @if (_editing || (!bare && block.Title is { Length: > 0 }))
                 {
                     <div class="widget-head">
-                        @if (_editing)
-                        {
-                            <span class="drag-handle flex-none" title="Drag to rearrange">⠿</span>
-                        }
                         <h2 class="widget-title text-truncate">@(bare ? "" : block.Title)</h2>
                         @if (_editing)
                         {
-                            <span class="tile-meta flex-none">@Label(block, type)</span>
+                            <span class="edit-meta flex-none">
+                                <span class="tile-meta">@Label(block, type)</span>
+                                <CardSizeLabel Width="block.Width" Height="block.Height" ShowHeight="true" Noun="block" />
+                            </span>
                         }
                     </div>
                 }
@@ -127,34 +131,14 @@ else
                 else if (_editing)
                 {
                     <div class="widget-edit-bar">
-                        <button class="btn btn-sm btn-outline-secondary" title="Move this block"
-                                @onclick="() => _moving = current">⠿</button>
-                        <button class="btn btn-sm btn-outline-secondary" title="Move up"
-                                @onclick="() => MoveAsync(current, -1)">↑</button>
-                        <button class="btn btn-sm btn-outline-secondary" title="Move down"
-                                @onclick="() => MoveAsync(current, 1)">↓</button>
-                        @* Width and height side by side, each a pair of steppers, with what
-                           they add up to between them — so the size can be read, not only
-                           changed. *@
-                        <span class="block-size" role="group" aria-label="Size">
-                            <button class="btn btn-sm btn-outline-secondary" title="Narrower"
-                                    @onclick="() => ResizeAsync(current, -1, 0)">−</button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Wider"
-                                    @onclick="() => ResizeAsync(current, 1, 0)">+</button>
-                            <span class="tile-meta block-size-label">@PageBlocks.Describe(block)</span>
-                            <button class="btn btn-sm btn-outline-secondary" title="Shorter"
-                                    @onclick="() => ResizeAsync(current, 0, -1)">↥</button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Taller"
-                                    @onclick="() => ResizeAsync(current, 0, 1)">↧</button>
-                        </span>
-                        <a class="btn btn-sm btn-outline-secondary ms-auto" title="Export this block to share it"
-                           href="@($"api/share/widget?id={block.Id}")">Export</a>
-                        <button class="btn btn-sm btn-outline-secondary" title="Another one like this, on this page"
-                                @onclick="() => DuplicateAsync(current)">Duplicate</button>
-                        <button class="btn btn-sm btn-outline-secondary"
-                                @onclick="() => _editingBlock = current">Edit</button>
-                        <button class="btn btn-sm btn-outline-danger"
-                                @onclick="() => _confirmDelete = current">✕</button>
+                        <CardEditToolbar Widget="current" Name="@Describe(current)" Noun="block" ShowHeight="true"
+                                         OnMove="step => MoveAsync(current, step)"
+                                         OnPickUp="() => _moving = current"
+                                         OnWidth="span => SetWidthAsync(current, span)"
+                                         OnHeightStep="step => StepHeightAsync(current, step)"
+                                         OnEdit="() => _editingBlock = current"
+                                         OnDuplicate="() => DuplicateAsync(current)"
+                                         OnDelete="() => _confirmDelete = current" />
                     </div>
                 }
             </div>
@@ -265,12 +249,11 @@ else
 
     private async Task MoveAsync(Widget block, int direction) => await Config.ReorderWidgetAsync(block.Id, direction);
 
-    private async Task ResizeAsync(Widget block, int widthStep, int heightStep) =>
-        await Config.SaveWidgetAsync(block with
-        {
-            Width = widthStep == 0 ? block.Width : PageBlocks.StepWidth(block.Width, widthStep),
-            Height = PageBlocks.StepRows(block.Height, heightStep),
-        });
+    private async Task SetWidthAsync(Widget block, int span) =>
+        await Config.SaveWidgetAsync(block with { Width = PageBlocks.ClampWidth(span) });
+
+    private async Task StepHeightAsync(Widget block, int step) =>
+        await Config.SaveWidgetAsync(block with { Height = PageBlocks.StepRows(block.Height, step) });
 
     private async Task DuplicateAsync(Widget block)
     {
