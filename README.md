@@ -517,6 +517,37 @@ replaced. Anything that happens while alerts are silenced for maintenance is sti
 recorded, and marked **during maintenance**, since "it did not come back after I restarted
 it" is the incident most worth having written down.
 
+**Probably caused by.** Every incident says what most likely set it off, worked out by a
+handful of plain rules from what was recorded — no AI, nothing sent anywhere. Each gives a
+sentence and the changes it rests on, which are marked in the timeline, surest first:
+
+| Rule | Says, for example |
+|---|---|
+| Several members sit behind one connection (directly or further up) that went down no later than they did | "4 services failed together; they all depend on NAS, which went down first." |
+| The container a failing service is reached through got a new image, was recreated, stopped or restarted up to 15 minutes before | "Plex went down 2 minutes after it got a new image." |
+| A certificate check went down reporting an expired certificate, or a certificate on something involved was replaced or renewed just before | "The certificate Website checks has expired." |
+| Several members on one address, not explained by a parent, failed within a minute of each other | "Everything on 192.168.86.10 failed within 40 seconds — likely the host or the network to it." |
+| A DNS answer moved, or LabbyTwo updated itself, shortly before | "LabbyTwo itself was updated 3 minutes before this started — a new version may check things differently." |
+| A capacity alert fired on a disk whose forecast says it has been filling steadily | "Not a sudden fault: Disk used on NAS has been rising steadily and will be full in about 3 weeks at this rate." |
+
+A service is tied to its container the way the Containers tab ties them: by the host it is
+reached at, so `http://plex:32400` is the container called `plex`. When no rule fits it says
+**No obvious cause** rather than guess — the timeline is then the place to look. The cause
+also goes into the down notification, as a "Probably:" line, when it concerns that service,
+is more than a hunch, and is found within two seconds; a notification is never held longer
+than that for it.
+
+**Write-ups.** **Write up** on an incident, open or closed, makes a Markdown note of it and
+opens it in the editor: the times and how long it lasted, what failed and when each part
+came back, the probable cause, the timeline, two headings for you to fill in — **What fixed
+it** and **Next time** — and, at the end, live shortcodes that turn it into a runbook for the
+next time: `{{status}}` and `{{ago}}` for each service, a `{{button}}` for its restart action
+if it has one, and `{{changes}}` for those services over the last day. The note links to the
+incident, and the incident shows **Write-up:** with a link to the note; pressing it again
+opens the same note. Write-ups go on a notes tab of their own, *Incident write-ups*, made the
+first time — rename or move it freely. Every name and message from the feed is escaped, so a
+service called `my_nas` stays that and nothing in a probe's message can become a shortcode.
+
 Both go into a runbook with `{{changes}}` and `{{incidents}}` (see [Shortcodes](#shortcodes)).
 The feed is kept for 90 days and incidents for a year (`Labby__ChangeRetentionDays`,
 `Labby__IncidentRetentionDays`). A plugin that notices something changing can record it
@@ -762,7 +793,7 @@ else counts):
 | `{{updates}}` | the containers whose registry has a newer image, as the last **Check for updates** found them: name, image, when the newer one was published and how old the running one is; or "Nothing behind". Never asks a registry itself |
 | `{{renewals}}` | what expires next, soonest first: certificates, Tailscale keys, the Renewals list's next item and its overdue count; expired and overdue first, in red |
 | `{{changes}}` | what changed across the lab in the last 24 hours, newest first — services down and back, containers restarted, recreated or on a new image, alerts firing and clearing, certificates renewed — from the [change feed](#what-changed-and-incidents); `{{changes: containers}}` for one kind |
-| `{{incidents}}` | the last five incidents: what went down first, what followed, when and for how long, open ones marked; each links to its timeline. `{{incidents: open}}` for only what is still going on |
+| `{{incidents}}` | the last five incidents: what went down first, what followed, when and for how long, open ones marked, and what probably caused each (or "No obvious cause"); each links to its timeline. `{{incidents: open}}` for only what is still going on |
 
 Their options:
 

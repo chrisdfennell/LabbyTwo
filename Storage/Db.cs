@@ -467,6 +467,11 @@ public sealed class Db
             seq           INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
+
+        // 24 — an incident's write-up: the id of the note written about it, so the incident
+        // can link to the note as the note links back to it. A column rather than a table:
+        // an incident has one write-up at most, and it is read with the incident anyway.
+        "ALTER TABLE incidents ADD COLUMN writeup_note TEXT",
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

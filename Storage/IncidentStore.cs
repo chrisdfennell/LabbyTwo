@@ -90,13 +90,13 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
 
     /// <summary>Every incident still open — through the partial index, which holds nothing else.</summary>
     public const string OpenSql = """
-        SELECT id, started_ts, ended_ts, last_ts, maintenance FROM incidents
+        SELECT id, started_ts, ended_ts, last_ts, maintenance, writeup_note FROM incidents
         WHERE ended_ts IS NULL ORDER BY started_ts DESC LIMIT $limit
         """;
 
     /// <summary>Incidents that started in a window, newest first.</summary>
     public const string RecentSql = """
-        SELECT id, started_ts, ended_ts, last_ts, maintenance FROM incidents
+        SELECT id, started_ts, ended_ts, last_ts, maintenance, writeup_note FROM incidents
         WHERE started_ts >= $since ORDER BY started_ts DESC LIMIT $limit
         """;
 
@@ -142,12 +142,31 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
         ];
     }
 
+    /// <summary>
+    /// Records the note written up about an incident, or forgets it with null. Its own
+    /// statement, not part of <see cref="SaveAsync"/>: the tracker saves incidents from what
+    /// it holds in memory, which knows nothing of write-ups, and must never clear one.
+    /// </summary>
+    public async Task SetWriteUpAsync(long id, string? noteId, CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE incidents SET writeup_note = $note WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.Parameters.AddWithValue("$note", (object?)noteId ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+        if ((await ReadAsync(connection, ByIdSql, c => c.Parameters.AddWithValue("$id", id), ct)) is [var changed])
+            Changed?.Invoke(changed);
+    }
+
+    /// <summary>One incident by its id.</summary>
+    public const string ByIdSql = "SELECT id, started_ts, ended_ts, last_ts, maintenance, writeup_note FROM incidents WHERE id = $id";
+
     /// <summary>One incident, or null if there is no such id (or it has been pruned).</summary>
     public async Task<Incident?> GetAsync(long id, CancellationToken ct = default)
     {
         await using var connection = await db.OpenAsync(ct);
-        var list = await ReadAsync(connection,
-            "SELECT id, started_ts, ended_ts, last_ts, maintenance FROM incidents WHERE id = $id",
+        var list = await ReadAsync(connection, ByIdSql,
             cmd => cmd.Parameters.AddWithValue("$id", id), ct);
         return list.Count > 0 ? list[0] : null;
     }
@@ -158,13 +177,13 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
         var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         bind(cmd);
-        var rows = new List<(long Id, long Started, long? Ended, long Last, bool Maintenance)>();
+        var rows = new List<(long Id, long Started, long? Ended, long Last, bool Maintenance, string? WriteUp)>();
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
             while (await reader.ReadAsync(ct))
             {
                 rows.Add((reader.GetInt64(0), reader.GetInt64(1), reader.IsDBNull(2) ? null : reader.GetInt64(2),
-                    reader.GetInt64(3), reader.GetInt64(4) != 0));
+                    reader.GetInt64(3), reader.GetInt64(4) != 0, reader.IsDBNull(5) ? null : reader.GetString(5)));
             }
         }
 
@@ -192,7 +211,7 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
             }
 
             list.Add(new Incident(row.Id, Time(row.Started), row.Ended is { } ended ? Time(ended) : null,
-                Time(row.Last), row.Maintenance, memberList));
+                Time(row.Last), row.Maintenance, memberList) { WriteUpNoteId = row.WriteUp });
         }
         return list;
     }

@@ -190,6 +190,11 @@ builder.Services.AddSingleton<ChangeWatcher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChangeWatcher>());
 builder.Services.AddSingleton<IncidentTracker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IncidentTracker>());
+// "Probably caused by" for each incident, read from the feed and the lab's shape, and the
+// one-click write-up that turns an incident into a note.
+builder.Services.AddSingleton<ProbableCauses>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProbableCauses>());
+builder.Services.AddSingleton<IncidentWriteUps>();
 
 // Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
 // plugin's nightly tidy-up cannot hang startup or take the process down with it.
