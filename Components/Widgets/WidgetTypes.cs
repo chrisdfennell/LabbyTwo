@@ -487,6 +487,28 @@ public sealed class SpeedTestWidget : IWidgetType
 }
 
 /// <summary>
+/// Both ways of watching a tunnel on one card, for the same reason the speed test card
+/// serves both speed tests: they report the same metric names, so switching from the API
+/// to the local metrics port — or running both — needs no new card.
+/// </summary>
+public sealed class TunnelWidget : IWidgetType
+{
+    public string Type => "cloudflare-tunnel";
+    public string DisplayName => "Cloudflare Tunnel";
+    public string Icon => "🌩️";
+    public string Description => "Whether the tunnel is connected, how many connections it holds, and which Cloudflare data centres they reach.";
+    public IReadOnlyList<string> ProviderTypes => ["cloudflare", "cloudflared"];
+    public int DefaultWidth => 4;
+    public Type Component => typeof(TunnelCard);
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show_details", "Show the details", FieldKind.Bool, Default: "true",
+            Help: "Each tunnel's data centres, cloudflared version and when it last reconnected, under the numbers."),
+    ];
+}
+
+/// <summary>
 /// Recent workflow runs. Bound to GitHub by name rather than to a capability, because
 /// GitHub is the only thing here that reports runs — see the note on <see cref="CiRun"/>.
 /// </summary>

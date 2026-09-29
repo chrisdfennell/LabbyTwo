@@ -216,7 +216,8 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
 | **Browser push** | *Alert channel.* Notifications straight from LabbyTwo to a phone or desktop browser via Web Push — no third-party account. Needs HTTPS; on iPhone, LabbyTwo added to the Home Screen (iOS 16.4+). |
 | **Healthchecks** | Scheduled jobs that have stopped checking in. Catches the cron that silently stopped, which nothing else here can see. |
-| **Cloudflare Tunnel** | Whether your tunnels are healthy and how many connectors each has — the outage nobody on the LAN can see. |
+| **Cloudflare Tunnel** | Whether your tunnels are healthy, how many connectors each has, which Cloudflare data centres they reach, the cloudflared version and when each last reconnected — the outage nobody on the LAN can see. Needs an API token with Cloudflare Tunnel → Read. |
+| **cloudflared (local)** | The same tunnel asked from the inside: connections, data centres, requests and errors per minute, straight from the cloudflared container's metrics port. No Cloudflare account or token — see [Watching cloudflared without a token](#watching-cloudflared-without-a-token). |
 | **OPNsense** | Gateway packet loss and latency, WAN addresses, memory. The router is never "down"; it just starts dropping things. |
 | **Shelly** | Power draw, energy used and temperature, straight off the plug. No cloud, no broker. Gen1 and Gen2 both. |
 | **Weather forecast** | Up to sixteen days of highs, lows, gusts, UV and snow from Open-Meteo, plus the next 48 hours one hour at a time. No API key, and the half a weather station cannot tell you. |
@@ -235,6 +236,36 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **GitHub** | GitHub or GitHub Enterprise — repositories, open pull requests and issues, on the same page as your self-hosted forges. You choose the scope: what you own, a user's, an organisation's, or just the ones you name, because a token can see far more than belongs on a dashboard. |
 | **TLS certificate** | Days until a certificate expires, and who issued it. The outage that gives no warning: automatic renewal fails *silently*, and the only sign is a number counting down that nobody is watching. |
 | **MQTT broker** | Any broker — Zigbee2MQTT, Tasmota, ESPHome. Subscribes and turns messages into metrics: `name = topic:path`, the same shape the JSON API provider already used. The one integration here that holds a connection open rather than asking. |
+
+#### Watching cloudflared without a token
+
+The **Cloudflare Tunnel** provider asks Cloudflare's API, which needs an account ID and a
+token. **cloudflared (local)** asks the `cloudflared` container instead, over the metrics
+port it serves when started with `--metrics`. Nobody has that on by default, so add it to
+the command in your compose file:
+
+```yaml
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+```
+
+Then `docker compose up -d`, and add the connection with `http://cloudflared:2000` as the
+address. LabbyTwo has to be on the same Docker network as `cloudflared` to reach it by name;
+the port does not need publishing to the host, and is better not published — it is
+unauthenticated.
+
+It reads `/ready` — cloudflared's own verdict on whether it is connected, and how many
+connections it holds — and `/metrics` for the data centres they land in, the version, and
+requests and errors through the tunnel, turned into per-minute rates. When `/ready` says
+not connected the connection shows as down, and the suggested rule **The tunnel dropped**
+(connections below 1 for three minutes) says so in words. It reports the same
+`connections` and `edge_locations` metrics as the API provider, so the **Cloudflare Tunnel**
+card, charts and rules work with either, and running both is fine: the API sees every
+tunnel from outside, this sees one connector from inside.
 
 ### Controls — the ones that do something back
 
@@ -475,6 +506,7 @@ greys out the rest with the reason.
 | Media — download clients | nothing — SABnzbd, NZBGet, qBittorrent and Transmission side by side |
 | Media — library size | nothing — counts from every library server that reports one |
 | Media — needs a look | nothing — paused downloaders, missing subtitles, requests waiting, anything not answering |
+| Cloudflare Tunnel | Cloudflare Tunnel, cloudflared (local) — connected or not, connection count, data centres, and each tunnel's version and last reconnect |
 | Internet speed | Internet speed test, Speedtest Tracker — download, upload, ping and jitter together, how old the result is, and a week of both speeds on one zero-based axis |
 | Clock | nothing |
 | Weather station | Ambient Weather — current conditions |
