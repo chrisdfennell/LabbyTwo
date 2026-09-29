@@ -98,6 +98,20 @@ public static class ShortcodeLookup
                 .FirstOrDefault();
     }
 
+    /// <summary>
+    /// A provider action by its key ("restart") or the label on its button ("Restart"),
+    /// ignoring case — from <paramref name="actions"/>, which should be what the connection
+    /// offers right now, so an action its settings rule out is not found.
+    /// </summary>
+    public static ProviderAction? Action(IReadOnlyList<ProviderAction> actions, string keyOrLabel)
+    {
+        var wanted = keyOrLabel.Trim();
+        if (wanted.Length == 0)
+            return null;
+        return actions.FirstOrDefault(a => string.Equals(a.Id, wanted, StringComparison.OrdinalIgnoreCase))
+            ?? actions.FirstOrDefault(a => string.Equals(a.Label.Trim(), wanted, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>A card type by its key ("gauge") or the name the picker shows ("Gauge").</summary>
     public static IWidgetType? WidgetType(Registry registry, string typeOrName)
     {

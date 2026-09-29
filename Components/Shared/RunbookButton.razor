@@ -1,0 +1,92 @@
+@inject ActionRunner Runner
+@inject Registry Registry
+
+@* {{button: NAS / restart}}: one of a connection's own action buttons, written into a
+   runbook. It is ProviderActions narrowed to one action — the same confirmation (which a
+   Dangerous action cannot skip), the same busy state and result, the same ActionRunner
+   with its timeout and its silence around a reboot. Nothing here runs anything itself.
+
+   An action the connection does not offer right now — Wake on LAN with no MAC address, a
+   Pi-hole with no token — is not drawn, just as the Controls card leaves it out; in its
+   place is a "?" saying why, since the person reading the runbook is often the one who
+   can fix it. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_connection is null || _action is null)
+{
+    <span class="sc-value is-waiting" title="Loading…">…</span>
+}
+else
+{
+    <ProviderActions Connection="_connection" Only="@_action.Id" Label="@Code.Option("label")" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private string? _problem;
+    private Connection? _connection;
+    private ProviderAction? _action;
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        _connection = null;
+        _action = null;
+        if (Scope is null)
+            return;
+
+        var name = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("connection");
+        var wanted = Code.Part(1) is { Length: > 0 } second ? second : Code.Option("action");
+        if (name.Length == 0 || wanted.Length == 0)
+        {
+            _problem = $"Say which connection and which action: {{{{button: NAS / restart}}}}. ({Code.Source})";
+            return;
+        }
+        if (ShortcodeLookup.Connection(Scope.Connections, name) is not { } connection)
+        {
+            _problem = $"No connection called “{name}”. ({Code.Source})";
+            return;
+        }
+
+        var offered = Runner.ActionsFor(connection);
+        if (ShortcodeLookup.Action(offered, wanted) is { } action)
+        {
+            _connection = connection;
+            _action = action;
+            return;
+        }
+
+        // Declared by the provider but not offered for this connection: its settings rule
+        // it out. Said differently from a typo, because the fix is somewhere else.
+        var declared = Registry.Provider(connection.Provider) is { } provider ? SafeActions(provider) : [];
+        if (ShortcodeLookup.Action(declared, wanted) is { } unavailable)
+        {
+            _problem = $"{connection.Name} cannot “{unavailable.Label}” with its current settings — it needs something set on the connection first. ({Code.Source})";
+            return;
+        }
+
+        _problem = offered.Count == 0
+            ? $"{connection.Name} has no actions. ({Code.Source})"
+            : $"{connection.Name} has no action called “{wanted}”. It can: {string.Join(", ", offered.Select(a => $"{a.Id} ({a.Label})"))}. ({Code.Source})";
+    }
+
+    /// <summary>A plugin that cannot describe its actions costs its buttons, not the runbook.</summary>
+    private static IReadOnlyList<ProviderAction> SafeActions(IConnectionProvider provider)
+    {
+        try
+        {
+            return provider.Actions;
+        }
+        catch
+        {
+            return [];
+        }
+    }
+}
