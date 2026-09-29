@@ -112,6 +112,44 @@ public class MetricSpecTests
     }
 
     [Fact]
+    public void NoSuggestedRuleFiresAtItsOwnThreshold()
+    {
+        // Over thirty of these are "above 0" or "below 1" on a count or an on/off flag whose
+        // healthy value is exactly that number: no failing disks, the tunnel up, blocking on.
+        // When "above" meant "at or above", every one of them fired while all was well — and
+        // again after each restart, firing state living in memory.
+        var registry = BuildRegistry();
+        var checkedRules = 0;
+
+        foreach (var provider in registry.Providers)
+        foreach (var suggestion in provider.SuggestedRules.Where(r => r.Kind == RuleKind.Threshold))
+        {
+            var rule = suggestion.ForConnection("c");
+            Assert.False(rule.IsBreaching(rule.Threshold),
+                $"{provider.Type}/{suggestion.Name} fires at its own threshold {rule.Threshold}");
+            Assert.True(rule.IsCleared(rule.ClearsAt),
+                $"{provider.Type}/{suggestion.Name} would hold, not clear, at {rule.ClearsAt}");
+            checkedRules++;
+        }
+
+        Assert.True(checkedRules > 30, $"only {checkedRules} suggested rules found");
+    }
+
+    [Theory]
+    [InlineData("disks_failing", Comparison.Above, 0, 0)]    // no failing disks
+    [InlineData("services_up", Comparison.Below, 4, 4)]      // all four AD services answering
+    [InlineData("dns_ok", Comparison.Below, 1, 1)]           // DNS answering
+    [InlineData("vpn_up", Comparison.Below, 1, 1)]           // tunnel up
+    [InlineData("alerts_severe", Comparison.Above, 0, 0)]    // no severe weather
+    public void AHealthyReadingOnTheLineDoesNotFire(string metric, Comparison comparison, double threshold, double healthy)
+    {
+        var rule = new AlertRule { Metric = metric, Comparison = comparison, Threshold = threshold };
+
+        Assert.False(rule.IsBreaching(healthy));
+        Assert.True(rule.IsCleared(healthy));
+    }
+
+    [Fact]
     public void EverySuggestedRuleNamesAMetricItsProviderActuallyReports()
     {
         var registry = BuildRegistry();

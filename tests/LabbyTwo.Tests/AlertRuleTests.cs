@@ -17,24 +17,30 @@ public class AlertRuleTests
 
     [Theory]
     [InlineData(89.9, false)]
-    [InlineData(90, true)]
+    [InlineData(90, false)]
+    [InlineData(90.1, true)]
     [InlineData(95, true)]
-    public void AnAboveRuleBreachesAtOrOverTheThreshold(double value, bool expected)
+    public void AnAboveRuleBreachesOnlyPastTheThreshold(double value, bool expected)
         => Assert.Equal(expected, Above(90).IsBreaching(value));
 
     [Theory]
     [InlineData(20.1, false)]
-    [InlineData(20, true)]
+    [InlineData(20, false)]
+    [InlineData(19.9, true)]
     [InlineData(5, true)]
-    public void ABelowRuleBreachesAtOrUnderTheThreshold(double value, bool expected)
+    public void ABelowRuleBreachesOnlyPastTheThreshold(double value, bool expected)
         => Assert.Equal(expected, Below(20).IsBreaching(value));
 
     [Fact]
     public void WithNoHysteresisTheRuleClearsAsSoonAsItStopsBreaching()
     {
         var rule = Above(90);
-        Assert.True(rule.IsBreaching(90));
-        Assert.False(rule.IsCleared(90));
+        Assert.True(rule.IsBreaching(90.1));
+        Assert.False(rule.IsCleared(90.1));
+        // On the line is cleared, not held: otherwise a value that settles exactly on the
+        // threshold would keep a fired alert firing for ever.
+        Assert.False(rule.IsBreaching(90));
+        Assert.True(rule.IsCleared(90));
         Assert.True(rule.IsCleared(89.9));
     }
 
