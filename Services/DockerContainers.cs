@@ -245,6 +245,18 @@ public static class DockerContainers
         return list.WaitAsync(ct);
     }
 
+    /// <summary>
+    /// Hands a list somebody has just fetched to every other reader, as if it had come from
+    /// <see cref="SharedListAsync"/>. The Docker probe asks for this same list every sweep, so
+    /// the change watcher that diffs it after the sweep — and any runbook drawn in the next
+    /// few seconds — reads the probe's answer instead of asking the host a second time.
+    /// </summary>
+    public static void Remember(string endpoint, IReadOnlyList<ContainerRow> rows)
+    {
+        lock (SharedLists)
+            SharedLists[endpoint] = (DateTimeOffset.UtcNow, Task.FromResult(rows));
+    }
+
     /// <summary>Forgets shared lists, so the next reader asks again. For tests, and after an action.</summary>
     public static void ForgetSharedLists()
     {

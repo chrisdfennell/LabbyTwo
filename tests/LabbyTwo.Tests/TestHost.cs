@@ -37,6 +37,8 @@ public static class TestHost
         services.AddSingleton<HistoryStore>();
         services.AddSingleton<ConfigStore>();
         services.AddSingleton<TemplateStore>();
+        services.AddSingleton<ChangeStore>();
+        services.AddSingleton<IncidentStore>();
 
         return services.BuildServiceProvider();
     }

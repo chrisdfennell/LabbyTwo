@@ -172,6 +172,17 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertService>());
 builder.Services.AddSingleton<MetricAlertService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricAlertService>());
 
+// The "what changed" feed and the incidents built from it. The stores are ordinary
+// singletons a plugin can ask for — a plugin that notices something changing records it
+// with ChangeStore.RecordAsync. The watcher listens to the monitor and the evaluator and
+// writes the feed; the tracker listens to the feed and groups outages into incidents.
+builder.Services.AddSingleton<ChangeStore>();
+builder.Services.AddSingleton<IncidentStore>();
+builder.Services.AddSingleton<ChangeWatcher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ChangeWatcher>());
+builder.Services.AddSingleton<IncidentTracker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<IncidentTracker>());
+
 // Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
 // plugin's nightly tidy-up cannot hang startup or take the process down with it.
 builder.Services.AddSingleton<BackgroundJobRunner>();

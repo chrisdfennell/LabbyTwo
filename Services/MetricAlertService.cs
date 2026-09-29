@@ -62,6 +62,18 @@ public sealed class MetricAlertService(
     /// <summary>Fires after an evaluation pass so a widget showing active alerts can refresh.</summary>
     public event Action? Updated;
 
+    /// <summary>
+    /// A rule started or stopped firing for one connection — the moment itself, which
+    /// <see cref="Updated"/> does not say. Raised whether or not the notification is then
+    /// held by maintenance, quiet hours or a silence: those decide who is told, not what
+    /// happened, and the change feed and incidents are a record of what happened.
+    /// </summary>
+    public event Action<AlertTransition>? Transitioned;
+
+    /// <param name="Name">The rule as the Alerts page names it, for the feed and an incident's member list.</param>
+    /// <param name="Reading">The value that fired or cleared it, in the units chosen in Settings at the time.</param>
+    public sealed record AlertTransition(AlertRule Rule, Connection Connection, bool Firing, string Name, string Reading, DateTimeOffset At);
+
     public Task StartAsync(CancellationToken ct)
     {
         monitor.Updated += OnSweepCompleted;
@@ -230,7 +242,10 @@ public sealed class MetricAlertService(
             _breaches[key] = new Breach(rule.Id, connection.Id, since, firing || sustained, value) { Usual = usual };
 
             if (!firing && sustained)
+            {
+                await AnnounceAsync(rule, connection, spec, value, firing: true, now, ct);
                 await SendAsync(rule, connection, spec, value, usual, AlertLevel.Down, ct);
+            }
             return;
         }
 
@@ -239,7 +254,10 @@ public sealed class MetricAlertService(
             _breaches[key] = new Breach(rule.Id, connection.Id, null, false, value) { Usual = usual };
 
             if (previous?.Firing == true)
+            {
+                await AnnounceAsync(rule, connection, spec, value, firing: false, now, ct);
                 await SendAsync(rule, connection, spec, value, usual, AlertLevel.Up, ct);
+            }
             return;
         }
 
@@ -248,6 +266,30 @@ public sealed class MetricAlertService(
         _breaches[key] = previous is null
             ? new Breach(rule.Id, connection.Id, null, false, value) { Usual = usual }
             : previous with { LastValue = value, Usual = usual };
+    }
+
+    /// <summary>
+    /// Tells <see cref="Transitioned"/> listeners, before the notification is sent — the
+    /// send can take seconds, and the moment is when the rule changed, not when a webhook
+    /// answered. A listener that throws is logged and forgotten: the alert still has to go out.
+    /// </summary>
+    private async Task AnnounceAsync(
+        AlertRule rule, Connection connection, MetricSpec spec, double value, bool firing, DateTimeOffset now, CancellationToken ct)
+    {
+        if (Transitioned is not { } handlers)
+            return;
+        try
+        {
+            var system = Units.Preferences.From(await appSettings.AllAsync(ct));
+            var reading = Units.Format(spec, value, system, spec.Decimals == 0 && Math.Abs(value) < 100 ? 1 : spec.Decimals);
+            var transition = new AlertTransition(rule, connection, firing, rule.Describe(spec.Label, connection.Name), reading, now);
+            foreach (var handler in handlers.GetInvocationList())
+                ((Action<AlertTransition>)handler)(transition);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogError(ex, "A listener for alert rule changes threw");
+        }
     }
 
     /// <summary>

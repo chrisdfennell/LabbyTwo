@@ -396,6 +396,48 @@ and follows quiet hours like any other. Browsers only allow this over HTTPS (you
 or reverse-proxy address, not `http://nas:5150`), and on iPhone and iPad only for LabbyTwo
 added to the Home Screen.
 
+### What changed, and incidents
+
+When something breaks, the first question is *what changed?* **What changed** in the nav
+is one stream of everything that did, across the whole lab, newest first — filter it by
+kind, by connection and by how far back:
+
+| Kind | Recorded when | How it is noticed |
+|---|---|---|
+| Services | a connection goes down or comes back | the monitor's own status changes, the same ones the status page keeps |
+| Containers | a container starts, stops, restarts, is paused, created, removed or recreated — and when it is recreated on a **new image** | the container list the Docker probe already fetches every sweep, compared with the last one. A restart that was over before the next sweep is still caught: a container that has been up for less time than has passed since the last look must have restarted in between |
+| Alerts | a threshold, unusual or forecast rule fires or clears | the evaluator, whether or not the notification was held by maintenance or quiet hours |
+| Certificates | a TLS certificate connection is served a different certificate — renewed (later expiry, same issuer) or replaced | the certificate probe, which now also reports the serial |
+| DNS | a LAN name resolves to different addresses | the **Check now** DNS test on the health page, when you run it — it never runs by itself. Public names are left out, since a CDN answers differently every minute |
+| Devices | the network scan finds addresses it has never seen | any connection reporting `devices_new`, which the network scan plugin does |
+| Updates | LabbyTwo starts as a different version from last time | a comparison at startup |
+
+Containers are compared by polling rather than by Docker's event stream on purpose: the
+stream is a request held open for ever, and socket proxies, TCP endpoints and restarts all
+end those, each time losing whatever happened in the gap — so the list would be needed to
+catch up anyway. Polling the list the probe already has costs no extra request and works
+through any proxy that lets the dashboard work. What each detector saw last is kept in the
+database, so after a restart it compares with what was true before, and a sweep in which
+nothing changed writes nothing.
+
+**Incidents** groups outages. A service going down or an alert rule firing starts one;
+anything else that goes down or fires within 15 minutes of the last thing that happened in
+it joins it — so the NAS and the six things stored on it are one incident, not seven — and
+something that comes back and falls over again soon after reopens it rather than starting
+another. It ends when everything in it has come back. Each one lists what was involved,
+when each part went down and for how long, and opens up into a **timeline**: every change
+recorded from half an hour before it started until just after it ended, marked with how
+long before or after the first failure it was. That half hour is usually where the cause
+is — the image that was pulled, the container that was recreated, the certificate that was
+replaced. Anything that happens while alerts are silenced for maintenance is still
+recorded, and marked **during maintenance**, since "it did not come back after I restarted
+it" is the incident most worth having written down.
+
+Both go into a runbook with `{{changes}}` and `{{incidents}}` (see [Shortcodes](#shortcodes)).
+The feed is kept for 90 days and incidents for a year (`Labby__ChangeRetentionDays`,
+`Labby__IncidentRetentionDays`). A plugin that notices something changing can record it
+too: ask for `ChangeStore` and call `RecordAsync`.
+
 ### Tabs — what's in the nav
 
 The sidebar is literally a table. Add, rename, reorder, hide, delete — and **Sort** puts a
@@ -630,17 +672,21 @@ else counts):
 | `{{alerts}}` | the alert rules firing now — threshold, unusual-for-the-time and forecast rules — with the connection, the reading, the limit and how long; or "No alerts firing" |
 | `{{containers: stopped}}` | a Docker host's containers: `stopped`, `unhealthy`, `running`, `paused`, `restarting` or `all` (the default). Dot, name, image, uptime or exit code, health, Compose project. Read-only |
 | `{{renewals}}` | what expires next, soonest first: certificates, Tailscale keys, the Renewals list's next item and its overdue count; expired and overdue first, in red |
+| `{{changes}}` | what changed across the lab in the last 24 hours, newest first — services down and back, containers restarted, recreated or on a new image, alerts firing and clearing, certificates renewed — from the [change feed](#what-changed-and-incidents); `{{changes: containers}}` for one kind |
+| `{{incidents}}` | the last five incidents: what went down first, what followed, when and for how long, open ones marked; each links to its timeline. `{{incidents: open}}` for only what is still going on |
 
 Their options:
 
 | Option | On | Does |
 |---|---|---|
-| `only="NAS, Plex"` | `down`, `alerts`, `renewals` | only those connections |
+| `only="NAS, Plex"` | `down`, `alerts`, `renewals`, `changes` | only those connections |
 | `include="checking"` | `down` | also lists what has not been checked yet |
 | `silenced="hide"` | `down` | leaves out silenced connections, which are otherwise listed and marked "silenced until 14:05" |
 | `connection="Docker"` | `containers` | which Docker connection; the first enabled one if left out |
-| `limit=10` | `containers` (default 25), `renewals` (default 5) | at most that many lines |
+| `limit=10` | `containers` (default 25), `renewals` (default 5), `changes` (default 10, up to 100), `incidents` (default 5, up to 50) | at most that many lines |
 | `days=30` | `renewals` | how far ahead to look; 60 days if left out. Overdue is always shown |
+| `last=7d` | `changes` (default `24h`), `incidents` (default `30d`) | how far back to look, from `5m` to `365d`: `30m`, `24h`, `7d`, `2w`. An incident still open is shown however long ago it started |
+| `kind="containers, alerts"` | `changes` | only those kinds: `services`, `containers`, `alerts`, `certificates`, `dns`, `devices`, `updates` (plurals optional). Same as writing it first, `{{changes: containers}}` |
 
 `{{containers}}` uses the Containers tab's own calls, so a socket proxy that refuses the
 list shows a **?** naming the flag to set (`CONTAINERS=1`). However many pages show it,
@@ -758,6 +804,10 @@ All of them visible when broken, rather than silently wrong:
 2. Still nothing? {{button: QNAP NAS / wake}}
 3. Its page, if it answers: {{link: QNAP NAS}}
 
+What changed in the last two hours — the usual suspects:
+
+{{changes: last=2h}}
+
 {{details: Full restart procedure}}
 1. Stop what writes to it first:
 
@@ -791,7 +841,8 @@ The domain renews {{countdown: 2026-12-01}}.
 Open it while the NAS is fine and you see the date, "Everything's up", "No alerts firing",
 the NAS's numbers with a trend line and a month of green cells, and two closed folds; pull
 its plug and within a sweep the same note is the NAS-is-down page, with the wake and
-restart buttons and the list of containers to stop — and nothing about disk space.
+restart buttons, the list of containers to stop and what changed in the two hours before
+— and nothing about disk space.
 
 ### Weather and radar
 

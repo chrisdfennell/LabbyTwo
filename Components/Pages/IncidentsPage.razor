@@ -1,0 +1,290 @@
+@page "/incidents"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IncidentStore Incidents
+@inject ChangeStore Changes
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject Offload Offload
+@inject NavigationManager Nav
+
+<PageTitle>Incidents · LabbyTwo</PageTitle>
+
+@* Outages, one row each however many things they took down: what went first, what
+   followed, how long until the last came back — and, opened up, the timeline: everything
+   the change feed recorded from half an hour before it started until just after it ended.
+   That half hour is usually where the cause is.
+
+   The list is read in the background and again when an incident is written. A timeline is
+   read when it is opened, and again while it is open and changes arrive. *@
+
+<div class="page-head">
+    <div>
+        <h1>🔥 Incidents</h1>
+        <p class="subtitle">
+            When something goes down, everything else that went with it, and what changed just before.
+            <a href="changes">Everything that changed</a>
+        </p>
+    </div>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Which incidents">
+            <button class="btn @(_openOnly ? "btn-outline-secondary" : "btn-secondary")" aria-pressed="@(!_openOnly)"
+                    @onclick="() => Show(false)">All</button>
+            <button class="btn @(_openOnly ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@_openOnly"
+                    @onclick="() => Show(true)">Open</button>
+        </div>
+        <select class="form-select form-select-sm w-auto" aria-label="How far back" @bind="_days" @bind:after="Reload" disabled="@_openOnly">
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="365">Last year</option>
+        </select>
+    </div>
+</div>
+
+<details class="panel p-3 mb-3 incident-rules">
+    <summary class="tile-meta">How incidents are grouped</summary>
+    <ul class="tile-meta mb-0 mt-2">
+        <li>A service going down, or an alert rule firing, starts an incident — unless it happens within
+            @IncidentRules.JoinWindow.TotalMinutes minutes of the last thing that happened in another one, in which case it joins that.
+            So a NAS and everything stored on it going down inside a few minutes is one incident, and something that comes
+            back and falls over again soon after reopens the same one.</li>
+        <li>An incident ends when everything in it has come back. Its length is from the first failure to the last recovery.</li>
+        <li>The timeline shows every change recorded from @IncidentRules.ContextBefore.TotalMinutes minutes before it started
+            until @IncidentRules.ContextAfter.TotalMinutes minutes after it ended.</li>
+        <li>Anything that happened while alerts were silenced for maintenance is still recorded, and marked
+            <span class="badge text-bg-secondary">during maintenance</span>.</li>
+    </ul>
+</details>
+
+@if (!_load.Ready)
+{
+    <div class="panel p-3"><div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div></div>
+}
+else if (_load.Failed && _incidents.Count == 0)
+{
+    <div class="panel p-3 text-danger">The incidents could not be read. The log says why.</div>
+}
+else if (_incidents.Count == 0)
+{
+    <div class="panel p-3">
+        <p class="mb-0">@(_openOnly ? "Nothing is down. No incident is open." : $"No incidents in the last {_days} days.")</p>
+    </div>
+}
+else
+{
+    var now = DateTimeOffset.Now;
+    <div class="d-grid gap-2">
+        @foreach (var incident in _incidents)
+        {
+            var open = _expanded.Contains(incident.Id);
+            <div class="panel p-3 incident @(incident.IsOpen ? "is-open" : "")" id="@($"incident-{incident.Id}")" @key="incident.Id">
+                <div class="d-flex align-items-start gap-2">
+                    <span class="status-dot mt-2 @(incident.IsOpen ? "status-down" : "status-unknown")" aria-hidden="true"></span>
+                    <div class="min-w-0 flex-grow-1">
+                        <div>
+                            <strong>@incident.Title</strong>
+                            @if (incident.IsOpen)
+                            {
+                                <span class="badge text-bg-danger ms-1">open</span>
+                            }
+                            @if (incident.Maintenance)
+                            {
+                                <span class="badge text-bg-secondary ms-1" title="Maintenance mode was on while this happened">during maintenance</span>
+                            }
+                        </div>
+                        <div class="tile-meta">@ChangeLists.IncidentWhen(incident, now)</div>
+                        <ul class="incident-members tile-meta mb-0 mt-1">
+                            @foreach (var member in incident.Members.OrderBy(m => m.DownAt))
+                            {
+                                <li>
+                                    <span class="status-dot @(member.IsRecovered ? "status-up" : "status-down")" aria-hidden="true"></span>
+                                    <span>@member.Name</span>
+                                    <span>— @(member.Kind == ChangeKinds.Alert ? "fired" : "went down") at @member.DownAt.ToLocalTime().ToString("HH:mm"), @ChangeLists.MemberWhen(member, now)</span>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary flex-none" aria-expanded="@(open ? "true" : "false")"
+                            @onclick="() => Toggle(incident)">@(open ? "Hide timeline" : "Timeline")</button>
+                </div>
+
+                @if (open)
+                {
+                    <div class="incident-timeline mt-3">
+                        @if (!_timelines.TryGetValue(incident.Id, out var timeline))
+                        {
+                            <span class="tile-meta">Reading the changes around it…</span>
+                        }
+                        else if (timeline.Count == 0)
+                        {
+                            <span class="tile-meta">Nothing else changed from half an hour before it until it ended.</span>
+                        }
+                        else
+                        {
+                            <ol class="change-list">
+                                @foreach (var change in timeline)
+                                {
+                                    var where = ChangeLists.Where(change, _connections);
+                                    var offset = change.At - incident.StartedAt;
+                                    <li class="change-row @(offset < TimeSpan.Zero ? "is-before" : "")" @key="change.Id">
+                                        <span class="change-time tile-meta" title="@change.At.ToLocalTime().ToString("f")">
+                                            @change.At.ToLocalTime().ToString("HH:mm:ss")
+                                            <span class="change-offset">@Offset(offset)</span>
+                                        </span>
+                                        <span class="status-dot @change.Dot" aria-hidden="true"></span>
+                                        <div class="min-w-0">
+                                            <div>
+                                                <span>@change.Title</span>
+                                                @if (where is not null)
+                                                {
+                                                    <span class="tile-meta"> · @where</span>
+                                                }
+                                            </div>
+                                            @if (change.Detail.Length > 0)
+                                            {
+                                                <div class="tile-meta change-detail">@change.Detail</div>
+                                            }
+                                        </div>
+                                    </li>
+                                }
+                            </ol>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private const int Limit = 100;
+    private const int TimelineLimit = 300;
+
+    private bool _openOnly;
+    private int _days = 30;
+    private IReadOnlyList<Incident> _incidents = [];
+    private IReadOnlyList<Connection> _connections = [];
+    private readonly HashSet<long> _expanded = [];
+    private readonly Dictionary<long, IReadOnlyList<Change>> _timelines = [];
+    private BackgroundLoad _load = default!;
+    private bool _disposed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Incidents.Changed += OnIncidentChanged;
+        Changes.Recorded += OnRecorded;
+        Health.Updated += OnSweep;
+
+        // A link from a runbook's {{incidents}} names one; open its timeline straight away.
+        var fragment = new Uri(Nav.Uri).Fragment;
+        if (fragment.StartsWith("#incident-", StringComparison.Ordinal) && long.TryParse(fragment["#incident-".Length..], out var id))
+            _expanded.Add(id);
+
+        _connections = await Config.ConnectionsAsync();
+        Load(refresh: false);
+    }
+
+    private void Show(bool openOnly)
+    {
+        _openOnly = openOnly;
+        Load(refresh: false);
+    }
+
+    private void Reload() => Load(refresh: false);
+
+    private void Load(bool refresh)
+    {
+        var since = DateTimeOffset.Now.AddDays(-_days);
+        var openOnly = _openOnly;
+
+        Task<IReadOnlyList<Incident>> Fetch(CancellationToken ct) =>
+            Offload.Run(c => Incidents.RecentAsync(since, Limit, openOnly, c), ct);
+
+        void Apply(IReadOnlyList<Incident> list)
+        {
+            _incidents = list;
+            foreach (var incident in list.Where(i => _expanded.Contains(i.Id)))
+                LoadTimeline(incident);
+        }
+
+        var key = (openOnly, _days);
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, Apply);
+        else
+            _ = _load.Load(key, Fetch, Apply);
+    }
+
+    private void Toggle(Incident incident)
+    {
+        if (!_expanded.Remove(incident.Id))
+        {
+            _expanded.Add(incident.Id);
+            LoadTimeline(incident);
+        }
+    }
+
+    /// <summary>
+    /// The changes around one incident, oldest first so it reads as a story. Its own loader
+    /// is not needed: one query on the time index, started and forgotten, applied only if
+    /// the page is still here.
+    /// </summary>
+    private void LoadTimeline(Incident incident)
+    {
+        var query = new ChangeQuery(IncidentRules.TimelineFrom(incident), IncidentRules.TimelineTo(incident, DateTimeOffset.Now),
+            Limit: TimelineLimit);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var changes = await Offload.Run(c => Changes.QueryAsync(query, c));
+                if (_disposed)
+                    return;
+                await InvokeAsync(() =>
+                {
+                    _timelines[incident.Id] = [.. changes.Reverse()];
+                    StateHasChanged();
+                });
+            }
+            catch (Exception) when (_disposed)
+            {
+                // The page went while it was reading. Nobody to tell.
+            }
+            catch (Exception)
+            {
+                if (!_disposed)
+                    await InvokeAsync(() => { _timelines[incident.Id] = []; StateHasChanged(); });
+            }
+        });
+    }
+
+    /// <summary>"−12m", "+3m", "start" — where a change sits against the incident's first failure.</summary>
+    private static string Offset(TimeSpan offset) =>
+        Math.Abs(offset.TotalSeconds) < 1 ? "start"
+        : offset < TimeSpan.Zero ? $"−{Ago.Duration(-offset)}"
+        : $"+{Ago.Duration(offset)}";
+
+    private void OnIncidentChanged(Incident incident) => _ = InvokeAsync(() => Load(refresh: true));
+
+    private void OnRecorded(Change change) => _ = InvokeAsync(() =>
+    {
+        foreach (var incident in _incidents.Where(i => _expanded.Contains(i.Id) && i.IsOpen))
+            LoadTimeline(incident);
+    });
+
+    private void OnSweep()
+    {
+        if (_incidents.Any(i => i.IsOpen))
+            _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Incidents.Changed -= OnIncidentChanged;
+        Changes.Recorded -= OnRecorded;
+        Health.Updated -= OnSweep;
+        _load?.Dispose();
+    }
+}

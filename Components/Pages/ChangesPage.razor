@@ -1,0 +1,197 @@
+@page "/changes"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ChangeStore Changes
+@inject ConfigStore Config
+@inject Offload Offload
+
+<PageTitle>What changed · LabbyTwo</PageTitle>
+
+@* One stream of everything that changed across the lab, newest first: services going down
+   and coming back, containers restarted, recreated or moved to a new image, alerts firing
+   and clearing, certificates renewed, DNS answers that moved, new devices on the network,
+   LabbyTwo updating itself. The first page to open when something breaks, because the
+   answer to "what did we change?" is usually on it.
+
+   Read off the render thread, in the background, and read again when a change is recorded. *@
+
+<div class="page-head">
+    <div>
+        <h1>🕘 What changed</h1>
+        <p class="subtitle">
+            Everything that changed across the lab, newest first. Kept for @_retentionDays days.
+            <a href="incidents">Incidents</a>
+        </p>
+    </div>
+</div>
+
+<div class="panel p-3 mb-3">
+    <div class="row g-2 align-items-end">
+        <div class="col-sm-4 col-lg-3">
+            <label class="form-label small mb-1" for="changes-kind">What</label>
+            <select id="changes-kind" class="form-select form-select-sm" @bind="Kind" @bind:after="Reload">
+                <option value="">Everything</option>
+                @foreach (var (key, label) in ChangeKinds.All)
+                {
+                    <option value="@key">@label</option>
+                }
+            </select>
+        </div>
+        <div class="col-sm-4 col-lg-3">
+            <label class="form-label small mb-1" for="changes-connection">Connection</label>
+            <select id="changes-connection" class="form-select form-select-sm" @bind="ConnectionId" @bind:after="Reload">
+                <option value="">All connections</option>
+                @foreach (var connection in _connections)
+                {
+                    <option value="@connection.Id">@connection.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-sm-4 col-lg-3">
+            <label class="form-label small mb-1" for="changes-window">When</label>
+            <select id="changes-window" class="form-select form-select-sm" @bind="Window" @bind:after="Reload">
+                @foreach (var (value, label) in Windows)
+                {
+                    <option value="@value">@label</option>
+                }
+            </select>
+        </div>
+    </div>
+</div>
+
+@if (!_load.Ready)
+{
+    <div class="panel p-3"><div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div></div>
+}
+else if (_load.Failed && _changes.Count == 0)
+{
+    <div class="panel p-3 text-danger">The changes could not be read. The log says why.</div>
+}
+else if (_changes.Count == 0)
+{
+    <div class="panel p-3">
+        <p class="mb-0">Nothing @(Kind.Length > 0 ? $"of that kind " : "")changed in @WindowLabel.</p>
+    </div>
+}
+else
+{
+    <div class="panel p-3 change-feed">
+        @foreach (var day in _changes.GroupBy(c => c.At.ToLocalTime().Date))
+        {
+            <h2 class="change-day">@DayLabel(day.Key)</h2>
+            <ol class="change-list">
+                @foreach (var change in day)
+                {
+                    var where = ChangeLists.Where(change, _connections);
+                    <li class="change-row" @key="change.Id">
+                        <span class="change-time tile-meta" title="@change.At.ToLocalTime().ToString("f")">@change.At.ToLocalTime().ToString("HH:mm:ss")</span>
+                        <span class="status-dot @change.Dot" aria-hidden="true"></span>
+                        <div class="min-w-0">
+                            <div>
+                                <span>@change.Title</span>
+                                @if (where is not null)
+                                {
+                                    <span class="tile-meta"> · @where</span>
+                                }
+                                <span class="badge text-bg-secondary ms-1">@ChangeKinds.Label(change.Kind).ToLowerInvariant()</span>
+                            </div>
+                            @if (change.Detail.Length > 0)
+                            {
+                                <div class="tile-meta change-detail">@change.Detail</div>
+                            }
+                        </div>
+                    </li>
+                }
+            </ol>
+        }
+        @if (_changes.Count >= Limit)
+        {
+            <p class="tile-meta mb-0">The newest @Limit are shown. Narrow the filters to see further back.</p>
+        }
+    </div>
+}
+
+@code {
+    private const int Limit = 500;
+
+    private static readonly (string Value, string Label)[] Windows =
+    [
+        ("1h", "The last hour"),
+        ("24h", "The last 24 hours"),
+        ("7d", "The last 7 days"),
+        ("30d", "The last 30 days"),
+        ("90d", "The last 90 days"),
+    ];
+
+    [SupplyParameterFromQuery(Name = "kind")] public string? KindQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "connection")] public string? ConnectionQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "last")] public string? WindowQuery { get; set; }
+
+    private string Kind { get; set; } = "";
+    private string ConnectionId { get; set; } = "";
+    private string Window { get; set; } = "7d";
+
+    private IReadOnlyList<Connection> _connections = [];
+    private IReadOnlyList<Change> _changes = [];
+    private BackgroundLoad _load = default!;
+    private int _retentionDays = 90;
+
+    [Inject] private Microsoft.Extensions.Options.IOptions<LabbyOptions> Options { get; set; } = default!;
+
+    private string WindowLabel => (Windows.FirstOrDefault(w => w.Value == Window).Label ?? "the window").ToLowerInvariant();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        _retentionDays = (int)Options.Value.ChangeRetention.TotalDays;
+        Kind = ChangeKinds.Parse(KindQuery) ?? "";
+        ConnectionId = ConnectionQuery ?? "";
+        Window = Windows.Any(w => w.Value == WindowQuery) ? WindowQuery! : "7d";
+        Changes.Recorded += OnRecorded;
+        Config.Changed += OnConfigChanged;
+        // Cached by the store, so normally instant.
+        _connections = [.. (await Config.ConnectionsAsync()).OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)];
+        Load(refresh: false);
+    }
+
+    private void Reload() => Load(refresh: false);
+
+    private void Load(bool refresh)
+    {
+        var span = ChangeWindow.Parse(Window, TimeSpan.FromDays(7), out _) ?? TimeSpan.FromDays(7);
+        var kinds = Kind.Length > 0 ? new[] { Kind } : null;
+        var connection = ConnectionId.Length > 0 ? ConnectionId : null;
+
+        Task<IReadOnlyList<Change>> Fetch(CancellationToken ct) => Offload.Run(c =>
+            Changes.QueryAsync(new ChangeQuery(DateTimeOffset.Now - span, DateTimeOffset.Now, kinds, connection, Limit), c), ct);
+
+        var key = (Kind, connection, Window);
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, list => _changes = list);
+        else
+            _ = _load.Load(key, Fetch, list => _changes = list);
+    }
+
+    private static string DayLabel(DateTime day)
+    {
+        var today = DateTime.Today;
+        return day == today ? "Today"
+            : day == today.AddDays(-1) ? "Yesterday"
+            : day.ToString("dddd d MMMM", System.Globalization.CultureInfo.CurrentCulture);
+    }
+
+    private void OnRecorded(Change change) => _ = InvokeAsync(() => Load(refresh: true));
+
+    private void OnConfigChanged() => _ = InvokeAsync(async () =>
+    {
+        _connections = [.. (await Config.ConnectionsAsync()).OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)];
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Changes.Recorded -= OnRecorded;
+        Config.Changed -= OnConfigChanged;
+        _load?.Dispose();
+    }
+}
