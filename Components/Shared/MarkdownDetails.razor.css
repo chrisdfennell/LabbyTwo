@@ -1,0 +1,30 @@
+/* A fold inside a note. Framed lightly, like an embedded card, so it reads as one thing
+   whether open or closed; the caret is the browser's own, turned the app's colour. */
+
+.md-details {
+    margin: 0 0 .75rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-inner, .5rem);
+    background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+}
+
+.md-details-summary {
+    cursor: pointer;
+    padding: .45rem .75rem;
+    font-weight: 600;
+    list-style-position: inside;
+    border-radius: inherit;
+}
+
+.md-details-summary::marker { color: var(--muted); }
+
+.md-details-summary:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+.md-details-summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.md-details[open] > .md-details-summary { border-bottom: 1px solid var(--edge); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+
+.md-details-body { padding: .6rem .75rem 0; }

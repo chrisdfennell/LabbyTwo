@@ -2023,3 +2023,37 @@ html.wall-cursor-hidden * { cursor: none !important; }
 /* A card has only so much room; past that the map scrolls inside it rather than stretching
    the row it sits in. */
 .depmap-card .depmap-scroll { max-height: 30rem; }
+
+/* ==========================================================================
+   Markdown callouts — > [!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION].
+   Kept together here, at the very end, because they are the one piece of this feature
+   that cannot live in a component's scoped stylesheet: a callout is the Markdown
+   renderer's own HTML (see Services/MarkdownCallouts.cs), not a component, so no scope
+   attribute ever reaches it. Each kind sets one colour; the box, title and icon take
+   theirs from it, so the light and dark themes follow from the tokens alone.
+   ========================================================================== */
+.md-callout {
+    --callout: var(--accent);
+    margin: 0 0 .75rem;
+    padding: .55rem .8rem .6rem;
+    border: 1px solid color-mix(in srgb, var(--callout) 40%, transparent);
+    border-left: .25rem solid var(--callout);
+    border-radius: .5rem;
+    background: color-mix(in srgb, var(--callout) 9%, transparent);
+}
+.md-callout-tip { --callout: var(--up); }
+/* No token for purple, so it is mixed towards the text colour: lighter on dark, darker on light. */
+.md-callout-important { --callout: color-mix(in srgb, #9a6bf0 78%, var(--text)); }
+.md-callout-warning { --callout: var(--warn); }
+.md-callout-caution { --callout: var(--down); }
+.markdown-body .md-callout-title,
+.md-callout-title {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0 0 .3rem;
+    font-weight: 650;
+    color: var(--callout);
+}
+.md-callout-icon { flex: none; fill: currentColor; }
+.markdown-body .md-callout > :last-child { margin-bottom: 0; }

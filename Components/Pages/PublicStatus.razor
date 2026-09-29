@@ -165,13 +165,7 @@ else
         _ => "status-unknown",
     };
 
-    private static string DayClass(double? percent) => percent switch
-    {
-        null => "is-unknown",
-        >= 99.9 => "is-good",
-        >= 95 => "is-warn",
-        _ => "is-bad",
-    };
+    private static string DayClass(double? percent) => UptimeStrip.DayClass(percent);
 
     private static string StateWord(Row row) => row.State?.IsUp switch
     {

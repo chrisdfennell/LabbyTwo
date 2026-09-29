@@ -1,0 +1,21 @@
+/* Rows in {{down}}'s frame (md-down in app.css). The date is the point of the line, so it
+   is the one thing given weight; overdue turns it red. */
+
+/* Name, what it is, and when, as one line that wraps between the three rather than
+   inside any of them. A flex row, because Razor drops the spaces around the optional part. */
+.md-renewal-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: .4rem;
+}
+
+.md-renewal-when {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.is-overdue .md-renewal-when { color: var(--down); }
+
+.is-overdue strong { color: var(--down); }

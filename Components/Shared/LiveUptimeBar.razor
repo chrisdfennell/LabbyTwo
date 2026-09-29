@@ -1,0 +1,101 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject HistoryStore History
+@inject Offload Offload
+
+@* {{uptimebar: NAS}}: the status page's daily strip, small enough for a sentence — one cell
+   per day, oldest first, coloured by the same rule (UptimeStrip.DayClass) so the two never
+   disagree. The days are a history query, so they are loaded off the render thread like
+   the status page loads them, and asked again at most every few minutes: a day's colour
+   does not change between sweeps. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_days is null)
+{
+    <span class="sc-value is-waiting" title="@(_title ?? "Loading…")">…</span>
+}
+else
+{
+    <span class="md-uptimebar" role="img" aria-label="@_title" title="@_title">@foreach (var day in _days)
+        {
+            <span class="uptime-day @UptimeStrip.DayClass(day.Percent)" title="@($"{day.Date:ddd d MMM} — {(day.Percent is { } p ? $"{p:0.0}% up" : "no data")}")"></span>
+        }</span>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>What names can refer to. Null while it is being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>How often the days are asked for again — the uptime value's pace, for the same reason.</summary>
+    private static readonly TimeSpan Refresh = TimeSpan.FromMinutes(5);
+
+    private BackgroundLoad _load = default!;
+    private string? _problem;
+    private string? _title;
+    private IReadOnlyList<HistoryStore.Day>? _days;
+    private (string Id, int Days)? _asked;
+    private DateTimeOffset _askedAt;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnSweep;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        if (Scope is null)
+            return;
+
+        var name = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("connection");
+        if (name.Length == 0)
+        {
+            _problem = $"Say which connection: {{{{uptimebar: NAS}}}}. ({Code.Source})";
+            return;
+        }
+        if (ShortcodeLookup.Connection(Scope.Connections, name) is not { } connection)
+        {
+            _problem = $"No connection called “{name}”. ({Code.Source})";
+            return;
+        }
+
+        var days = UptimeStrip.Days(Code.Option("days"));
+        if (_asked != (connection.Id, days))
+            _days = null;
+        _title = $"{connection.Name} · daily uptime over the last {days} days";
+        Load(connection.Id, days, refresh: false);
+    }
+
+    private void Load(string id, int days, bool refresh)
+    {
+        _asked = (id, days);
+        _askedAt = DateTimeOffset.UtcNow;
+
+        Task<IReadOnlyList<HistoryStore.Day>> Fetch(CancellationToken ct) =>
+            Offload.Run(c => History.DailyUptimeAsync(id, days, c), ct);
+
+        if (refresh)
+            _ = _load.Refresh((id, days), Fetch, loaded => _days = loaded);
+        else
+            _ = _load.Load((id, days), Fetch, loaded => _days = loaded);
+    }
+
+    private void OnSweep()
+    {
+        if (_asked is not { } asked || DateTimeOffset.UtcNow - _askedAt < Refresh)
+            return;
+        _ = InvokeAsync(() => Load(asked.Id, asked.Days, refresh: true));
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnSweep;
+        _load.Dispose();
+    }
+}

@@ -1,0 +1,169 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject SharedSeries Series
+@inject HistoryStore History
+@inject Offload Offload
+@inject Registry Registry
+
+@* {{sparkline: NAS / cpu_percent 24h}}: a trend line the size of a word, inside a sentence.
+   The series is history, so it is loaded the way chart cards load it — through
+   SharedSeries, off the render thread, with identical requests sharing one query — and
+   loaded again when the connection records something new. The newest value is the
+   tooltip. The drawing is the dashboard's own Sparkline component, sized down. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_values is null)
+{
+    <span class="sc-value is-waiting" title="@(_title ?? "Loading…")">…</span>
+}
+else if (_values.Count < 2)
+{
+    <span class="sc-value is-waiting" title="@_title">—</span>
+}
+else
+{
+    <span class="md-spark" title="@_title"><Sparkline Values="_values" Color="currentColor" Label="@_title" Unit="@_unit" Decimals="_decimals" From="_from" To="_to" /></span>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>What names can refer to. Null while it is being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>With no metric named, the response time — the line the service tile draws.</summary>
+    public const string DefaultMetric = "latency_ms";
+
+    private BackgroundLoad _load = default!;
+    private string? _problem;
+    private string? _title;
+    private IReadOnlyList<double>? _values;
+    private string _unit = "";
+    private int _decimals;
+    private DateTimeOffset? _from, _to;
+    private string? _connectionId;
+    private (string Id, string Key, TimeSpan Window)? _asked;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        History.Recorded += OnRecorded;
+        Latest.Changed += OnLatestLoaded;
+    }
+
+    /// <summary>
+    /// Just after a restart the latest readings are still loading, so a metric the provider
+    /// does not declare (one it only ever reported) is not known yet and reads as a "?".
+    /// When they land, look again rather than leave the question mark up for good.
+    /// </summary>
+    private void OnLatestLoaded(string connectionId)
+    {
+        if (_problem is null || Scope is null)
+            return;
+        _ = InvokeAsync(() =>
+        {
+            OnParametersSet();
+            StateHasChanged();
+        });
+    }
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        if (Scope is null)
+            return;
+
+        var name = Code.Part(0) is { Length: > 0 } part ? part : Code.Option("connection");
+        if (name.Length == 0)
+        {
+            _problem = $"Say which connection: {{{{sparkline: NAS / cpu_percent 24h}}}}. ({Code.Source})";
+            return;
+        }
+        if (ShortcodeLookup.Connection(Scope.Connections, name) is not { } connection)
+        {
+            _problem = $"No connection called “{name}”. ({Code.Source})";
+            return;
+        }
+
+        var (metric, windowText) = SparkWindow.Split(Code.Part(1));
+        if (Code.Option("metric") is { Length: > 0 } namedMetric)
+            metric = namedMetric;
+        if (Code.Option("window") is { Length: > 0 } namedWindow)
+            windowText = namedWindow;
+        if (metric.Length == 0)
+            metric = DefaultMetric;
+
+        var window = SparkWindow.Default;
+        if (windowText.Length > 0)
+        {
+            if (SparkWindow.Parse(windowText, out var badWindow) is not { } parsed)
+            {
+                _problem = $"{badWindow} ({Code.Source})";
+                return;
+            }
+            window = parsed;
+        }
+
+        var live = Health.State(connection.Id)?.Metrics ?? new Dictionary<string, double>();
+        var stored = Latest.Get(connection.Id, window);
+        if (ShortcodeLookup.MetricKey(Registry, connection, metric, live.Keys.Concat(stored.Keys)) is not { } key)
+        {
+            _problem = $"{connection.Name} has not reported a metric called “{metric}”. ({Code.Source})";
+            return;
+        }
+
+        var spec = Registry.Metric(connection, key);
+        _connectionId = connection.Id;
+        _unit = spec.Unit;
+        _decimals = spec.Decimals;
+        var about = $"{connection.Name} · {spec.Label} over the last {SparkWindow.Describe(window)}";
+        _title = _values is null ? about : _title;
+        Load(connection.Id, connection.Name, spec, key, window, refresh: false);
+    }
+
+    private void Load(string id, string name, MetricSpec spec, string key, TimeSpan window, bool refresh)
+    {
+        _asked = (id, key, window);
+
+        Task<IReadOnlyList<HistoryStore.Sample>> Fetch(CancellationToken ct) => Series.SamplesAsync(id, key, window, ct);
+
+        void Apply(IReadOnlyList<HistoryStore.Sample> samples)
+        {
+            _values = SparkWindow.Thin([.. samples.Select(s => s.Value)]);
+            _from = samples.Count > 0 ? samples[0].At : null;
+            _to = samples.Count > 0 ? samples[^1].At : null;
+            var about = $"{name} · {spec.Label} over the last {SparkWindow.Describe(window)}";
+            _title = samples.Count == 0
+                ? $"{about}: nothing recorded"
+                : $"{about}: now {spec.Format(samples[^1].Value)} (low {spec.Format(samples.Min(s => s.Value))}, high {spec.Format(samples.Max(s => s.Value))})";
+        }
+
+        if (refresh)
+            _ = _load.Refresh((id, key, window), Fetch, Apply);
+        else
+            _ = _load.Load((id, key, window), Fetch, Apply);
+    }
+
+    /// <summary>A new reading on this connection: the line grows by one point, so ask again.</summary>
+    private void OnRecorded(string connectionId, IReadOnlyDictionary<string, double> metrics, DateTimeOffset at)
+    {
+        if (connectionId != _connectionId || _asked is not { } asked || Scope is null || !metrics.ContainsKey(asked.Key))
+            return;
+        _ = InvokeAsync(() =>
+        {
+            if (ShortcodeLookup.Connection(Scope.Connections, asked.Id) is { } connection)
+                Load(asked.Id, connection.Name, Registry.Metric(connection, asked.Key), asked.Key, asked.Window, refresh: true);
+        });
+    }
+
+    public void Dispose()
+    {
+        History.Recorded -= OnRecorded;
+        Latest.Changed -= OnLatestLoaded;
+        _load.Dispose();
+    }
+}

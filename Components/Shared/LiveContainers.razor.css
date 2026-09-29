@@ -1,0 +1,34 @@
+/* Rows in {{down}}'s frame (md-down in app.css). The image and uptime share one muted line
+   so a list of twenty containers still fits a card. */
+
+.md-ct-head {
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+    min-width: 0;
+}
+
+.md-ct-meta {
+    display: flex;
+    gap: .35rem;
+    min-width: 0;
+}
+
+.md-ct-meta > span:last-child { flex: none; }
+
+.md-ct-badge {
+    flex: none;
+    font-size: .75em;
+    padding: 0 .4em;
+    border-radius: 1em;
+    border: 1px solid var(--edge);
+    color: var(--muted);
+}
+
+.md-ct-badge.is-bad {
+    color: var(--down);
+    border-color: var(--down-line, var(--down));
+    background: var(--down-soft, transparent);
+}
+
+.md-ct-error { overflow-wrap: anywhere; }

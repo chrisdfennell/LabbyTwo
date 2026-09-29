@@ -18,7 +18,7 @@
    line of its own. Those components subscribe to the live state themselves, so a value
    changes in place without this document being rendered again.
 
-   {{if …}} sections are cut out of the source before any of it is rendered (see Runbook
+   {{if …}} sections and {{details: …}} folds are cut out of the source before any of it is rendered (see Runbook
    and Markdown.PreparePage), so each branch is its own rendered piece and a branch that
    does not apply is simply not drawn — it is not in the page to be read or copied. Whether
    each one applies is decided here, from memory, whenever a sweep lands or a reading
@@ -218,6 +218,14 @@
                 case LiveIf branch:
                     RenderSection(builder, branch);
                     break;
+                case LiveDetails fold:
+                    builder.OpenComponent<MarkdownDetails>(90);
+                    builder.AddComponentParameter(91, nameof(MarkdownDetails.Title), fold.Fold.Title);
+                    builder.AddComponentParameter(92, nameof(MarkdownDetails.Open), fold.Fold.Open);
+                    builder.AddComponentParameter(93, nameof(MarkdownDetails.ChildContent),
+                        (RenderFragment)(inner => RenderParts(inner, fold.Body)));
+                    builder.CloseComponent();
+                    break;
             }
             builder.CloseRegion();
         }
@@ -341,7 +349,28 @@
     private void RenderShortcode(RenderTreeBuilder builder, LiveDocument document, int index, bool blockAllowed = true)
     {
         var code = document.Shortcodes[index];
-        if (code.Kind == "button")
+        // Each kind is its own component, handed the shortcode and the names it may use;
+        // what it shows, and when it redraws, is that component's business.
+        var own = code.Kind switch
+        {
+            "sparkline" => typeof(LiveSparkline),
+            "uptimebar" => typeof(LiveUptimeBar),
+            "link" => typeof(LiveLink),
+            "today" or "countdown" or "ago" => typeof(LiveClock),
+            "alerts" when blockAllowed => typeof(LiveAlerts),
+            "containers" when blockAllowed => typeof(LiveContainers),
+            "renewals" when blockAllowed => typeof(LiveRenewals),
+            _ => null,
+        };
+        if (own is not null)
+        {
+            builder.OpenComponent(100, own);
+            builder.SetKey(index);
+            builder.AddComponentParameter(101, "Code", code);
+            builder.AddComponentParameter(102, "Scope", _scope);
+            builder.CloseComponent();
+        }
+        else if (code.Kind == "button")
         {
             // A button reads the same in a sentence or on a line of its own.
             builder.OpenComponent<RunbookButton>(70);

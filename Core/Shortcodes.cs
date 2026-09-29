@@ -53,7 +53,8 @@ public sealed record Shortcode(
 /// <item><c>{{</c>, a kind made of letters and dashes, a colon, the arguments, <c>}}</c>, all
 /// on one line. The colon is required, which keeps <c>{{ .Name }}</c> in a pasted Go
 /// template, or a Handlebars <c>{{#if}}</c>, as the text it was. The exceptions are the
-/// few words that take nothing — <c>{{down}}</c>, <c>{{else}}</c>, <c>{{end}}</c> — and
+/// few words that take nothing — <c>{{down}}</c>, <c>{{alerts}}</c>, <c>{{end}}</c> and the
+/// rest of <see cref="BareKinds"/> — and
 /// <c>{{if …}}</c>, whose condition is read by <see cref="Runbook"/>.</item>
 /// <item>The arguments are words, <c>"quoted words"</c>, slashes and <c>key=value</c>
 /// pairs. Words between slashes make up one part of the target, so a connection called
@@ -64,22 +65,29 @@ public sealed record Shortcode(
 /// </summary>
 public static class Shortcodes
 {
-    /// <summary>A few words inside a sentence.</summary>
-    public static readonly IReadOnlyList<string> InlineKinds = ["status", "metric", "forecast", "uptime", "since", "button"];
+    /// <summary>A few words inside a sentence — or a tiny picture the size of a word.</summary>
+    public static readonly IReadOnlyList<string> InlineKinds =
+    [
+        "status", "metric", "forecast", "uptime", "since", "button",
+        "sparkline", "uptimebar", "link", "today", "countdown", "ago",
+    ];
 
-    /// <summary>A whole card, on a line of its own.</summary>
-    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "down"];
+    /// <summary>A whole card or list, on a line of its own.</summary>
+    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "down", "alerts", "containers", "renewals"];
 
-    /// <summary>The edges of a section shown only while something is true.</summary>
-    public static readonly IReadOnlyList<string> StructureKinds = ["if", "else", "end"];
+    /// <summary>
+    /// The edges of a section: <c>{{if …}}</c> shown only while something is true, and
+    /// <c>{{details: …}}</c> folded away until somebody opens it. Both end at <c>{{end}}</c>.
+    /// </summary>
+    public static readonly IReadOnlyList<string> StructureKinds = ["if", "else", "end", "details"];
 
     /// <summary>
     /// Kinds that make sense with nothing after them, and so may be written without the
-    /// colon: <c>{{down}}</c>, <c>{{else}}</c>, <c>{{end}}</c>. Only these few words — the
-    /// colon still has to be there for anything else, so a Go template's <c>{{ .Name }}</c>
-    /// stays text.
+    /// colon: <c>{{down}}</c>, <c>{{alerts}}</c>, <c>{{today}}</c>, <c>{{end}}</c>. Only these
+    /// few words — the colon still has to be there for anything else, so a Go template's
+    /// <c>{{ .Name }}</c> stays text.
     /// </summary>
-    public static readonly IReadOnlyList<string> BareKinds = ["down", "else", "end"];
+    public static readonly IReadOnlyList<string> BareKinds = ["down", "else", "end", "alerts", "containers", "renewals", "today"];
 
     /// <summary>Where a shortcode sits in the text it was found in.</summary>
     public sealed record Found(int Index, int Length, Shortcode Code);

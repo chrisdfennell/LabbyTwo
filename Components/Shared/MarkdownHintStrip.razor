@@ -56,7 +56,8 @@
     <div class="d-flex align-items-center gap-2 flex-wrap">
         <span class="tile-meta">
             Live values: <code>{{status: NAS}}</code>, <code>{{metric: NAS / cpu_percent}}</code>, <code>{{widget: card title}}</code>.
-            Runbooks: <code>{{down}}</code>, <code>{{if down: NAS}}</code> … <code>{{end}}</code>, <code>{{button: NAS / restart}}</code>.
+            Runbooks: <code>{{down}}</code>, <code>{{if down: NAS}}</code> … <code>{{end}}</code>, <code>{{button: NAS / restart}}</code>, <code>{{details: Title}}</code> … <code>{{end}}</code>, <code>&gt; [!WARNING]</code>.
+            Lists: <code>{{alerts}}</code>, <code>{{containers: stopped}}</code>, <code>{{renewals}}</code>.
         </span>
         <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAsync" aria-expanded="@(_open ? "true" : "false")">
             @(_open ? "Close" : "Insert live value…")
@@ -86,6 +87,17 @@
                             <option value="down">What’s down right now</option>
                             <option value="if-down">A section shown while it’s down</option>
                             <option value="button">One of its action buttons</option>
+                            <option value="sparkline">A tiny trend line</option>
+                            <option value="uptimebar">A daily uptime strip</option>
+                            <option value="link">A link to its web page</option>
+                            <option value="ago">When it was last checked</option>
+                            <option value="alerts">Alerts firing now</option>
+                            <option value="containers">Docker containers</option>
+                            <option value="renewals">What’s due to expire</option>
+                            <option value="today">Today’s date</option>
+                            <option value="countdown">Days until a date</option>
+                            <option value="details">A fold that opens (details)</option>
+                            <option value="callout">A callout box</option>
                         </select>
                     </div>
 
@@ -93,6 +105,67 @@
                     {
                         <div class="col-sm-8 tile-meta">
                             Every monitored connection that is down, with how long and why — or “Everything’s up”.
+                        </div>
+                    }
+                    else if (_kind == "alerts")
+                    {
+                        <div class="col-sm-8 tile-meta">
+                            Every alert rule firing now, with its reading and how long — or “No alerts firing”.
+                        </div>
+                    }
+                    else if (_kind == "renewals")
+                    {
+                        <div class="col-sm-8 tile-meta">
+                            Certificates and renewals due in the next 60 days, soonest first; overdue ones in red.
+                        </div>
+                    }
+                    else if (_kind == "today")
+                    {
+                        <div class="col-sm-8 tile-meta">
+                            The date, like “@LiveTime.Today(DateTimeOffset.Now, LiveTime.DefaultFormat)”. Add <code>format=short</code>, <code>iso</code> or <code>time</code> for others.
+                        </div>
+                    }
+                    else if (_kind == "containers")
+                    {
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("state")">Which</label>
+                            <select id="@Id("state")" class="form-select form-select-sm" @bind="_state">
+                                <option value="stopped">Stopped</option>
+                                <option value="unhealthy">Unhealthy</option>
+                                <option value="running">Running</option>
+                                <option value="all">All</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-4 tile-meta">From the first Docker connection; add <code>connection="…"</code> for another.</div>
+                    }
+                    else if (_kind == "countdown")
+                    {
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("date")">Date</label>
+                            <input id="@Id("date")" type="date" class="form-control form-control-sm" @bind="_date" />
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("label")">Label (optional)</label>
+                            <input id="@Id("label")" class="form-control form-control-sm" placeholder="Renewal" @bind="_label" />
+                        </div>
+                    }
+                    else if (_kind == "details")
+                    {
+                        <div class="col-sm-8">
+                            <label class="form-label small mb-1" for="@Id("title")">Title</label>
+                            <input id="@Id("title")" class="form-control form-control-sm" placeholder="Full restart procedure" @bind="_title" />
+                        </div>
+                    }
+                    else if (_kind == "callout")
+                    {
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("callout")">Kind</label>
+                            <select id="@Id("callout")" class="form-select form-select-sm" @bind="_callout">
+                                @foreach (var (kind, look) in CalloutExtension.Kinds)
+                                {
+                                    <option value="@kind">@look.Title</option>
+                                }
+                            </select>
                         </div>
                     }
                     else if (_kind == "widget")
@@ -133,7 +206,19 @@
                                 </select>
                             </div>
                         }
-                        @if (_kind is "metric" or "gauge" or "forecast")
+                        @if (_kind == "sparkline")
+                        {
+                            <div class="col-sm-2">
+                                <label class="form-label small mb-1" for="@Id("window")">Over</label>
+                                <select id="@Id("window")" class="form-select form-select-sm" @bind="_window">
+                                    <option value="1h">1 hour</option>
+                                    <option value="24h">24 hours</option>
+                                    <option value="7d">7 days</option>
+                                    <option value="30d">30 days</option>
+                                </select>
+                            </div>
+                        }
+                        @if (_kind is "metric" or "gauge" or "forecast" or "sparkline")
                         {
                             <div class="col-sm-4">
                                 <label class="form-label small mb-1" for="@Id("metric")">Metric</label>
@@ -175,6 +260,12 @@
     private string _metric = "";
     private string _widgetTitle = "";
     private string _action = "";
+    private string _state = "stopped";
+    private string _window = "24h";
+    private DateTime? _date;
+    private string _label = "";
+    private string _title = "";
+    private string _callout = "note";
 
     // Recomputed when the text changes rather than in the markup, so a long note is not
     // re-scanned on every unrelated render of the form around it.
@@ -203,9 +294,19 @@
     /// <summary>The shortcode the form describes, or null until it describes one.</summary>
     private string? Preview => _kind switch
     {
-        "down" => Shortcodes.Write("down", []),
+        "down" or "alerts" or "renewals" or "today" => Shortcodes.Write(_kind, []),
         "widget" => _widgetTitle.Length > 0 ? Shortcodes.Write("widget", [_widgetTitle]) : null,
+        "containers" => Shortcodes.Write("containers", [_state]),
+        "countdown" => _date is { } date
+            ? Shortcodes.Write("countdown", [date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)],
+                [new("label", _label.Trim())])
+            : null,
+        "details" => Details(_title.Trim().Length > 0 ? _title.Trim() : "More"),
+        "callout" => $"> [!{_callout.ToUpperInvariant()}]\n> Write it here.",
         _ when _connectionName.Length == 0 => null,
+        "sparkline" => _metric.Trim().Length > 0
+            ? Shortcodes.Write("sparkline", [_connectionName, $"{_metric.Trim()} {_window}"])
+            : Shortcodes.Write("sparkline", [_connectionName], [new("window", _window)]),
         "metric" => _metric.Trim().Length > 0 ? Shortcodes.Write("metric", [_connectionName, _metric.Trim()]) : null,
         "forecast" => Shortcodes.Write("forecast", [_connectionName, _metric.Trim()]),
         "if-down" => IfDown(_connectionName),
@@ -228,6 +329,13 @@
         var quoted = Shortcodes.QuoteTarget(name);
         return $"{{{{if down: {quoted}}}}}\n### {name} is down\n\n1. What to check first…\n{{{{else}}}}\n{name} is fine.\n{{{{end}}}}";
     }
+
+    /// <summary>
+    /// A fold with a line inside to replace. The title goes through the shortcode writer,
+    /// so one with quotes or slashes in it reads back as written.
+    /// </summary>
+    private static string Details(string title) =>
+        Shortcodes.Write("details", [title]) + "\n1. First step…\n2. Second step…\n{{end}}";
 
     /// <summary>
     /// The lists are read when the helper is opened, not when the editor is, so a form with
@@ -261,7 +369,7 @@
         var last = text[(text.LastIndexOf('\n') + 1)..].TrimStart();
         var structural = last.Length > 0
             && (last[0] is '#' or '-' or '*' or '+' or '>' or '|' || System.Text.RegularExpressions.Regex.IsMatch(last, @"^\d+[.)]\s"));
-        var block = _kind is "widget" or "gauge" or "down" or "if-down";
+        var block = _kind is "widget" or "gauge" or "down" or "if-down" or "alerts" or "containers" or "renewals" or "details" or "callout";
         var joined = text.Length == 0 ? code : text + (block || structural ? "\n\n" : " ") + code;
         Value = joined;
         OnParametersSet();
