@@ -85,7 +85,10 @@ public sealed class MarkdownExtrasTests : IDisposable
 
     // ---------- {{details}} ----------
 
-    private static IReadOnlyList<RunbookPart> Parse(string text) => Runbook.Parse(text, []);
+    // Line endings normalised: these inputs are raw string literals, so they carry whatever
+    // endings git checked this file out with (CRLF on a Windows clone) while the expected
+    // text below is written with plain newlines. The parser keeps what it is given, as it should.
+    private static IReadOnlyList<RunbookPart> Parse(string text) => Runbook.Parse(text.ReplaceLineEndings("\n"), []);
 
     [Fact]
     public void ADetailsFoldHoldsItsLinesUntilEnd()
