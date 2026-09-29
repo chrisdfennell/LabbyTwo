@@ -40,6 +40,17 @@ public sealed class QueryPlanTests
     }
 
     [Fact]
+    public void The_restores_last_sample_lookup_seeks_rather_than_scanning()
+    {
+        // The GROUP BY it replaced read every sample in the table, and held up monitoring
+        // for sixteen minutes after each restart on a 580 MB install.
+        var plan = Plan(Storage.HistoryStore.LastSampleSql.Replace("$id", "'nas'"));
+
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN samples", StringComparison.Ordinal));
+        Assert.Contains(plan, step => step.StartsWith("SEARCH samples", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Min_and_max_together_in_one_select_would_scan_which_is_why_it_is_split()
     {
         // The trap itself, pinned down: if SQLite ever optimises this, the comment on

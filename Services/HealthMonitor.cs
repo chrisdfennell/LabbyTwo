@@ -92,9 +92,18 @@ public sealed partial class HealthMonitor(
         {
             // Bounded, because nothing is watched until it returns. Restoring is a
             // courtesy — it saves the dashboard saying "checking" after a restart — and a
-            // courtesy must never be the reason monitoring does not start. It reads the
-            // whole samples table once, which on a big database is not instant.
-            await RestoreAsync(stoppingToken).WaitAsync(RestoreDeadline, stoppingToken);
+            // courtesy must never be the reason monitoring does not start.
+            //
+            // On the thread pool, not called directly. Microsoft.Data.Sqlite's async calls
+            // run synchronously, so RestoreAsync(...).WaitAsync(deadline) ran the whole
+            // restore on this thread before WaitAsync was even reached: the deadline was
+            // attached to a task that had already finished. On a 580 MB database on NAS
+            // disks that was sixteen minutes of every connection saying "checking" after
+            // each restart. Task.Run makes it a task that is still running when the clock
+            // starts, so the deadline can actually end the wait. If it does, the restore
+            // carries on in the background and fills in only what the sweeps have not.
+            await Task.Run(() => RestoreAsync(stoppingToken), stoppingToken)
+                .WaitAsync(RestoreDeadline, stoppingToken);
             NoteRestored(RestoreOutcome.Completed, null);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -160,7 +169,7 @@ public sealed partial class HealthMonitor(
             return;
 
         var status = await history.LatestStatusAsync(ct);
-        var sampled = await history.LastSampleAtAsync(ct);
+        var sampled = await history.LastSampleAtAsync([.. connections.Select(c => c.Id)], ct);
         var threshold = Math.Max(1, options.Value.FailuresBeforeDown);
         var restored = 0;
 
@@ -176,7 +185,10 @@ public sealed partial class HealthMonitor(
             // and being too early only ever costs one extra probe.
             var lastProbe = sampled.TryGetValue(connection.Id, out var at) && at > last.At ? at : last.At;
 
-            _states[connection.Id] = new ProbeState(
+            // TryAdd, not assignment: when the deadline let sweeps start first, a probe has
+            // already said something newer than the last recorded event, and a restore
+            // finishing late must not put the old answer back over it.
+            var added = _states.TryAdd(connection.Id, new ProbeState(
                 connection.Id,
                 last.IsUp,
                 last.Message,
@@ -194,8 +206,9 @@ public sealed partial class HealthMonitor(
                 // wobble and delay the recovery notice by a sweep.
                 last.IsUp ? 0 : threshold,
                 new Dictionary<string, double>(),
-                new Dictionary<string, string>());
-            restored++;
+                new Dictionary<string, string>()));
+            if (added)
+                restored++;
         }
 
         if (restored == 0)

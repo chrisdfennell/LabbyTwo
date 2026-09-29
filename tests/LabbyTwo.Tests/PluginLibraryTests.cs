@@ -27,6 +27,11 @@ public sealed class PluginLibraryTests : IDisposable
 
         Assert.Equal(1, catalog.DllsFound);
         Assert.Empty(catalog.Failures);
+
+        // Nor listed as a plugin, where its own version (xunit's, here; 2026.0.0.1 for
+        // SSH.NET) was compared with LabbyTwo's and reported as built for another version.
+        Assert.DoesNotContain(catalog.Modules, module => module.IsPlugin);
+        Assert.DoesNotContain(catalog.Modules, catalog.BuiltForAnother);
     }
 
     public void Dispose()

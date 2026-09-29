@@ -138,6 +138,26 @@ public sealed class RestartTests : IDisposable
     }
 
     [Fact]
+    public async Task ARestoreThatFinishesLateDoesNotPutAnOldAnswerBackOverANewOne()
+    {
+        // When the restore overruns its deadline the sweeps start without it, and the
+        // restore carries on in the background. By the time it lands a probe may already
+        // have answered; a restored state is only the last recorded status, with no
+        // readings, and it must not replace the live one.
+        var connection = await WatchedAsync();
+        await Get<HealthMonitor>().RefreshAsync(connection);
+
+        var restarted = Restarted();
+        await restarted.RefreshAsync(connection);              // a sweep beats the restore
+        Assert.NotEmpty(restarted.State(connection.Id)!.Metrics);
+
+        await restarted.RestoreAsync();                        // the late restore lands
+
+        // Still the probe's answer, readings and all — not the restored stand-in.
+        Assert.NotEmpty(restarted.State(connection.Id)!.Metrics);
+    }
+
+    [Fact]
     public async Task SomethingThatFailedWhileTheAppWasOffIsReportedAsAChange()
     {
         var connection = await WatchedAsync();

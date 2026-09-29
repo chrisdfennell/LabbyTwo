@@ -460,6 +460,7 @@ while IFS='|' read -r key took detail; do
     latest)       name="Query: every connection's latest readings"; budget=100 ;;
     chart30)      name="Query: a 30-day chart for every connection"; budget=10000 ;;
     uptime30)     name="Query: 30-day uptime for every connection"; budget=1000 ;;
+    restore)      name="Query: what restore reads at startup"; budget=1000 ;;
     rollup)       name="Rollup: a day behind, folded"; budget=120000 ;;
     rollup-batch) name="Rollup: longest hold on the write lock"; budget=2000 ;;
     *)            name="$key"; budget=1000 ;;

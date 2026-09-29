@@ -147,17 +147,41 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// which is past any sensible MinimumInterval, so it is due either way, and leaving it
     /// out of the answer says exactly that.
     /// </summary>
-    public async Task<IReadOnlyDictionary<string, DateTimeOffset>> LastSampleAtAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyDictionary<string, DateTimeOffset>> LastSampleAtAsync(
+        IReadOnlyCollection<string> connectionIds, CancellationToken ct = default)
     {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT connection_id, MAX(ts) FROM samples GROUP BY connection_id";
+        cmd.CommandText = LastSampleSql;
+        var id = cmd.Parameters.Add("$id", SqliteType.Text);
+
         var latest = new Dictionary<string, DateTimeOffset>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-            latest[reader.GetString(0)] = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(1)).ToLocalTime();
+        foreach (var connectionId in connectionIds)
+        {
+            id.Value = connectionId;
+            if (await cmd.ExecuteScalarAsync(ct) is long ts)
+                latest[connectionId] = DateTimeOffset.FromUnixTimeSeconds(ts).ToLocalTime();
+        }
         return latest;
     }
+
+    /// <summary>
+    /// One connection's newest sample time, hopping through the index a metric at a time.
+    /// It was "SELECT connection_id, MAX(ts) FROM samples GROUP BY connection_id" — every
+    /// row in the table, which on a 580 MB database on NAS disks took sixteen minutes and
+    /// held up monitoring after every restart. The index is (connection_id, metric, ts), so
+    /// the newest time for one metric is a single seek to the end of its range, and the
+    /// metric names are found the same way LatestAsync finds them. A test checks the plan.
+    /// </summary>
+    public const string LastSampleSql = """
+        WITH RECURSIVE metrics(metric) AS (
+            SELECT MIN(metric) FROM samples WHERE connection_id = $id
+            UNION ALL
+            SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $id AND metric > metrics.metric)
+            FROM metrics WHERE metrics.metric IS NOT NULL)
+        SELECT MAX((SELECT MAX(ts) FROM samples WHERE connection_id = $id AND metric = metrics.metric))
+        FROM metrics WHERE metric IS NOT NULL
+        """;
 
     /// <summary>
     /// A metric's history over a window, oldest first — what every chart draws.
