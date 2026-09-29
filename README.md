@@ -433,7 +433,10 @@ tab like this one, cards and bindings and all. Eight kinds ship:
   project — each confirmed; logs with follow, pause, search and download; and an inspect
   panel whose environment values stay hidden until you reveal one. It points out a
   container still running an older image than its tag now names locally (pulled, not
-  recreated), without asking any registry. **Whoever can open this page controls every
+  recreated), without asking any registry, and how old each image is. **Check for updates**
+  asks each image's registry whether there is something newer, and offers **⬆ Update** on
+  the ones that are behind — see [Every other container](#every-other-container).
+  **Whoever can open this page controls every
   container on that host**, so keep the login on — or switch the tab to read-only.
   LabbyTwo's own container, and any you list as protected (your tunnel, say), need their
   name typed before being stopped, paused or removed, and project-wide buttons skip them.
@@ -629,6 +632,7 @@ else counts):
 | `{{down}}` | what is down right now — dot, name, "down for 12m" and what the probe said — or "Everything's up" |
 | `{{alerts}}` | the alert rules firing now — threshold, unusual-for-the-time and forecast rules — with the connection, the reading, the limit and how long; or "No alerts firing" |
 | `{{containers: stopped}}` | a Docker host's containers: `stopped`, `unhealthy`, `running`, `paused`, `restarting` or `all` (the default). Dot, name, image, uptime or exit code, health, Compose project. Read-only |
+| `{{updates}}` | the containers whose registry has a newer image, as the last **Check for updates** found them: name, image, when the newer one was published and how old the running one is; or "Nothing behind". Never asks a registry itself |
 | `{{renewals}}` | what expires next, soonest first: certificates, Tailscale keys, the Renewals list's next item and its overdue count; expired and overdue first, in red |
 
 Their options:
@@ -638,8 +642,8 @@ Their options:
 | `only="NAS, Plex"` | `down`, `alerts`, `renewals` | only those connections |
 | `include="checking"` | `down` | also lists what has not been checked yet |
 | `silenced="hide"` | `down` | leaves out silenced connections, which are otherwise listed and marked "silenced until 14:05" |
-| `connection="Docker"` | `containers` | which Docker connection; the first enabled one if left out |
-| `limit=10` | `containers` (default 25), `renewals` (default 5) | at most that many lines |
+| `connection="Docker"` | `containers`, `updates` | which Docker connection; the first enabled one if left out |
+| `limit=10` | `containers`, `updates` (default 25), `renewals` (default 5) | at most that many lines |
 | `days=30` | `renewals` | how far ahead to look; 60 days if left out. Overdue is always shown |
 
 `{{containers}}` uses the Containers tab's own calls, so a socket proxy that refuses the
@@ -647,7 +651,9 @@ list shows a **?** naming the flag to set (`CONTAINERS=1`). However many pages s
 each Docker host is asked at most once every ten seconds. `{{renewals}}` reads the numbers
 certificates and the Renewals plugin already report (`cert_days_left`, `days_until_next`,
 `overdue` and friends), not the plugin itself, so it works the same with the plugin
-installed or not.
+installed or not. `{{updates}}` only shows what the last check found — pressed on the
+Containers tab or in Settings, or run on the schedule if you chose one — so a runbook open
+on a wall all day never becomes a stream of calls to Docker Hub.
 
 **Sections and folds** — each marker on a line of its own:
 
@@ -1320,6 +1326,9 @@ What each feature asks Docker for, and what the proxy has to allow:
 | Containers tab: pause / unpause | `POST /containers/{id}/pause`, `/unpause` | linuxserver: `ALLOW_PAUSE=1`, `ALLOW_UNPAUSE=1`; tecnativa: `CONTAINERS=1`, `POST=1` |
 | Containers tab: remove | `DELETE /containers/{id}` | `CONTAINERS=1`, `POST=1` — root-equivalent, so usually leave it refused |
 | Containers tab: the newer-image hint | `GET /images/json` | `IMAGES=1` |
+| Containers tab: image ages, **Check for updates** | `GET /images/{id}/json` (then the registries, not Docker) | `IMAGES=1` |
+| Containers tab: **⬆ Update**, through a Watchtower's HTTP API | none — LabbyTwo calls Watchtower | none |
+| Containers tab: **⬆ Update**, one-shot Watchtower | as **Update now** above | `CONTAINERS=1`, `IMAGES=1`, `POST=1` — the same power as the raw socket |
 | Terminal plugin (`docker exec`) | `POST /containers/{id}/exec`, `POST /exec/{id}/start` | `CONTAINERS=1`, `EXEC=1`, `POST=1` — root-equivalent too |
 
 When the proxy refuses something, LabbyTwo says which flag to set rather than "HTTP 403".
@@ -1585,6 +1594,63 @@ Settings warns you when you have not. A socket proxy narrows it (see
 [Through a socket proxy instead](#through-a-socket-proxy-instead)), the Watchtower API takes
 creating containers off LabbyTwo's hands entirely, and Watchtower on a timer gets you the
 same updates without the dashboard holding anything at all.
+
+### Every other container
+
+The **Containers** tab can do for every container what the button above does for LabbyTwo:
+say which ones have a newer image published, and update them.
+
+**Check for updates** asks each image's registry which image its tag points at now, and
+compares that with what the container is running. The comparison is by digest: the running
+image's `RepoDigests` — what Docker wrote down when it pulled it — against the tag's current
+digest. For a multi-arch image both are the index (manifest list) digest, so an image that
+has not changed is never reported as behind just because the registry also holds a
+per-platform manifest. Docker Hub is asked through its tag API, which also says when the tag
+was last pushed; ghcr.io, lscr.io, quay.io and any other registry through the standard v2
+API, with the anonymous pull token every public registry hands out. Each row then says:
+
+- **⬆ update available** — the tag points somewhere newer. The tooltip says when it was
+  published and when the running image was built.
+- **built here** — the image has no registry digest, because it was built on this host. There
+  is nothing published to compare it with, and the page says so rather than guessing.
+- **pinned** — created from `image@sha256:…`, which never changes.
+- **not checked** — the registry would not say: a private image (only anonymous access is
+  used), a deleted tag, or a registry that could not be reached. The list above the
+  containers says which and why.
+- **excluded from updates** — labelled `com.centurylinklabs.watchtower.enable=false`.
+  It is still checked, but never offered for updating here, and "Update all" skips it.
+
+Every row also shows how old its running image is ("image 4 months old"), which Docker
+knows without asking anyone.
+
+**Nothing is asked of any registry until you press the button.** Opening the tab reads
+Docker and nothing else. The answer is kept in memory and shown on the tab, in
+**Settings → Updates** and by `{{updates}}` until the next check; a restart forgets it. To
+have it checked for you, choose **Check on their own** in Settings → Updates — every 6 hours,
+daily or weekly. It is off unless you choose it. Registries are asked politely either way:
+one question per distinct image (twenty containers on one tag are one question), at most
+two at a time per registry, each answer reused for ten minutes, and a registry that answers
+429 is left alone until it says to come back. HEAD requests to Docker Hub do not count
+against its pull limit.
+
+**⬆ Update** on a row, or **Update all that are behind**, goes the same way as **Update now**:
+
+- with `Labby__Watchtower__Url` set, it asks your Watchtower for just those images
+  (`POST /v1/update?image=lscr.io/linuxserver/sonarr,…`). Watchtower still only touches
+  containers it is watching — if you started it with container names, the others are left
+  alone, and the page says to check again to see which it did;
+- otherwise it starts a one-shot `watchtower --run-once --cleanup sonarr radarr …` through
+  the Docker API, told exactly those names, with the same DNS servers, network and
+  `DOCKER_API_VERSION` the self-update helper gets. It works in the background; check
+  again in a minute to see it done.
+
+Each is confirmed. Updating LabbyTwo's own container warns you the page will go away and
+come back, like a restart; a container on the tab's protected list needs its name typed.
+**Update all** leaves out LabbyTwo, protected containers and excluded ones — those are
+listed in the confirmation as left alone, to be done one at a time. Connections that reach
+an updated container by name are silenced while it is recreated, as for a restart.
+
+Turn the button off with **Offer to check registries for updates** in the tab's settings.
 
 ## When you delete the wrong thing
 

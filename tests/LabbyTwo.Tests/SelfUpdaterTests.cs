@@ -402,7 +402,7 @@ public sealed class SelfUpdaterTests : IDisposable
 
         public int Port { get; }
         public HttpStatusCode Answer { get; set; } = HttpStatusCode.OK;
-        public List<(string Method, string Path, string? Authorization)> Requests { get; } = [];
+        public List<(string Method, string Path, string? Authorization, string? Images)> Requests { get; } = [];
 
         public FakeWatchtower()
         {
@@ -427,7 +427,7 @@ public sealed class SelfUpdaterTests : IDisposable
 
                 lock (Requests)
                     Requests.Add((context.Request.HttpMethod, context.Request.Url?.AbsolutePath ?? "",
-                        context.Request.Headers["Authorization"]));
+                        context.Request.Headers["Authorization"], context.Request.QueryString["image"]));
 
                 context.Response.StatusCode = (int)Answer;
                 context.Response.ContentLength64 = 0;
@@ -495,6 +495,66 @@ public sealed class SelfUpdaterTests : IDisposable
 
         Assert.Contains("--http-api-update", failure.Message);
     }
+
+    [Fact]
+    public async Task Updating_other_containers_asks_watchtower_for_just_their_images()
+    {
+        using var watchtower = new FakeWatchtower();
+        _options.Watchtower.Url = $"http://127.0.0.1:{watchtower.Port}";
+        await ConnectAsync();
+
+        var answer = await Get<SelfUpdater>().UpdateContainersAsync($"tcp://127.0.0.1:{_docker.Port}",
+        [
+            new SelfUpdater.Target("sonarr", "lscr.io/linuxserver/sonarr"),
+            new SelfUpdater.Target("radarr", "lscr.io/linuxserver/radarr"),
+        ]);
+
+        // Without ?image= Watchtower updates everything it watches — the button said two.
+        var request = Assert.Single(watchtower.Requests);
+        Assert.Equal("/v1/update", request.Path);
+        Assert.Equal("lscr.io/linuxserver/sonarr,lscr.io/linuxserver/radarr", request.Images);
+        Assert.Contains("has finished", answer);
+        Assert.DoesNotContain(_docker.Paths, p => p.StartsWith("POST "));
+    }
+
+    [Fact]
+    public async Task Updating_other_containers_starts_a_one_shot_watchtower_naming_each_of_them()
+    {
+        _docker.Dns = ["192.168.1.1"];
+        await ConnectAsync();
+
+        var answer = await Get<SelfUpdater>().UpdateContainersAsync($"tcp://127.0.0.1:{_docker.Port}",
+        [
+            new SelfUpdater.Target("sonarr", "lscr.io/linuxserver/sonarr"),
+            new SelfUpdater.Target("radarr", "lscr.io/linuxserver/radarr"),
+        ]);
+
+        Assert.Null(answer);
+        using var request = JsonDocument.Parse(_docker.CreateBody!);
+        var command = request.RootElement.GetProperty("Cmd").EnumerateArray().Select(a => a.GetString()!).ToArray();
+        Assert.Equal(["--run-once", "--cleanup", "sonarr", "radarr"], command);
+
+        // What made LabbyTwo's own helper work — DNS, the network a proxy is on, the API
+        // version — carries over to this one.
+        var host = request.RootElement.GetProperty("HostConfig");
+        Assert.Equal("labbytwo_default", host.GetProperty("NetworkMode").GetString());
+        Assert.Equal("192.168.1.1", host.GetProperty("Dns")[0].GetString());
+        var env = request.RootElement.GetProperty("Env").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.Contains($"DOCKER_API_VERSION={DockerSocket.ApiVersionNumber}", env);
+        Assert.Contains("POST /v1.41/containers/update123/start", _docker.Paths);
+    }
+
+    [Fact]
+    public void A_one_shot_watchtower_is_never_created_without_names()
+    {
+        // No names means every container on the host. That is never what a button meant.
+        Assert.Throws<ArgumentException>(() => SelfUpdater.OneShotRequest("/var/run/docker.sock", [], null, null));
+    }
+
+    [Fact]
+    public void The_watchtower_url_names_the_images_comma_separated() =>
+        Assert.Equal("http://watchtower:8080/v1/update?image=postgres,ghcr.io%2Fx%2Fapp",
+            SelfUpdater.WatchtowerUpdateUrl("watchtower:8080", ["postgres", "ghcr.io/x/app"]));
 
     [Theory]
     [InlineData("http://watchtower:8080", "http://watchtower:8080/v1/update")]

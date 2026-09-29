@@ -32,6 +32,8 @@ public sealed class MarkdownExtrasTests : IDisposable
     [InlineData("{{alerts: only=\"NAS, Plex\"}}", "alerts", true)]
     [InlineData("{{containers: stopped}}", "containers", true)]
     [InlineData("{{containers}}", "containers", true)]
+    [InlineData("{{updates}}", "updates", true)]
+    [InlineData("{{updates: connection=\"NAS Docker\" limit=5}}", "updates", true)]
     [InlineData("{{renewals}}", "renewals", true)]
     [InlineData("{{renewals: days=30 limit=3}}", "renewals", true)]
     [InlineData("{{sparkline: QNAP NAS / cpu_percent 24h}}", "sparkline", false)]

@@ -359,6 +359,7 @@
             "today" or "countdown" or "ago" => typeof(LiveClock),
             "alerts" when blockAllowed => typeof(LiveAlerts),
             "containers" when blockAllowed => typeof(LiveContainers),
+            "updates" when blockAllowed => typeof(LiveUpdates),
             "renewals" when blockAllowed => typeof(LiveRenewals),
             _ => null,
         };

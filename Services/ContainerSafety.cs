@@ -135,6 +135,68 @@ public static class ContainerSafety
         return (act, skip);
     }
 
+    // ---- updates ------------------------------------------------------------------
+
+    /// <summary>
+    /// Whether updating needs the name typed. An update is a stop, a remove and a create
+    /// from an image nobody here has run before — more than a restart, since the new version
+    /// may not come up the way the old one did — so a protected container gets the typed
+    /// confirmation. LabbyTwo's own gets the restart's plain confirmation and its warning:
+    /// it comes back by itself, and the page says it is about to go.
+    /// </summary>
+    public static bool NeedsTypedNameToUpdate(bool self, bool listed) => listed && !self;
+
+    /// <summary>What the update confirmation says.</summary>
+    public static string UpdateWarning(ContainerRow container, bool self, bool listed, SelfUpdater.UpdateMode mode)
+    {
+        var name = container.Name;
+        var how = mode == SelfUpdater.UpdateMode.WatchtowerApi
+            ? "Your Watchtower is asked to update its image"
+            : "A one-shot Watchtower is started to pull the new image and recreate it";
+
+        if (self)
+        {
+            return $"“{name}” is the container LabbyTwo itself runs in. {how}; this page will go away while it is " +
+                   "replaced, and reconnect when the new one is up.";
+        }
+
+        var protectedNote = listed
+            ? " It is on this tab's protected list — if it carries your tunnel or reverse proxy and the new version " +
+              "does not start, you may lose the way back in."
+            : "";
+
+        return $"{how}. “{name}” is stopped, removed and created again from the newer image with the same settings, " +
+               "volumes and networks, and is down while that happens. A new version can change how it behaves — worth " +
+               "reading its release notes first if it matters." + protectedNote;
+    }
+
+    /// <summary>
+    /// What "Update all that are behind" would touch, and what it leaves and why. The same
+    /// rule as a project-wide restart: LabbyTwo's own container and protected ones are done
+    /// one at a time, never as a side effect — and a container labelled for Watchtower to
+    /// leave alone is left alone here too.
+    /// </summary>
+    public static (IReadOnlyList<ContainerUpdate> Act, IReadOnlyList<(ContainerUpdate Container, string Why)> Skip) PlanUpdates(
+        IEnumerable<(ContainerRow Row, ContainerUpdate Update)> behind, string hostname, IReadOnlyList<string> protectedList)
+    {
+        var act = new List<ContainerUpdate>();
+        var skip = new List<(ContainerUpdate, string)>();
+        foreach (var (row, update) in behind)
+        {
+            if (!update.IsBehind)
+                continue;
+            if (update.Excluded)
+                skip.Add((update, "labelled com.centurylinklabs.watchtower.enable=false"));
+            else if (IsSelf(row, hostname))
+                skip.Add((update, "LabbyTwo itself — do it on its own"));
+            else if (IsListed(row, protectedList))
+                skip.Add((update, "protected — do it on its own"));
+            else
+                act.Add(update);
+        }
+        return (act, skip);
+    }
+
     private static string Describe(ContainerRow container) =>
         container.IsStopped ? "stopped" : container.State;
 

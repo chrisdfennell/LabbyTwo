@@ -72,6 +72,14 @@ public sealed class SelfUpdater(
 
     private LabbyOptions.WatchtowerSettings Watchtower => options.Value.Watchtower;
 
+    /// <summary>
+    /// How an update of any container would be done: through the Watchtower API when one
+    /// is configured, a one-shot Watchtower otherwise. Whether the second can actually
+    /// work — Docker reachable, a proxy that lets containers be created — is found out by
+    /// trying, and the refusal names the flag.
+    /// </summary>
+    public UpdateMode ContainerMode => Watchtower.Enabled ? UpdateMode.WatchtowerApi : UpdateMode.DockerApi;
+
     private const string NoDocker =
         "LabbyTwo cannot reach Docker: there is no Docker connection, DOCKER_HOST is not set, and the socket is " +
         "not mounted at /var/run/docker.sock.";
@@ -367,9 +375,69 @@ public sealed class SelfUpdater(
     public async Task<string?> StartUpdateAsync(CancellationToken ct = default)
     {
         if (Watchtower.Enabled)
-            return await TriggerWatchtowerAsync(ct);
+        {
+            // An answer means Watchtower finished while this process was still alive to hear
+            // it, so it replaced nothing here.
+            return await TriggerWatchtowerAsync(null, ct)
+                ? "Watchtower checked and LabbyTwo is still running, so it found nothing newer for this " +
+                  "container — or it is not watching it. Its log says which."
+                : null;
+        }
 
         await StartOneShotAsync(ct);
+        return null;
+    }
+
+    /// <param name="Name">The container's name, which the one-shot Watchtower is given to watch.</param>
+    /// <param name="Image">
+    /// The image name Watchtower's API compares against — see
+    /// <see cref="ContainerUpdate.WatchtowerImage"/> for why it is cut the way it is.
+    /// </param>
+    public sealed record Target(string Name, string Image);
+
+    /// <summary>
+    /// Updates the named containers, the same two ways "Update now" updates LabbyTwo:
+    /// asking a running Watchtower for just those images, or starting a one-shot Watchtower
+    /// told just those names. Never a Watchtower with no names — that watches, and updates,
+    /// everything on the host.
+    ///
+    /// The one-shot helper is given what this container would give it (its DNS servers and
+    /// its network, for reaching a proxy by name) when LabbyTwo can place itself on that
+    /// endpoint; on a Docker host LabbyTwo does not run on, it starts without them.
+    /// </summary>
+    /// <param name="endpoint">The Docker connection the containers are on, for the one-shot route.</param>
+    /// <returns>
+    /// Null when a one-shot Watchtower has been started and is working in the background;
+    /// otherwise what Watchtower said, once it finished.
+    /// </returns>
+    public async Task<string?> UpdateContainersAsync(string endpoint, IReadOnlyList<Target> targets, CancellationToken ct = default)
+    {
+        if (targets.Count == 0)
+            throw new ArgumentException("Nothing to update.", nameof(targets));
+
+        if (Watchtower.Enabled)
+        {
+            var images = targets.Select(t => t.Image).Distinct(StringComparer.Ordinal).ToList();
+            return await TriggerWatchtowerAsync(images, ct)
+                ? "Watchtower has finished. It only replaces containers it is watching, and not ones labelled to be " +
+                  "left alone — check again to see which it did, or read its log."
+                : "Watchtower is still pulling. It carries on without anyone waiting; check again in a few minutes.";
+        }
+
+        log.LogWarning("Container update requested — starting a one-shot {Image} for {Containers}",
+            WatchtowerImage, string.Join(", ", targets.Select(t => t.Name)));
+
+        Self? self = null;
+        try
+        {
+            self = await IdentifyAsync(endpoint, ct);
+        }
+        catch (InvalidOperationException ex) when (ex is not DockerProxyDeniedException)
+        {
+        }
+
+        await StartHelperAsync(endpoint, [.. targets.Select(t => t.Name).Distinct(StringComparer.Ordinal)],
+            self?.Dns, self?.Network, ct);
         return null;
     }
 
@@ -383,14 +451,33 @@ public sealed class SelfUpdater(
     }
 
     /// <summary>
+    /// The same, narrowed to some images: <c>/v1/update?image=a,b</c>, which Watchtower reads
+    /// as a comma-separated list (it splits every <c>image</c> value on commas).
+    /// </summary>
+    public static string WatchtowerUpdateUrl(string configured, IReadOnlyList<string>? images)
+    {
+        var url = WatchtowerUpdateUrl(configured);
+        return images is { Count: > 0 }
+            ? url + "?image=" + string.Join(',', images.Select(Uri.EscapeDataString))
+            : url;
+    }
+
+    /// <summary>
     /// Asks a running Watchtower to check now. Watchtower holds the socket; LabbyTwo holds a
     /// token that can do nothing but this. The worst a stolen token does is update whatever
     /// that Watchtower already watches, a little earlier than it would have.
     /// </summary>
-    private async Task<string?> TriggerWatchtowerAsync(CancellationToken ct)
+    /// <param name="images">
+    /// Only these images, through Watchtower's <c>?image=</c>; null for everything it
+    /// watches. Watchtower still applies its own filter on top — the containers it was
+    /// started naming, the enable label — so this narrows what it does and never widens it.
+    /// </param>
+    /// <returns>True when Watchtower answered; false when it was still working after minutes.</returns>
+    private async Task<bool> TriggerWatchtowerAsync(IReadOnlyList<string>? images, CancellationToken ct)
     {
-        var url = WatchtowerUpdateUrl(Watchtower.Url);
-        log.LogWarning("Self-update requested — asking Watchtower at {Url} to check now", url);
+        var url = WatchtowerUpdateUrl(Watchtower.Url, images);
+        log.LogWarning("Update requested — asking Watchtower at {Url} to check {What} now",
+            WatchtowerUpdateUrl(Watchtower.Url), images is null ? "what it watches" : string.Join(", ", images));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         if (Watchtower.Token is { Length: > 0 } token)
@@ -410,7 +497,7 @@ public sealed class SelfUpdater(
         {
             // Still working after minutes is what a large pull looks like, and Watchtower
             // carries on whether or not anyone is still waiting for its answer.
-            return null;
+            return false;
         }
         catch (HttpRequestException ex)
         {
@@ -437,10 +524,7 @@ public sealed class SelfUpdater(
             }
         }
 
-        // An answer means Watchtower finished while this process was still alive to hear it,
-        // so it replaced nothing here.
-        return "Watchtower checked and LabbyTwo is still running, so it found nothing newer for this " +
-               "container — or it is not watching it. Its log says which.";
+        return true;
     }
 
     private static readonly JsonSerializerOptions CreateJson = new()
@@ -462,13 +546,20 @@ public sealed class SelfUpdater(
         log.LogWarning("Self-update requested — starting a one-shot {Image} to replace {Container}",
             WatchtowerImage, self.Container);
 
+        await StartHelperAsync(endpoint, [self.Container], self.Dns, self.Network, ct);
+    }
+
+    /// <summary>Pulls Watchtower, creates the one-shot helper for these names, and starts it.</summary>
+    private static async Task StartHelperAsync(
+        string endpoint, IReadOnlyList<string> containers, string[]? dns, string? network, CancellationToken ct)
+    {
         // Pull first. On a host that has never run Watchtower, creating the container would
         // otherwise fail with "no such image" and leave nothing to show for the click.
         await DockerSocket.PostAsync(endpoint, TimeSpan.FromMinutes(3),
             $"/images/create?fromImage={Uri.EscapeDataString(WatchtowerImage)}&tag=latest", null, ct);
 
         using var created = JsonDocument.Parse(await DockerSocket.PostAsync(
-            endpoint, Timeout, "/containers/create", OneShotRequest(endpoint, self), ct));
+            endpoint, Timeout, "/containers/create", OneShotRequest(endpoint, containers, dns, network), ct));
 
         var id = created.RootElement.TryGetProperty("Id", out var identifier) ? identifier.GetString() : null;
         if (id is null)
@@ -485,8 +576,21 @@ public sealed class SelfUpdater(
     /// helper is told where Docker is with DOCKER_HOST instead, and joins this container's
     /// network so the name in that address resolves for it too.
     /// </summary>
-    public static string OneShotRequest(string endpoint, Self self)
+    public static string OneShotRequest(string endpoint, Self self) =>
+        OneShotRequest(endpoint, [self.Container], self.Dns, self.Network);
+
+    /// <summary>
+    /// The one-shot request for any containers: the names go on the command line, which is
+    /// what keeps Watchtower from treating "no names" as "everything on the host".
+    /// </summary>
+    /// <param name="dns">DNS servers for the helper — LabbyTwo's own, where it has some.</param>
+    /// <param name="network">A network to join when Docker is reached over TCP, so a proxy's name resolves.</param>
+    public static string OneShotRequest(string endpoint, IReadOnlyList<string> containers, string[]? dns, string? network)
     {
+        if (containers.Count == 0 || containers.Any(string.IsNullOrWhiteSpace))
+            throw new ArgumentException("A one-shot Watchtower needs container names; without any it updates everything.",
+                nameof(containers));
+
         var target = DockerEndpoint.Parse(endpoint);
 
         return JsonSerializer.Serialize(new
@@ -494,7 +598,7 @@ public sealed class SelfUpdater(
             Image = $"{WatchtowerImage}:latest",
             // --run-once so it does the job and exits, rather than becoming a second
             // scheduler competing with whatever the user already runs.
-            Cmd = new[] { "--run-once", "--cleanup", self.Container },
+            Cmd = new[] { "--run-once", "--cleanup" }.Concat(containers).ToArray(),
             // Watchtower's Docker client asks for API 1.25 unless told otherwise, and Docker 29
             // refuses anything that old — the helper would start, log one error and exit,
             // leaving nothing updated and nothing on the page to say why.
@@ -506,13 +610,13 @@ public sealed class SelfUpdater(
                 Binds = target.IsTcp
                     ? null
                     : new[] { $"{(target.Kind == DockerEndpointKind.Unix ? target.Address : endpoint)}:/var/run/docker.sock" },
-                NetworkMode = target.IsTcp ? self.Network : null,
+                NetworkMode = target.IsTcp ? network : null,
                 AutoRemove = true,
                 // Watchtower asks the registry for the new digest from inside its own
                 // container. On a host whose containers get no working resolver by default,
                 // "dns:" in LabbyTwo's compose file is what made LabbyTwo work — and a
                 // helper started without it fails on the very lookup it exists to make.
-                Dns = self.Dns,
+                Dns = dns,
             },
         }, CreateJson);
     }

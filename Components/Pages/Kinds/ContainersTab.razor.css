@@ -13,6 +13,17 @@
 .ct-toolbar input[type="search"] { flex: 1 1 14rem; min-width: 10rem; }
 .ct-toolbar select { flex: 0 0 auto; width: auto; }
 
+/* Check for updates, what the last check found, and the one button that acts on it. */
+.ct-updates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+    margin-bottom: .5rem;
+}
+
+.ct-updates > .tile-meta { flex: 1 1 12rem; min-width: 0; }
+
 .ct-result {
     font-size: .85rem;
     margin-bottom: .5rem;

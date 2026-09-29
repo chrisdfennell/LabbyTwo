@@ -1,0 +1,29 @@
+/* Rows in {{down}}'s frame (md-down in app.css), laid out like {{containers}}: the image and
+   its ages share one muted line so a long list still fits a card. */
+
+.md-up-head {
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+    min-width: 0;
+}
+
+.md-up-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem;
+    min-width: 0;
+}
+
+.md-up-meta > span:not(:first-child) { flex: none; }
+
+.md-up-badge {
+    flex: none;
+    font-size: .75em;
+    padding: 0 .4em;
+    border-radius: 1em;
+    border: 1px solid var(--edge);
+    color: var(--muted);
+}
+
+.md-up-error { overflow-wrap: anywhere; }
