@@ -14,7 +14,8 @@ namespace LabbyTwo.Services;
 /// connections and rules need not know templates exist; the app always supplies it.
 /// </summary>
 public sealed class ConfigTransfer(
-    ConfigStore config, AlertRuleStore rules, Registry registry, TemplateStore? templates = null)
+    ConfigStore config, AlertRuleStore rules, Registry registry, TemplateStore? templates = null,
+    MuteWindowStore? mutes = null)
 {
     // 2 added alert rules. Version 1 files still import — they simply carry none.
     public const int CurrentVersion = 2;
@@ -58,7 +59,21 @@ public sealed class ConfigTransfer(
         /// everything else in it.
         /// </summary>
         public List<TemplateDto> Templates { get; init; } = [];
+
+        /// <summary>
+        /// True when every rule states how it escalates, "follow the default" included. For
+        /// the reason <see cref="IncludesLinks"/> gives: a file from before escalation says
+        /// nothing, which must keep what the install has rather than reset it.
+        /// </summary>
+        public bool IncludesEscalation { get; init; }
+
+        /// <summary>Named mute windows. Added without a version bump, like <see cref="Templates"/>.</summary>
+        public List<MuteWindowDto> MuteWindows { get; init; } = [];
     }
+
+    /// <summary>A mute window, with its days and times as they are stored: "sun", "01:00".</summary>
+    public sealed record MuteWindowDto(string Id, string Name, string Days, string Start, string End,
+        string Scope, List<string> Targets, bool Enabled);
 
     // DependsOn and ChannelId come last and default to null, so a file written before they
     // were exported still deserialises.
@@ -80,7 +95,8 @@ public sealed class ConfigTransfer(
     // written without them, so its line in a new export is exactly what an old one said.
     public sealed record RuleDto(string Id, string Name, string? ConnectionId, string Metric,
         string Comparison, double Threshold, double? ClearThreshold, int ForMinutes, bool Enabled,
-        string? ChannelId = null, string? Kind = null, string? UnusualBy = null);
+        string? ChannelId = null, string? Kind = null, string? UnusualBy = null,
+        int? EscalateAfter = null, string? EscalateTo = null, int? EscalateRepeat = null);
 
     /// <summary>
     /// A template, with what it holds as the shared-tab file it is stored as. Nested as an
@@ -101,6 +117,7 @@ public sealed class ConfigTransfer(
         var widgets = await config.WidgetsAsync(ct);
         var alertRules = await rules.AllAsync(ct);
         var savedTemplates = templates is null ? [] : await templates.AllAsync(ct);
+        var windows = mutes is null ? [] : await mutes.AllAsync(ct);
 
         var bundle = new Bundle
         {
@@ -128,9 +145,20 @@ public sealed class ConfigTransfer(
                     r.Comparison.ToString(), r.Threshold, r.ClearThreshold, r.ForMinutes, r.Enabled,
                     r.ChannelId,
                     r.IsUnusual ? AlertRule.StoredKind(r.Kind) : null,
-                    r.IsUnusual ? AlertRule.StoredUnusualBy(r.UnusualBy) : null))
+                    r.IsUnusual ? AlertRule.StoredUnusualBy(r.UnusualBy) : null,
+                    // Left out while a rule follows the default, so its line reads as it did.
+                    r.EscalateAfterMinutes,
+                    r.EscalateAfterMinutes is > 0 && r.EscalateTo.Length > 0 ? r.EscalateTo : null,
+                    r.EscalateAfterMinutes is > 0 && r.EscalateRepeatMinutes > 0 ? r.EscalateRepeatMinutes : null))
             ],
             Templates = [.. savedTemplates.SelectMany(Describe)],
+            IncludesEscalation = true,
+            MuteWindows =
+            [
+                .. windows.Select(w => new MuteWindowDto(w.Id, w.Name, MuteWindow.StoredDays(w.Days),
+                    MuteWindow.StoredTime(w.Start), MuteWindow.StoredTime(w.End), MuteWindow.StoredScope(w.Scope),
+                    [.. w.Targets], w.Enabled))
+            ],
         };
 
         return JsonSerializer.Serialize(bundle, Json);
@@ -333,8 +361,35 @@ public sealed class ConfigTransfer(
                 ChannelId = bundle.IncludesLinks
                     ? dto.ChannelId
                     : dto.ChannelId ?? existingRules.GetValueOrDefault(dto.Id)?.ChannelId,
+                EscalateAfterMinutes = bundle.IncludesEscalation
+                    ? dto.EscalateAfter
+                    : dto.EscalateAfter ?? existingRules.GetValueOrDefault(dto.Id)?.EscalateAfterMinutes,
+                EscalateTo = bundle.IncludesEscalation
+                    ? dto.EscalateTo ?? ""
+                    : dto.EscalateTo ?? existingRules.GetValueOrDefault(dto.Id)?.EscalateTo ?? "",
+                EscalateRepeatMinutes = bundle.IncludesEscalation
+                    ? dto.EscalateRepeat ?? 0
+                    : dto.EscalateRepeat ?? existingRules.GetValueOrDefault(dto.Id)?.EscalateRepeatMinutes ?? 0,
             }, ct);
             importedRules++;
+        }
+
+        // Upserted by id. A window naming a rule or connection that was not in the file
+        // still imports: it simply mutes nothing until that id exists, which is harmless,
+        // where dropping it would lose somebody's schedule.
+        foreach (var dto in mutes is null ? [] : bundle.MuteWindows)
+        {
+            await mutes!.SaveAsync(new MuteWindow
+            {
+                Id = dto.Id,
+                Name = dto.Name,
+                Days = MuteWindow.ParseDays(dto.Days),
+                Start = MuteWindow.ParseTime(dto.Start),
+                End = MuteWindow.ParseTime(dto.End),
+                Scope = MuteWindow.ParseScope(dto.Scope),
+                Targets = [.. dto.Targets ?? []],
+                Enabled = dto.Enabled,
+            }, ct);
         }
 
         // Upserted by id like everything else here, so restoring a backup twice leaves one

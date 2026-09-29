@@ -349,6 +349,47 @@ public sealed class Db
         // page kind already does. Zero, the default, is "as tall as its content", which is
         // what every existing card already was.
         "ALTER TABLE widgets ADD COLUMN height INTEGER NOT NULL DEFAULT 0",
+
+        // 16–18 — escalation per rule. Null minutes follows the default on the Alerts page,
+        // which is off, so every existing rule behaves exactly as it did.
+        "ALTER TABLE alert_rules ADD COLUMN escalate_after INTEGER",
+        "ALTER TABLE alert_rules ADD COLUMN escalate_to TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE alert_rules ADD COLUMN escalate_repeat INTEGER NOT NULL DEFAULT 0",
+
+        // 19 — named, recurring windows that mute chosen alerts. Days and targets are short
+        // comma lists: nothing ever queries by them, and a list of four rule ids does not
+        // earn a join table.
+        """
+        CREATE TABLE IF NOT EXISTS mute_windows (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            days       TEXT NOT NULL DEFAULT '',
+            start_time TEXT NOT NULL,
+            end_time   TEXT NOT NULL,
+            scope      TEXT NOT NULL DEFAULT 'everything',
+            targets    TEXT NOT NULL DEFAULT '',
+            enabled    INTEGER NOT NULL DEFAULT 1)
+        """,
+
+        // 20 — alerts that have fired and not cleared, for delivery: whether a mute window
+        // still owes the first notice, and where and when it was escalated. Persisted so a
+        // restart neither escalates everything again nor forgets one that was due.
+        """
+        CREATE TABLE IF NOT EXISTS firing_alerts (
+            key            TEXT PRIMARY KEY,
+            rule_id        TEXT,
+            connection_id  TEXT NOT NULL,
+            since          INTEGER NOT NULL,
+            clock_from     INTEGER NOT NULL,
+            held_by        TEXT,
+            escalated_at   INTEGER,
+            escalations    INTEGER NOT NULL DEFAULT 0,
+            escalated_to   TEXT NOT NULL DEFAULT '',
+            title          TEXT NOT NULL DEFAULT '',
+            body           TEXT NOT NULL DEFAULT '',
+            link           TEXT,
+            value          REAL NOT NULL DEFAULT 0)
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
