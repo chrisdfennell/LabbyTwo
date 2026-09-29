@@ -363,6 +363,7 @@
             "renewals" when blockAllowed => typeof(LiveRenewals),
             "changes" when blockAllowed => typeof(LiveChanges),
             "incidents" when blockAllowed => typeof(LiveIncidents),
+            "backups" when blockAllowed => typeof(LiveBackups),
             _ => null,
         };
         if (own is not null)

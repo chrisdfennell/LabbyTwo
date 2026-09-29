@@ -495,6 +495,7 @@ kind, by connection and by how far back:
 | DNS | a LAN name resolves to different addresses | the **Check now** DNS test on the health page, when you run it — it never runs by itself. Public names are left out, since a CDN answers differently every minute |
 | Devices | the network scan finds addresses it has never seen | any connection reporting `devices_new`, which the network scan plugin does |
 | Updates | LabbyTwo starts as a different version from last time | a comparison at startup |
+| Backups | a backup on the [Backups](#backups--dates-not-hope) page is proven newer, goes late, or has a restore test recorded | the Backups check, every five minutes |
 
 Containers are compared by polling rather than by Docker's event stream on purpose: the
 stream is a request held open for ever, and socket proxies, TCP endpoints and restarts all
@@ -521,6 +522,52 @@ Both go into a runbook with `{{changes}}` and `{{incidents}}` (see [Shortcodes](
 The feed is kept for 90 days and incidents for a year (`Labby__ChangeRetentionDays`,
 `Labby__IncidentRetentionDays`). A plugin that notices something changing can record it
 too: ask for `ChangeStore` and call `RecordAsync`.
+
+### Backups — dates, not hope
+
+"I think that's backed up" is not an answer, and a backup nobody has ever restored is a
+hope. **Backups** in the nav is a list of the things you would miss — the NAS shares, the
+photo library, the password vault, LabbyTwo itself — each with what proves it was backed
+up, how often it should be, and when somebody last proved it could be restored.
+
+Each item is proven by one source:
+
+| Proven by | Its date is |
+|---|---|
+| A connection's reading | any metric that is an age or a timestamp: Proxmox Backup Server's and Duplicati's `hours_since_backup` (Duplicati also per job, `hours_since_backup:<job>`), a Healthchecks check your backup script pings (`hours_since_ping:<check>`), or a last-success Unix timestamp from a JSON or Prometheus connection. Hours unless the unit or name says minutes, days or seconds |
+| LabbyTwo's nightly backup | the newest `labbytwo-*.db` in its backup folder — which, unlike the job's own last run, survives a restart |
+| An off-site copy | the destination's last success, from **Settings → Off-site copies** |
+| You | **Mark backed up** — for the USB disk in a drawer. It records who and when |
+
+Each is **on time**, **late** (the newest backup is older than its frequency plus a grace —
+by default an hour for hourly, 6 hours for daily, a day for weekly, three for monthly —
+so a daily backup is late 30 hours after the last one), **missing** (there is no date
+because the source cannot be asked: the connection is down, deleted, or does not report
+that reading; the nightly backup is switched off) or **never** (the source answers, and
+there has never been one). Days, weeks and months are counted on the calendar in the
+container's time zone: a 02:00 backup is due at 02:00 whichever night the clocks change,
+and a monthly one from 31 January is due on the last day of February. A date the source
+proved is remembered, so a backup server that is rebooting leaves its last date behind
+rather than a blank.
+
+A late backup is sent through the alert channels **once**, and once more when it is back
+on time — held by maintenance, a silence or a down parent of the connection it is a backup
+of, a mute window covering everything or that connection, and quiet hours in either mode (a
+late backup is a breakfast problem, not a three in the morning one). Something held goes
+on the first check after the hold lifts. Untick **Send an alert when it is late** to only
+see it on the page.
+
+**Restore tests** are not automated — nothing but restoring it proves a restore works.
+Restore it somewhere harmless, then **Mark restore tested**: when, who, and notes in plain
+text, kept for good under **Tests**. Each item has a reminder cadence (monthly, every three
+months — the default — six months, yearly, or never), counted from the last test, or from
+when the item was added for one never tested. When one falls due a reminder goes out once,
+under the same holds as a late alert, and again only when the next one falls due.
+
+Backups completing, going late, and restore tests all go into [What changed](#what-changed-and-incidents);
+`{{backups}}` puts the list in a runbook (see [Shortcodes](#shortcodes)), and the weekly
+summary has a line for it — "all 6 backups are on time", or what is late and which restore
+tests are due.
 
 ### Tabs — what's in the nav
 
@@ -763,6 +810,7 @@ else counts):
 | `{{renewals}}` | what expires next, soonest first: certificates, Tailscale keys, the Renewals list's next item and its overdue count; expired and overdue first, in red |
 | `{{changes}}` | what changed across the lab in the last 24 hours, newest first — services down and back, containers restarted, recreated or on a new image, alerts firing and clearing, certificates renewed — from the [change feed](#what-changed-and-incidents); `{{changes: containers}}` for one kind |
 | `{{incidents}}` | the last five incidents: what went down first, what followed, when and for how long, open ones marked; each links to its timeline. `{{incidents: open}}` for only what is still going on |
+| `{{backups}}` | the [Backups](#backups--dates-not-hope) list: each item, how often it should be, and when it last was — late first, in red, then missing and never; a restore test that is due is marked. `{{backups: late}}` for only what needs attention, or "Every backup is on time" |
 
 Their options:
 
@@ -772,10 +820,10 @@ Their options:
 | `include="checking"` | `down` | also lists what has not been checked yet |
 | `silenced="hide"` | `down` | leaves out silenced connections, which are otherwise listed and marked "silenced until 14:05" |
 | `connection="Docker"` | `containers`, `updates` | which Docker connection; the first enabled one if left out |
-| `limit=10` | `containers`, `updates` (default 25), `renewals` (default 5), `changes` (default 10, up to 100), `incidents` (default 5, up to 50) | at most that many lines |
+| `limit=10` | `containers`, `updates` (default 25), `renewals` (default 5), `changes` (default 10, up to 100), `incidents` (default 5, up to 50), `backups` (default 10, up to 100) | at most that many lines |
 | `days=30` | `renewals` | how far ahead to look; 60 days if left out. Overdue is always shown |
 | `last=7d` | `changes` (default `24h`), `incidents` (default `30d`) | how far back to look, from `5m` to `365d`: `30m`, `24h`, `7d`, `2w`. An incident still open is shown however long ago it started |
-| `kind="containers, alerts"` | `changes` | only those kinds: `services`, `containers`, `alerts`, `certificates`, `dns`, `devices`, `updates` (plurals optional). Same as writing it first, `{{changes: containers}}` |
+| `kind="containers, alerts"` | `changes` | only those kinds: `services`, `containers`, `alerts`, `certificates`, `dns`, `devices`, `updates`, `backups` (plurals optional). Same as writing it first, `{{changes: containers}}` |
 
 `{{containers}}` uses the Containers tab's own calls, so a socket proxy that refuses the
 list shows a **?** naming the flag to set (`CONTAINERS=1`). However many pages show it,
@@ -1819,7 +1867,8 @@ that and you have copied the entire installation. Nothing else is worth backing 
 It also takes one by itself. A **nightly backup** writes a dated copy into `data/backups`
 and keeps a fortnight of them, using SQLite's own backup API so a copy taken mid-write is
 still a valid database. Somebody had to remember to click the button before, which meant
-the answer to "I deleted the wrong tab" was a shrug.
+the answer to "I deleted the wrong tab" was a shrug. Put **LabbyTwo's nightly backup** (and
+each off-site copy) on the [Backups](#backups--dates-not-hope) page to be told when it stops.
 
 ### Off-site copies
 

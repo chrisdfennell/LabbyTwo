@@ -1,0 +1,635 @@
+@page "/backups"
+@rendermode InteractiveServer
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@inject BackupProof Proof
+@inject BackupStore Store
+@inject ConfigStore Config
+@inject HealthMonitor Health
+@inject Offload Offload
+
+<PageTitle>Backups · LabbyTwo</PageTitle>
+
+@* "I think it's backed up" as a date. Each thing that ought to be backed up, what proves it
+   was — a backup provider's reading, LabbyTwo's own nightly copy, an off-site copy, or
+   somebody ticking it — when that last happened, and whether that is on time. Beside it,
+   when somebody last tried restoring it, because a backup nobody has restored is a hope.
+
+   Read in the background, and again whenever an item is saved, ticked or judged differently
+   by the sweep; the ages are brought up to date on every probe sweep from memory. *@
+
+<div class="page-head">
+    <div>
+        <h1>🛟 Backups</h1>
+        <p class="subtitle">
+            What ought to be backed up, when it last was, and when somebody last proved it could be restored.
+        </p>
+    </div>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+        <button class="btn btn-primary btn-sm" @onclick="NewAsync">Add a backup</button>
+    </div>
+</div>
+
+<details class="panel p-3 mb-3">
+    <summary class="tile-meta">How this works</summary>
+    <ul class="tile-meta mb-0 mt-2">
+        <li>Each item is proven by one source: a connection's reading (a backup server's “since the last backup”, a
+            Healthchecks ping, any last-success timestamp), LabbyTwo's own nightly backup, one of its off-site copies,
+            or you — ticking <em>Mark backed up</em> when you did it by hand.</li>
+        <li>It is <strong>late</strong> once the newest backup is older than its frequency plus the grace — daily
+            with 6 hours' grace is late 30 hours after the last one. <strong>Missing</strong> means there is no date
+            because the source cannot be asked; <strong>never</strong> means it answers and there has never been one.</li>
+        <li>A late backup is sent through your alert channels once, and once more when it is back — held by
+            maintenance, quiet hours, a mute window or a silence on the connection it is about, and sent when that lifts.</li>
+        <li>Restore tests are not automated: restore it somewhere harmless, then press <em>Mark restore tested</em>.
+            When one is due, a reminder goes out once.</li>
+    </ul>
+</details>
+
+@if (!_load.Ready)
+{
+    <div class="panel p-3"><div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div></div>
+}
+else if (_load.Failed && _rows.Count == 0)
+{
+    <div class="panel p-3 text-danger">The backups could not be read. The log says why.</div>
+}
+else if (_rows.Count == 0)
+{
+    <div class="panel p-3">
+        <p>Nothing is listed yet. Add the things you would miss — the NAS shares, the photo library, the password
+            vault, LabbyTwo itself — and say what proves each one is backed up.</p>
+        <button class="btn btn-outline-primary btn-sm" @onclick="NewAsync">Add a backup</button>
+    </div>
+}
+else
+{
+    var now = DateTimeOffset.Now;
+    var late = _rows.Count(r => r.Status.State == BackupState.Late);
+    var unproven = _rows.Count(r => r.Status.State is BackupState.Missing or BackupState.Never);
+    var drills = _rows.Count(r => r.DrillOverdue);
+    <p class="tile-meta" role="status">
+        @(_rows.Count - late - unproven) of @_rows.Count on time@(late > 0 ? $" · {late} late" : "")@(unproven > 0 ? $" · {unproven} without a date" : "")@(drills > 0 ? $" · {drills} restore test{(drills == 1 ? "" : "s")} due" : "").
+    </p>
+    <div class="d-grid gap-2">
+        @foreach (var row in _rows)
+        {
+            var item = row.Item;
+            var status = row.Status;
+            var open = _expanded.Contains(item.Id);
+            var rowClass = status.State == BackupState.Late ? "is-late" : row.NeedsAttention ? "is-attention" : "";
+            <div class="panel p-3 backup-row @rowClass" @key="item.Id">
+                <div class="d-flex align-items-start gap-2 flex-wrap">
+                    <span class="status-dot mt-2 @BackupSchedule.Dot(status.State)" aria-hidden="true"></span>
+                    <div class="min-w-0 flex-grow-1">
+                        <div>
+                            <strong>@item.Name</strong>
+                            @if (NameOf(item.ConnectionId) is { } about)
+                            {
+                                <span class="tile-meta"> · @about</span>
+                            }
+                            <span class="badge ms-1 @Badge(status.State)">@BackupSchedule.Describe(status.State)</span>
+                            @if (row.DrillOverdue)
+                            {
+                                <span class="badge text-bg-warning ms-1">restore test due</span>
+                            }
+                        </div>
+                        <div class="tile-meta">Proven by @row.Reading.Source · expected @BackupSchedule.Describe(item.Frequency)</div>
+                    </div>
+                    <div class="d-flex gap-1 flex-wrap flex-none">
+                        @if (item.Source == BackupSources.Manual)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-success" @onclick="() => MarkBackedUpAsync(item)">Mark backed up</button>
+                        }
+                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => StartTest(row)">Mark restore tested</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" aria-expanded="@(open ? "true" : "false")"
+                                @onclick="() => ToggleAsync(item)">@(open ? "Hide tests" : "Tests")</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAsync(item)">Edit</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" aria-label="@($"Delete {item.Name}")" @onclick="() => _confirmDelete = item">✕</button>
+                    </div>
+                </div>
+
+                <dl class="backup-facts mt-2 mb-0">
+                    <div>
+                        <dt>Last backup</dt>
+                        <dd>
+                            @if (status.LastSuccess is { } last)
+                            {
+                                <span title="@last.ToLocalTime().ToString("f")">@BackupSchedule.When(last, now, TimeZoneInfo.Local)</span>
+                                <span class="tile-meta">· @Ago.Since(last, now)</span>
+                                @if (item.Source == BackupSources.Manual && item.LastSuccessBy.Length > 0)
+                                {
+                                    <span class="tile-meta">· by @item.LastSuccessBy</span>
+                                }
+                            }
+                            else
+                            {
+                                <span>@(status.State == BackupState.Missing ? "unknown" : "never")</span>
+                            }
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>@(status.State == BackupState.Late ? "Was due by" : "Next due by")</dt>
+                        <dd class="@(status.State == BackupState.Late ? "text-danger" : "")">
+                            @if (status.DueBy is { } due)
+                            {
+                                @BackupSchedule.When(due, now, TimeZoneInfo.Local)
+                                <span class="tile-meta">· @(due > now ? Ago.Until(due, now) : $"{Ago.Duration(now - due)} ago")</span>
+                            }
+                            else
+                            {
+                                <span>—</span>
+                            }
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>Last restore test</dt>
+                        <dd>
+                            @if (item.LastRestoreTest is { } tested)
+                            {
+                                @BackupSchedule.Day(tested, now, TimeZoneInfo.Local)
+                                @if (item.LastRestoreTestBy.Length > 0)
+                                {
+                                    <span class="tile-meta"> · by @item.LastRestoreTestBy</span>
+                                }
+                            }
+                            else
+                            {
+                                <span>never</span>
+                            }
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>Next restore test</dt>
+                        <dd class="@(row.DrillOverdue ? "text-warning" : "")">
+                            @if (row.DrillDue is { } drill)
+                            {
+                                @BackupSchedule.Day(drill, now, TimeZoneInfo.Local)
+                                <span class="tile-meta">· @BackupSchedule.Describe(item.Drill)@(row.DrillOverdue ? ", overdue" : "")</span>
+                            }
+                            else
+                            {
+                                <span class="tile-meta">no reminders</span>
+                            }
+                        </dd>
+                    </div>
+                </dl>
+
+                @if (status.Problem is { } problem)
+                {
+                    <div class="tile-meta mt-2 @(status.State == BackupState.Missing ? "text-warning" : "")">⚠ Cannot read the source now: @problem.</div>
+                }
+
+                @if (open)
+                {
+                    <div class="incident-timeline mt-3">
+                        @if (!_tests.TryGetValue(item.Id, out var tests))
+                        {
+                            <span class="tile-meta">Reading the restore tests…</span>
+                        }
+                        else if (tests.Count == 0)
+                        {
+                            <span class="tile-meta">No restore has been recorded for this yet.</span>
+                        }
+                        else
+                        {
+                            <ul class="backup-tests">
+                                @foreach (var test in tests)
+                                {
+                                    <li @key="test.Id">
+                                        <div>
+                                            <strong>@BackupSchedule.Day(test.At, now, TimeZoneInfo.Local)</strong>
+                                            <span class="tile-meta"> · @test.At.ToLocalTime().ToString("HH:mm") · by @test.Who</span>
+                                        </div>
+                                        @if (test.Notes.Length > 0)
+                                        {
+                                            <div class="tile-meta notes">@test.Notes</div>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@if (_draft is { } draft)
+{
+    <Modal Title="@(_isNew ? "Add a backup" : "Edit backup")" OnClose="() => _draft = null">
+        <ChildContent>
+            <div class="mb-3">
+                <label class="form-label" for="backup-name">Name</label>
+                <input id="backup-name" class="form-control" value="@draft.Name" placeholder="Photo library"
+                       @onchange="e => _draft = draft with { Name = e.Value?.ToString() ?? string.Empty }" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="backup-about">A backup of</label>
+                <select id="backup-about" class="form-select" value="@(draft.ConnectionId ?? "")"
+                        @onchange="e => _draft = draft with { ConnectionId = e.Value?.ToString() is { Length: > 0 } id ? id : null }">
+                    <option value="">Nothing in particular</option>
+                    @foreach (var connection in _connections)
+                    {
+                        <option value="@connection.Id">@connection.Name</option>
+                    }
+                </select>
+                <div class="form-text">Optional. A silence or a mute window on that connection also holds this backup's alerts.</div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="backup-source">Proven by</label>
+                <select id="backup-source" class="form-select" value="@SourceValue(draft)" @onchange="e => SetSource(draft, e.Value?.ToString())">
+                    <option value="manual">Me — I tick it when I have done it</option>
+                    <option value="labbytwo">LabbyTwo's own nightly backup</option>
+                    @foreach (var destination in _destinations)
+                    {
+                        <option value="@($"offsite:{destination.Id}")">LabbyTwo's off-site copy to @destination.Name</option>
+                    }
+                    <option value="metric">A reading from a connection</option>
+                </select>
+            </div>
+
+            @if (draft.Source == BackupSources.Metric)
+            {
+                var source = _connections.FirstOrDefault(c => c.Id == draft.SourceTarget);
+                <div class="row g-2 mb-3">
+                    <div class="col-sm-6">
+                        <label class="form-label" for="backup-source-connection">Connection</label>
+                        <select id="backup-source-connection" class="form-select" value="@draft.SourceTarget"
+                                @onchange="e => _draft = draft with { SourceTarget = e.Value?.ToString() ?? string.Empty }">
+                            <option value="">Choose…</option>
+                            @foreach (var connection in _connections)
+                            {
+                                <option value="@connection.Id">@connection.Name</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label" for="backup-metric">Reading</label>
+                        <input id="backup-metric" class="form-control font-monospace" list="backup-metric-options"
+                               value="@draft.SourceMetric" placeholder="hours_since_backup"
+                               @onchange="e => _draft = draft with { SourceMetric = e.Value?.ToString() ?? string.Empty }" />
+                        <datalist id="backup-metric-options">
+                            @if (source is not null)
+                            {
+                                @foreach (var (metric, label) in Proof.MetricChoices(source))
+                                {
+                                    <option value="@metric">@label</option>
+                                }
+                            }
+                        </datalist>
+                    </div>
+                    <div class="col-12 form-text">
+                        An age — hours since the last backup, as Proxmox Backup Server and Duplicati report, or since a
+                        Healthchecks ping — or a Unix timestamp of the last success. Minutes, days and seconds are understood
+                        from the unit or the name.
+                    </div>
+                </div>
+            }
+
+            <div class="row g-2 mb-3">
+                <div class="col-sm-6">
+                    <label class="form-label" for="backup-frequency">Expected</label>
+                    <select id="backup-frequency" class="form-select" value="@draft.Frequency.ToString()"
+                            @onchange="e => _draft = draft with { Frequency = Enum.TryParse<BackupFrequency>(e.Value?.ToString(), out var f) ? f : BackupFrequency.Daily }">
+                        <option value="Hourly">Every hour</option>
+                        <option value="Daily">Every day</option>
+                        <option value="Weekly">Every week</option>
+                        <option value="Monthly">Every month</option>
+                    </select>
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label" for="backup-grace">Grace, in hours</label>
+                    <input id="backup-grace" type="number" min="0" max="1440" class="form-control"
+                           value="@(draft.GraceHours?.ToString() ?? "")" placeholder="@BackupSchedule.DefaultGraceHours(draft.Frequency)"
+                           @onchange="e => _draft = draft with { GraceHours = int.TryParse(e.Value?.ToString(), out var g) ? g : null }" />
+                </div>
+                <div class="col-12 form-text">
+                    Late once the newest backup is older than that plus the grace. Days and months are counted on the
+                    calendar here, so a 02:00 backup is due at 02:00 whichever night the clocks change.
+                </div>
+            </div>
+
+            <div class="form-check mb-3">
+                <input id="backup-alert" class="form-check-input" type="checkbox" checked="@draft.AlertWhenLate"
+                       @onchange="e => _draft = draft with { AlertWhenLate = e.Value is true }" />
+                <label class="form-check-label" for="backup-alert">Send an alert when it is late</label>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="backup-drill">Remind me to test a restore</label>
+                <select id="backup-drill" class="form-select" value="@draft.Drill.ToString()"
+                        @onchange="e => _draft = draft with { Drill = Enum.TryParse<DrillCadence>(e.Value?.ToString(), out var d) ? d : DrillCadence.Quarterly }">
+                    <option value="Monthly">Every month</option>
+                    <option value="Quarterly">Every three months</option>
+                    <option value="HalfYearly">Every six months</option>
+                    <option value="Yearly">Every year</option>
+                    <option value="Off">Never</option>
+                </select>
+                <div class="form-text">Counted from the last test — or, for one never tested, from when it was added.</div>
+            </div>
+
+            @if (_error is not null)
+            {
+                <div class="text-danger" role="alert">@_error</div>
+            }
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _draft = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveAsync">Save</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_testing is { } testing)
+{
+    <Modal Title="@($"Restore test: {testing.Item.Name}")" Size="" OnClose="() => _testing = null">
+        <ChildContent>
+            <p class="tile-meta">
+                Restore it somewhere it can do no harm — another folder, a spare VM — and check what came back opens.
+                This records that you did.
+            </p>
+            <div class="row g-2 mb-3">
+                <div class="col-sm-6">
+                    <label class="form-label" for="test-date">When</label>
+                    <input id="test-date" type="date" class="form-control" @bind="_testDate" max="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label" for="test-who">Who</label>
+                    <input id="test-who" class="form-control" @bind="_testWho" placeholder="Your name" />
+                </div>
+            </div>
+            <div class="mb-2">
+                <label class="form-label" for="test-notes">Notes</label>
+                <textarea id="test-notes" class="form-control" rows="4" @bind="_testNotes"
+                          placeholder="Restored last night's snapshot to /tmp/restore; 3,212 photos, opened a few."></textarea>
+                <div class="form-text">Plain text. What you restored, where to, and anything that surprised you.</div>
+            </div>
+            @if (_error is not null)
+            {
+                <div class="text-danger" role="alert">@_error</div>
+            }
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _testing = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveTestAsync">Record restore test</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_confirmDelete is { } deleting)
+{
+    <ConfirmDialog Title="Delete this backup?"
+                   Message="@($"“{deleting.Name}” will stop being checked, and its restore tests are deleted with it. What it recorded in What changed stays.")"
+                   ConfirmText="Delete"
+                   OnCancel="() => _confirmDelete = null"
+                   OnConfirm="DeleteConfirmedAsync" />
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private IReadOnlyList<BackupRow> _rows = [];
+    private IReadOnlyList<Connection> _connections = [];
+    private IReadOnlyList<LabbyTwo.Services.Offsite.OffsiteDestination> _destinations = [];
+    private readonly HashSet<string> _expanded = [];
+    private readonly Dictionary<string, IReadOnlyList<RestoreTest>> _tests = [];
+    private BackgroundLoad _load = default!;
+    private bool _disposed;
+
+    private BackupItem? _draft;
+    private bool _isNew;
+    private string? _error;
+    private BackupItem? _confirmDelete;
+
+    private BackupRow? _testing;
+    private DateTime _testDate = DateTime.Today;
+    private string _testWho = "";
+    private string _testNotes = "";
+    private string _me = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Store.Changed += OnStoreChanged;
+        Health.Updated += OnSweep;
+        if (Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name })
+            _me = name;
+        _connections = [.. (await Config.ConnectionsAsync()).OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)];
+        Load(refresh: false);
+    }
+
+    private void Load(bool refresh)
+    {
+        Task<IReadOnlyList<BackupRow>> Fetch(CancellationToken ct) => Offload.Run(c => Proof.RowsAsync(DateTimeOffset.Now, c), ct);
+
+        void Apply(IReadOnlyList<BackupRow> rows)
+        {
+            _rows = rows;
+            foreach (var id in _expanded)
+                LoadTests(id);
+        }
+
+        if (refresh)
+            _ = _load.Refresh("backups", Fetch, Apply);
+        else
+            _ = _load.Load("backups", Fetch, Apply);
+    }
+
+    private string? NameOf(string? connectionId) =>
+        connectionId is null ? null : _connections.FirstOrDefault(c => c.Id == connectionId)?.Name;
+
+    private static string Badge(BackupState state) => state switch
+    {
+        BackupState.Ok => "text-bg-success",
+        BackupState.Late => "text-bg-danger",
+        BackupState.Missing => "text-bg-warning",
+        _ => "text-bg-secondary",
+    };
+
+    // ---------- the editor ----------
+
+    private async Task NewAsync()
+    {
+        await LoadDestinationsAsync();
+        _draft = new BackupItem { Position = _rows.Count == 0 ? 0 : _rows.Max(r => r.Item.Position) + 1 };
+        _isNew = true;
+        _error = null;
+    }
+
+    private async Task EditAsync(BackupItem item)
+    {
+        await LoadDestinationsAsync();
+        _draft = item;
+        _isNew = false;
+        _error = null;
+    }
+
+    /// <summary>Only when the editor opens: they carry encrypted secrets, and the list does not need them.</summary>
+    private async Task LoadDestinationsAsync()
+    {
+        try
+        {
+            _destinations = await Offload.Run(c => Proof.DestinationsAsync(c));
+        }
+        catch (Exception)
+        {
+            _destinations = [];
+        }
+    }
+
+    private static string SourceValue(BackupItem item) =>
+        item.Source == BackupSources.Offsite ? $"offsite:{item.SourceTarget}" : item.Source;
+
+    private void SetSource(BackupItem draft, string? value)
+    {
+        var chosen = value ?? BackupSources.Manual;
+        _draft = chosen.StartsWith("offsite:", StringComparison.Ordinal)
+            ? draft with { Source = BackupSources.Offsite, SourceTarget = chosen["offsite:".Length..], SourceMetric = "" }
+            : chosen == BackupSources.Metric
+                ? draft with { Source = chosen, SourceTarget = draft.Source == BackupSources.Metric ? draft.SourceTarget : draft.ConnectionId ?? "" }
+                : draft with { Source = chosen, SourceTarget = "", SourceMetric = "" };
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_draft is not { } draft)
+            return;
+        if (draft.Problem() is { } problem)
+        {
+            _error = problem;
+            return;
+        }
+        try
+        {
+            await Offload.Run(async c => { await Proof.SaveAsync(draft, c); return true; });
+            _draft = null;
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    private async Task DeleteConfirmedAsync()
+    {
+        if (_confirmDelete is not { } item)
+            return;
+        _confirmDelete = null;
+        await Offload.Run(async c => { await Proof.DeleteAsync(item.Id, c); return true; });
+    }
+
+    // ---------- ticks ----------
+
+    private async Task MarkBackedUpAsync(BackupItem item)
+    {
+        var who = _me;
+        await Offload.Run(async c => { await Proof.MarkBackedUpAsync(item.Id, who, DateTimeOffset.Now, c); return true; });
+    }
+
+    private void StartTest(BackupRow row)
+    {
+        _testing = row;
+        _testDate = DateTime.Today;
+        _testWho = _me;
+        _testNotes = "";
+        _error = null;
+    }
+
+    private async Task SaveTestAsync()
+    {
+        if (_testing is not { } row)
+            return;
+        if (_testDate.Date > DateTime.Today)
+        {
+            _error = "A restore test cannot have happened in the future.";
+            return;
+        }
+
+        // Today is now; an earlier day is noon on it, which is at least the right day in every zone.
+        var at = _testDate.Date == DateTime.Today
+            ? DateTimeOffset.Now
+            : new DateTimeOffset(_testDate.Date.AddHours(12), TimeZoneInfo.Local.GetUtcOffset(_testDate.Date.AddHours(12)));
+        var (who, notes) = (_testWho, _testNotes);
+        try
+        {
+            await Offload.Run(c => Proof.MarkTestedAsync(row.Item.Id, who, notes, at, c));
+            _testing = null;
+            _error = null;
+            _tests.Remove(row.Item.Id);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.GetBaseException().Message;
+        }
+    }
+
+    // ---------- restore test history ----------
+
+    private Task ToggleAsync(BackupItem item)
+    {
+        if (!_expanded.Remove(item.Id))
+        {
+            _expanded.Add(item.Id);
+            LoadTests(item.Id);
+        }
+        return Task.CompletedTask;
+    }
+
+    private void LoadTests(string id)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var tests = await Offload.Run(c => Proof.TestsAsync(id, c));
+                if (!_disposed)
+                    await InvokeAsync(() => { _tests[id] = tests; StateHasChanged(); });
+            }
+            catch (Exception) when (!_disposed)
+            {
+                await InvokeAsync(() => { _tests[id] = []; StateHasChanged(); });
+            }
+            catch (Exception)
+            {
+                // The page went while it was reading.
+            }
+        });
+    }
+
+    private void OnStoreChanged() => _ = InvokeAsync(() => Load(refresh: true));
+
+    /// <summary>
+    /// A reading proven by a connection moves with the monitor's sweep, so the list is read
+    /// again on one — at most once a minute, since a backup's date moves once a night. The
+    /// sweeps between only bring the ages up to date.
+    /// </summary>
+    private void OnSweep()
+    {
+        if (_rows.Count == 0)
+            return;
+        if (DateTimeOffset.Now - _lastSweepRead > TimeSpan.FromMinutes(1))
+        {
+            _lastSweepRead = DateTimeOffset.Now;
+            _ = InvokeAsync(() => Load(refresh: true));
+        }
+        else
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private DateTimeOffset _lastSweepRead = DateTimeOffset.Now;
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Store.Changed -= OnStoreChanged;
+        Health.Updated -= OnSweep;
+        _load?.Dispose();
+    }
+}

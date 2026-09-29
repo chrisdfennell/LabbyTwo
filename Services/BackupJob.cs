@@ -101,19 +101,29 @@ public sealed class BackupJob(
     /// Inside the data volume by default, because that is the one thing every install
     /// already keeps — a folder elsewhere is a bind mount somebody has to arrange.
     /// </summary>
-    private string Folder(SettingsBag stored)
+    private string Folder(SettingsBag stored) => FolderFor(stored, options.Value, environment);
+
+    /// <summary>
+    /// Where the nightly copies go, for anything else that needs to look at them — the
+    /// Backups page dates LabbyTwo's own backup by the newest file here, which survives a
+    /// restart where the job runner's memory of its last run does not.
+    /// </summary>
+    public static string FolderFor(SettingsBag stored, LabbyOptions options, IHostEnvironment environment)
     {
         if (stored.Get(FolderKey) is { Length: > 0 } configured)
             return configured;
 
-        var data = Path.GetDirectoryName(Path.GetFullPath(options.Value.DatabasePath, environment.ContentRootPath))!;
+        var data = Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath, environment.ContentRootPath))!;
         return Path.Combine(data, "backups");
     }
+
+    /// <summary>The file name pattern of a nightly copy, which is also all the pruning ever deletes.</summary>
+    public const string FilePattern = "labbytwo-*.db";
 
     private void Prune(string folder, int keep)
     {
         var copies = new DirectoryInfo(folder)
-            .EnumerateFiles("labbytwo-*.db")
+            .EnumerateFiles(FilePattern)
             .OrderByDescending(file => file.Name)
             .Skip(keep)
             .ToList();

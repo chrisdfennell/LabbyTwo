@@ -467,6 +467,40 @@ public sealed class Db
             seq           INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (incident_id, member)) WITHOUT ROWID;
         """,
+
+        // 24 — backup proof: the things that ought to be backed up, what proves each one was,
+        // and when a restore was last tried. Items are a handful of rows read whole, so the
+        // primary key is all they need; the sweep's own state (the newest success proven,
+        // whether lateness was announced) lives beside the settings so one read has both.
+        // Restore tests are kept for ever — a few a quarter — and only ever read for one item,
+        // newest first, which is exactly (item_id, ts).
+        """
+        CREATE TABLE IF NOT EXISTS backup_items (
+            id                TEXT    PRIMARY KEY,
+            name              TEXT    NOT NULL,
+            connection_id     TEXT,
+            source            TEXT    NOT NULL DEFAULT 'manual',
+            source_target     TEXT    NOT NULL DEFAULT '',
+            source_metric     TEXT    NOT NULL DEFAULT '',
+            frequency         TEXT    NOT NULL DEFAULT 'daily',
+            grace_hours       INTEGER,
+            alert_late        INTEGER NOT NULL DEFAULT 1,
+            drill             TEXT    NOT NULL DEFAULT 'quarterly',
+            position          INTEGER NOT NULL DEFAULT 0,
+            created_ts        INTEGER NOT NULL,
+            last_success_ts   INTEGER,
+            last_success_by   TEXT    NOT NULL DEFAULT '',
+            last_state        TEXT    NOT NULL DEFAULT '',
+            late_announced    INTEGER NOT NULL DEFAULT 0,
+            drill_reminded_ts INTEGER);
+        CREATE TABLE IF NOT EXISTS restore_tests (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id TEXT    NOT NULL,
+            ts      INTEGER NOT NULL,
+            who     TEXT    NOT NULL DEFAULT '',
+            notes   TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_restore_tests_item ON restore_tests (item_id, ts);
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
