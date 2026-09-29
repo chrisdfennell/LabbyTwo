@@ -22,6 +22,8 @@
 // Exits 0 when every card has drawn (or --until held) and none failed, 1 when a card
 // failed or Blazor reported an error, and 2 when the deadline passed first.
 
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const [chrome, url, profile, seconds = '30', ...rest] = process.argv.slice(2);
@@ -40,26 +42,28 @@ const deadline = Date.now() + Number(seconds) * 1000;
 // why. That is what "-1 of 0 cards" and "the page could never be read" turned out to be.
 // The background flags stop Chrome throttling a tab it opened itself and considers hidden,
 // which slows Blazor's timers and rendering for no reason in a test.
-const browser = spawn(chrome, [
-  '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run',
-  '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
-  '--disable-dev-shm-usage', '--disable-background-timer-throttling',
-  '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
-  'about:blank',
-], { stdio: ['ignore', 'ignore', 'pipe'] });
+//
+// A profile folder of its own for every launch, inside the one the caller names. The
+// scripts open one page after another with the same folder, and a Chrome killed at the end
+// of the last one can leave a helper process holding the profile's lock for a moment. A new
+// Chrome that finds the lock hands its window to the "running" one and exits 0 — "Chrome
+// exited (0) before it listened" — so each run gets a fresh folder, and one retry covers
+// anything else that makes a launch fall over.
+let browser;
+let launches = 0;
+const launch = () => new Promise((resolve, reject) => {
+  launches++;
+  const own = join(profile, `run-${process.pid}-${launches}-${Date.now()}`);
+  mkdirSync(own, { recursive: true });
+  browser = spawn(chrome, [
+    '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run',
+    '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${own}`,
+    '--disable-dev-shm-usage', '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
+    'about:blank',
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
-// Whatever happens, the browser goes too. A stray Chrome would keep the CI step open.
-let started = Date.now();
-const finish = (code, message) => {
-  if (message) console.log(message);
-  if (timed && code === 0) console.log(`elapsed_ms=${Date.now() - started}`);
-  try { browser.kill('SIGKILL'); } catch { /* already gone */ }
-  process.exit(code);
-};
-setTimeout(() => finish(2, `Gave up after ${seconds}s.`), Number(seconds) * 1000 + 5000).unref();
-
-// Chrome picks a free port and says which on stderr.
-const endpoint = await new Promise((resolve, reject) => {
+  // Chrome picks a free port and says which on stderr.
   let seen = '';
   browser.stderr.on('data', chunk => {
     seen += chunk;
@@ -67,6 +71,21 @@ const endpoint = await new Promise((resolve, reject) => {
     if (match) resolve(match[1]);
   });
   browser.on('exit', code => reject(new Error(`Chrome exited (${code}) before it listened:\n${seen}`)));
+});
+
+// Whatever happens, the browser goes too. A stray Chrome would keep the CI step open.
+let started = Date.now();
+const finish = (code, message) => {
+  if (message) console.log(message);
+  if (timed && code === 0) console.log(`elapsed_ms=${Date.now() - started}`);
+  try { browser?.kill('SIGKILL'); } catch { /* already gone */ }
+  process.exit(code);
+};
+setTimeout(() => finish(2, `Gave up after ${seconds}s.`), Number(seconds) * 1000 + 5000).unref();
+
+const endpoint = await launch().catch(async first => {
+  console.log(`${first.message.split('\n')[0]} — launching once more.`);
+  return launch();
 }).catch(error => finish(1, error.message));
 
 const socket = new WebSocket(endpoint);
