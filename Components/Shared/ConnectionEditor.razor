@@ -2,6 +2,8 @@
 @inject HealthMonitor Health
 @inject AlertService Alerts
 @inject Registry Registry
+@inject RemediationStore Remediations
+@inject Offload Offload
 
 <Modal Title="@($"{Provider.Icon} {Provider.DisplayName}")" OnClose="OnClose">
     <ChildContent>
@@ -63,6 +65,15 @@
                 is the message that names the cause.
             </div>
         </div>
+
+        @* Self-healing, for this connection going down. Read once the editor opens, saved
+           with the connection, so Cancel leaves it as it was. *@
+        @if (_fixLoaded)
+        {
+            <RemediationEditor Value="_fix" ValueChanged="v => _fix = v" Heading="When this is down…"
+                               Trigger="@Remediation.DownTrigger(Draft.Id)" Id="conn-fix"
+                               SuggestedContainer="@_name.Trim().ToLowerInvariant().Replace(' ', '-')" />
+        }
     }
 
     @if (_result is { } result)
@@ -123,6 +134,8 @@
     private SettingsBag _settings = new();
     private ProbeResult? _result;
     private bool _testing;
+    private Remediation? _fix;
+    private bool _fixLoaded;
 
     private bool IsAlertChannel => Provider is IAlertChannel;
 
@@ -145,6 +158,12 @@
             .. (await Config.ConnectionsAsync())
                 .Where(c => c.Id != Draft.Id && Registry.Provider(c.Provider) is not IAlertChannel),
         ];
+
+        if (!IsAlertChannel)
+        {
+            _fix = await Offload.Run(ct => Remediations.GetAsync(Remediation.DownTrigger(Draft.Id), ct));
+            _fixLoaded = true;
+        }
     }
 
     private Connection Current => Draft with
@@ -198,6 +217,19 @@
     {
         var saved = Current;
         await Config.SaveConnectionAsync(saved);
+        if (_fixLoaded)
+        {
+            var trigger = Remediation.DownTrigger(saved.Id);
+            var fix = _fix;
+            await Offload.Run(async ct =>
+            {
+                if (fix is null)
+                    await Remediations.DeleteAsync(trigger, ct);
+                else
+                    await Remediations.SaveAsync(fix with { Trigger = trigger }, ct);
+                return true;
+            });
+        }
         // Probe immediately so the tile is green before the user navigates away, rather
         // than sitting on "checking…" until the next sweep. Alert channels are not probed
         // at all — doing so would write a status event for something that is not a service.

@@ -469,6 +469,49 @@ the rule editor a rule can follow the default, never escalate, or escalate its o
   due while LabbyTwo was stopped is sent once when it starts — never a burst of the repeats
   it missed.
 
+#### Self-healing
+
+Most three-in-the-morning outages are fixed by what you would do half asleep: restart the
+container. LabbyTwo can do that for you, and only wake you if it did not work. In a rule's
+editor under **When this fires…**, or on a connection under **When this is down…**, choose
+what to do:
+
+- **Restart a Docker container** — by name or Compose service, on one of your Docker
+  connections.
+- **Run one of a connection's actions** — the same buttons the Controls card and a runbook's
+  `{{button: NAS / restart}}` offer, run through the same code with the same timeout.
+
+Then say how long to wait first (5 minutes by default), how many tries per outage (1), how long
+between tries (30 minutes), how long after a try to judge it (5 minutes), and whether to just
+tell you or escalate straight away if it did not help. For *"if Plex is down for 5 minutes,
+restart the plex container once; if it is still down 5 minutes later, tell me"*, those
+defaults are already it.
+
+The alert says what is coming — *"NAS is down … LabbyTwo will try: restart plex in 5 min"* —
+and what happened follows: the recovery says *"Restarted plex at 02:14 — it recovered"*, or a
+second notice says *"Restarted plex at 02:14 — it didn't help"* and that it will not try again.
+Every run, verdict and hold-up is in **What changed** (kind *Self-healing*) against the
+connection that alerted, so it also shows on that incident's timeline. **Settings → Alerts →
+Self-healing** lists the recent ones.
+
+The guardrails:
+
+- **Never while you are working on it.** Maintenance mode, a silence, a mute window, or a
+  parent connection being down all hold it back, the way they hold an alert.
+- **Never on LabbyTwo's own container**, whatever you tick — the thing deciding whether a
+  restart helped cannot be the thing restarted.
+- **Protected containers need an explicit opt-in.** Anything on a Containers page's protected
+  list (the tunnel, the reverse proxy) is refused unless that remediation ticks *Allow
+  protected containers and dangerous actions*; the same tick is needed for an action the
+  integration marks dangerous. An action that asks for input never runs automatically.
+- **No loops.** An alert that fires again within the wait of the last try is the same outage,
+  so a restart that knocks the service over again cannot buy itself another restart.
+- **A cap for the whole install** — 5 automatic actions an hour by default, counted from the
+  change feed so a restart does not reset it — and a switch that turns every one of them off.
+- **Restarts remember.** Tries per outage, and a check that was waiting, are kept in the
+  database, so an update in the middle neither restarts plex twice nor forgets to say whether
+  it worked.
+
 Alert channels are connections too. Add a webhook or Pushover channel and both kinds start
 being delivered — there is no separate notification settings screen.
 
@@ -479,6 +522,65 @@ name, a Send test button and a Remove; a Browser push channel is created with th
 and follows quiet hours like any other. Browsers only allow this over HTTPS (your Cloudflare
 or reverse-proxy address, not `http://nas:5150`), and on iPhone and iPad only for LabbyTwo
 added to the Home Screen.
+
+### If everything goes dark
+
+Every alert above needs LabbyTwo running and the house online. A power cut, a tripped breaker
+or a dead router takes both away at once, and nothing inside the house can tell you. So
+**Settings → Outside alarm** turns it round: LabbyTwo checks in with a service *outside* the
+house every minute, and when the check-ins stop, that service alerts you.
+
+It is a Settings section rather than a connection on purpose. A connection is something
+LabbyTwo polls and draws — it would be a tile, count towards "12 up", and send a "down"
+notice through your alert channels every time the internet dropped, which is the one moment
+they cannot deliver. This only talks outwards, and a failed ping goes to the log and the
+Settings card, never to your channels.
+
+The check-in means something. LabbyTwo only says "up" while its own monitoring is working —
+sweeps finishing on time, by the same measure as the health page. If the monitor hangs,
+Healthchecks is sent `/fail` and Uptime Kuma `status=down`, each with the reason, so the
+alarm goes off straight away; a plain heartbeat URL, which has no way to say "bad", is simply
+not pinged, and its own timeout goes off. Either way a hung LabbyTwo trips it just as a dark
+house does.
+
+Nothing is sent until you paste an address in. The address *is* the credential — anybody with
+it can report the check as fine — so it is stored encrypted with the same keyring as
+connection passwords, and shown masked (`https://hc-ping.com/••••90ab`) from then on. With
+**Include a count** on (the default), Healthchecks gets a body like `12 up, 1 down` and Kuma
+the same as its message — counts only, never names, addresses or anything a probe said.
+**Send test ping** tries the address in the box before you save it.
+
+**Healthchecks.io** (the free tier is plenty):
+
+1. Sign up at [healthchecks.io](https://healthchecks.io), **Add Check**, and name it "LabbyTwo".
+2. Set **Period** to your check-in interval (1 minute) and **Grace** to 5 minutes.
+3. Add an integration for how you want to hear — email is built in; SMS, Signal, ntfy,
+   Pushover and Telegram are there too. It must not depend on your house.
+4. Copy the ping URL (`https://hc-ping.com/<uuid>`) into **Settings → Outside alarm**, save,
+   and press **Send test ping**. The check turns green.
+
+A self-hosted Healthchecks works the same with its own `https://hc.example.com/ping/<uuid>`
+address — as long as it runs somewhere other than your house.
+
+**Uptime Kuma**, running on a cloud VM, a friend's server or anywhere off your network:
+
+1. **Add New Monitor → Push**. Kuma shows a push URL like
+   `https://kuma.example.com/api/push/AbCdEf1234?status=up&msg=OK&ping=`.
+2. Set **Heartbeat Interval** to 60 seconds and **Retries** to 3 or so.
+3. Paste the whole URL, query string and all — LabbyTwo sets `status` and `msg` itself.
+
+**Anything else** — Better Stack heartbeats, Cronitor, a cron monitor of your own — gets a
+plain GET on the address you paste. Choose **Any other heartbeat URL** if the guess is wrong.
+
+**Grace periods.** Allow two or three missed check-ins before the alarm: with pings every
+minute, 3–5 minutes. Shorter pages you when the router reboots for an update; much longer and
+you hear about the freezer an hour late. Updating LabbyTwo restarts it, and the first check-in
+waits for the first sweep, so allow for a couple of minutes of that inside the grace.
+
+**Why not report "the internet is down"?** When the line is out, LabbyTwo cannot reach the
+outside service to say so — and whenever it can, the internet is not down. So there is no such
+signal: the missing check-ins *are* the report, and the first ping once the line is back is
+the recovery.
 
 ### What changed, and incidents
 
@@ -1050,6 +1152,92 @@ link is a long random token, rotating it invalidates the old one immediately, an
 token is a plain 404.
 
 ![The public status page](docs/images/public-status.png)
+
+### A status page for the family
+
+The public status page is for people who like numbers. **Settings → Family status page** is
+for the people you live with, who want to know one thing: is Plex broken, or is it the TV?
+
+- **You choose what is on it.** Add the connections people actually ask about, give each the
+  name they use — "Plex", "The internet", "Front door camera" — an emoji, and a group such as
+  *TV & Movies*, *Internet* or *Cameras*. Nothing you have not added appears, and what you
+  have added appears only by the name you gave it.
+- **Four words.** Each one is *Working*, *Having trouble* (checks are failing but it is not
+  yet down), *Down*, or *Under maintenance* (a maintenance window is on, or you silenced that
+  connection, and it is not working), with "since 20 min ago" where that is known.
+  Something that stays up during maintenance still says *Working*.
+- **"Something's broken?"** Anyone on the page can say what is not working — one of the
+  things on it, or "something else" — with an optional short message and name. It lands in
+  **Settings → Family status page**, in **What changed** as a *report*, as "3 reports from
+  the family" at the top of the sidebar, and through your alert channels. Maintenance and a
+  silenced connection hold the notification (you are already on it) and quiet hours hold it
+  like any other non-urgent alert; the report itself is always kept until you dismiss it.
+- **Phone first.** One column, big targets, your theme and dark mode, no script at all. It
+  refreshes itself every minute.
+
+Turning it on creates the link: `https://your-labbytwo/family/<token>`, where the token is
+128 random bits. Optionally, **also open at /family on the home network** lets a tablet on
+the kitchen wall use the short address without the link.
+
+#### What the link gives away, and how to take it back
+
+Anyone holding the link can see the names, emoji, groups and states you put on the page, and
+when each state began — and can send reports. That is all. The page is built from those
+fields alone: no addresses, host names, ports, error messages, metrics, container names or
+versions, and no other connection. The link opens nothing else in LabbyTwo: every other page
+and API still needs you to sign in (if you have set a password), and the page is rendered on
+the server without starting a Blazor session, so there is nothing interactive to reach
+through it. A wrong link, an old link, a switched-off page and a request from outside the
+home network for `/family` all get the same plain 404.
+
+To take the link back, press **New link…** — the old one stops working immediately, and
+you share the new one with whoever should still have it. Turning the page off makes every
+family URL a 404 until you turn it on again.
+
+Things that keep it quiet:
+
+- **Rate limits.** Each address may load the page 60 times a minute (wrong links count too),
+  send 3 reports in 15 minutes and 10 in a day, and everybody together 20 reports an hour.
+  Past that the page says how long to wait. IPv6 visitors are counted by their /64, as the
+  login throttle does.
+- **Text is text.** Messages are cut to 280 characters and names to 40, folded onto one line,
+  and stripped of control and invisible characters. They are never rendered as HTML or
+  Markdown: the page and the owner's list encode them, Discord gets them with Markdown
+  escaped, and `@everyone`-style mentions and Slack's `<!channel>` links are broken up
+  before anything is sent.
+- **Not cached, not indexed, not framed, not passed on.** The page sends `no-store`,
+  `noindex`, a content security policy that allows no script and no framing, and
+  `Referrer-Policy: no-referrer` so the link in the address bar never leaks to another site.
+- **The home-network address is off by default**, and only answers a request from a private
+  address that carries no proxy headers at all. Behind Cloudflare, or a proxy you have not
+  listed in `LABBY_TRUSTED_PROXIES`, every visitor from the internet appears to come from the
+  proxy's private address; refusing anything with `X-Forwarded-For`, `Forwarded`,
+  `X-Real-IP` or a Cloudflare header is what stops that from publishing `/family` to the
+  world. If you trust your proxy, LabbyTwo sees the real visitor's address instead, and a
+  public one is refused.
+
+#### Sharing it through a Cloudflare Tunnel
+
+To let the family open it away from home without exposing the rest of LabbyTwo, publish only
+the family page's paths through the tunnel and answer everything else with a 404 at
+Cloudflare, before it ever reaches your network:
+
+```yaml
+# cloudflared config.yml
+ingress:
+  - hostname: home.example.com
+    path: ^/(family/[A-Za-z0-9_-]+(/report)?|app\.css|family\.css|icon\.svg)$
+    service: http://labbytwo:8080
+  - hostname: home.example.com
+    service: http_status:404
+  - service: http_status:404
+```
+
+The rule deliberately leaves out bare `/family`, so the home-network address can never be
+reached through the tunnel however the proxy settings end up. Set `LABBY_TRUSTED_PROXIES`
+and `LABBY_CLIENT_IP_HEADER=CF-Connecting-IP` as described under
+[Configuration](#configuration), or every visitor shares one rate limit. If you use the
+dashboard-managed tunnel instead of a config file, add a public hostname with the same path.
 
 ### Making it yours
 
