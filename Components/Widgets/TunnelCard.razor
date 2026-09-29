@@ -1,0 +1,101 @@
+@implements IDisposable
+@inject HealthMonitor Health
+
+@* The tunnel at a glance, from whichever side it is watched: Cloudflare's API or the
+   cloudflared container. Both report the same metric names, so this reads either — and
+   everything it shows is from the monitor's last probe, never a request of its own, so a
+   wall of these costs Cloudflare nothing extra. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a Cloudflare tunnel.</p>
+}
+else if (_state is null)
+{
+    <p class="tile-meta mb-0">checking…</p>
+}
+else
+{
+    <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="status-dot @DotClass"></span>
+        <span class="tile-name text-truncate">
+            @(string.IsNullOrWhiteSpace(Context.Connection.Icon) ? "" : Context.Connection.Icon + " ")@Context.Connection.Name
+        </span>
+    </div>
+    <div class="tile-meta text-truncate" title="@_state.Message">@_state.Message</div>
+
+    <div class="d-flex gap-4 mt-2">
+        @if (Metric("connections") is { } connections)
+        {
+            <div>
+                <div class="metric-value">@connections.ToString("0")</div>
+                <div class="tile-meta">connection@(connections == 1 ? "" : "s")</div>
+            </div>
+        }
+        @if (Metric("edge_locations") is { } edges)
+        {
+            <div>
+                <div class="metric-value">@edges.ToString("0")</div>
+                <div class="tile-meta">data centre@(edges == 1 ? "" : "s")</div>
+            </div>
+        }
+        @if (Metric("requests_per_min") is { } requests)
+        {
+            <div>
+                <div class="metric-value">@requests.ToString(requests < 10 ? "0.#" : "0")</div>
+                <div class="tile-meta">requests/min</div>
+            </div>
+        }
+    </div>
+
+    @if (ShowDetails && _state.Details.Count > 0)
+    {
+        @* One row per tunnel from the API, or connector facts from cloudflared. Plain text
+           either way — the provider has already put it into words. *@
+        <dl class="tunnel-details mt-2 mb-0">
+            @foreach (var (label, text) in _state.Details)
+            {
+                <dt class="tile-meta">@label</dt>
+                <dd class="mb-1">@text</dd>
+            }
+        </dl>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private HealthMonitor.ProbeState? _state;
+
+    private bool ShowDetails => Context.Widget.Settings.GetBool("show_details", true);
+
+    private double? Metric(string key) =>
+        _state?.Metrics.TryGetValue(key, out var value) == true ? value : null;
+
+    /// <summary>
+    /// Red for a tunnel that is down even when the API answered fine. The API provider is
+    /// "up" whenever Cloudflare replies — that is what lets it report the tunnel at all —
+    /// but on a card about the tunnel, a green dot beside "1 not healthy" would be wrong.
+    /// </summary>
+    private string DotClass => _state switch
+    {
+        { IsUp: true } when Metric("tunnels_down") > 0 => "status-down",
+        { IsUp: true, ConsecutiveFailures: > 0 } => "status-flapping",
+        { IsUp: true } => "status-up",
+        { IsUp: false } => "status-down",
+        _ => "status-unknown",
+    };
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override void OnParametersSet() =>
+        _state = Context.Connection is null ? null : Health.State(Context.Connection.Id);
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        OnParametersSet();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

@@ -76,6 +76,16 @@
                     Reporting: @string.Join(", ", result.Metrics.Keys.Where(k => k != "latency_ms"))
                 </div>
             }
+            @* The facts a provider found that are not numbers — a version, which data
+               centres a tunnel reaches. Shown here because the Test button is where
+               somebody is checking that what they set up is what they meant. *@
+            @if (result.Details is { Count: > 0 })
+            {
+                @foreach (var (label, text) in result.Details)
+                {
+                    <div class="small">@label: @text</div>
+                }
+            }
         </div>
     }
     </ChildContent>

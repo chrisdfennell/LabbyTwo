@@ -45,7 +45,7 @@ public class ModuleDiscoveryTests
             "uptime-kuma", "speedtest-tracker", "speedtest", "immich", "nextcloud",
             "prometheus", "pbs", "duplicati", "scrutiny", "frigate", "tailscale", "synology",
             "healthchecks", "email", "ifttt", "browser-push",
-            "cloudflare", "opnsense", "shelly", "forecast", "nws", "air-quality",
+            "cloudflare", "cloudflared", "opnsense", "shelly", "forecast", "nws", "air-quality",
             "audiobookshelf", "navidrome",
             "sabnzbd", "transmission", "tdarr", "mylar3", "whisparr", "komga",
             "certificate", "github", "mqtt",
