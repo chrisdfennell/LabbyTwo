@@ -69,6 +69,11 @@ public sealed class RemediationService(
 
     private void OnAlertPass() => _ = Task.Run(async () =>
     {
+        // Not while LabbyTwo cannot see the lab: restarting a container because LabbyTwo's
+        // own DNS stopped answering fixes nothing and breaks something, and judging whether
+        // an earlier fix helped needs eyes too. The next pass after sight returns carries on.
+        if (alerts.Blind)
+            return;
         // Skipped rather than queued when a pass is running: the next sweep is at most a
         // minute away, and nothing here is so urgent that two passes should stack.
         if (!await _pass.WaitAsync(0))

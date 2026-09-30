@@ -191,7 +191,9 @@ public static class IncidentCauses
         CauseLab lab,
         IReadOnlyDictionary<string, CauseForecast>? forecasts = null)
     {
-        var members = incident.Members.OrderBy(m => m.DownAt).ToList();
+        // First spans only: a service failing again later in the incident is still the same
+        // service, and the rules below ask what took each one down in the first place.
+        var members = incident.Members.Where(m => m.Span == 1).OrderBy(m => m.DownAt).ToList();
         var status = members.Where(m => m.Kind == ChangeKinds.Status && m.ConnectionId is not null).ToList();
         var feed = changes.OrderBy(c => c.At).ThenBy(c => c.Id).ToList();
         var causes = new List<ProbableCause>();

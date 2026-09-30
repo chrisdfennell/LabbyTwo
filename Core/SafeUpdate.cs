@@ -29,6 +29,13 @@ public enum SafeUpdateState
 
     /// <summary>Taken out of LabbyTwo's hands — replaced again or removed by somebody else — so nothing more is done.</summary>
     Abandoned,
+
+    /// <summary>
+    /// LabbyTwo could not look at it while its watch was running — the job stalled, Docker
+    /// did not answer, or LabbyTwo could not see the lab — so it was neither passed nor
+    /// failed. Left on the new image; the previous one is kept for a roll-back by hand.
+    /// </summary>
+    NotChecked,
 }
 
 /// <summary>
@@ -81,7 +88,8 @@ public sealed record SafeUpdate(
     /// the update moved it to — one recreated since on something else is not this update's.
     /// </summary>
     public bool CanRollBack =>
-        State is SafeUpdateState.Watching or SafeUpdateState.Passed or SafeUpdateState.Updated or SafeUpdateState.RollbackFailed &&
+        State is SafeUpdateState.Watching or SafeUpdateState.Passed or SafeUpdateState.Updated or SafeUpdateState.RollbackFailed
+            or SafeUpdateState.NotChecked &&
         NewImage.Length > 0 && PreviousImage.Length > 0;
 
     /// <summary>How the state is stored — a word, so the partial index can name the active ones.</summary>
@@ -95,6 +103,7 @@ public sealed record SafeUpdate(
         SafeUpdateState.RolledBack => "rolled-back",
         SafeUpdateState.RollbackFailed => "rollback-failed",
         SafeUpdateState.NotUpdated => "not-updated",
+        SafeUpdateState.NotChecked => "not-checked",
         _ => "abandoned",
     };
 
@@ -108,6 +117,7 @@ public sealed record SafeUpdate(
         "rolled-back" => SafeUpdateState.RolledBack,
         "rollback-failed" => SafeUpdateState.RollbackFailed,
         "not-updated" => SafeUpdateState.NotUpdated,
+        "not-checked" => SafeUpdateState.NotChecked,
         _ => SafeUpdateState.Abandoned,
     };
 
@@ -124,6 +134,7 @@ public sealed record SafeUpdate(
         SafeUpdateState.RollingBack => "rolling back…",
         SafeUpdateState.RolledBack when EndedAt is { } ended && now - ended < TimeSpan.FromDays(7) => $"rolled back: {Reason}",
         SafeUpdateState.RollbackFailed => $"roll-back failed: {Reason}",
+        SafeUpdateState.NotChecked when EndedAt is { } ended && now - ended < TimeSpan.FromHours(24) => "update not checked — see What changed",
         _ => null,
     };
 }
@@ -177,12 +188,38 @@ public sealed record SafeUpdateStep(SafeUpdateState State, string Reason = "", b
 /// alone: that is no longer the update LabbyTwo made, and putting an old image under a
 /// container somebody just recreated by hand would be the wrong thing done confidently.</item>
 /// <item>A watch that sees nothing wrong for its whole length <b>passes</b>.</item>
+/// <item><b>A watch is only judged inside its window</b> — from when the new container was
+/// first seen running to the end of the watch, plus <see cref="Slack"/> for the job's own
+/// minute. Once that is over, nothing seen later can fail it: if the watch was looked at
+/// up to its end it passes, and if it was not — the job stalled, Docker did not answer,
+/// LabbyTwo could not see the lab — it ends as <b>not checked</b> and is left on the new
+/// image. Never a roll-back hours later: that is how two healthy containers were put back
+/// fourteen hours after a ten-minute watch, on the strength of a night of false downs.</item>
+/// <item><b>Nothing waits for ever.</b> Any update still waiting or watching
+/// <see cref="MaxAge"/> after it was asked for ends as not checked.</item>
+/// <item>The watch <b>starts</b> only once the container on the new image has been
+/// started. Watchtower creates it and then starts it; a look in between sees "created",
+/// which is not a failure — and a container still only "created" after the grace is.</item>
 /// </list>
+///
+/// Whether LabbyTwo can see the lab at all is the caller's to check: while it cannot, the
+/// job does not look (see <c>SafeUpdates</c>), which the window rule above turns into
+/// "not checked" rather than a verdict.
 /// </summary>
 public static class SafeUpdateRules
 {
     /// <summary>How long an update may take to happen before it is said not to have.</summary>
     public static readonly TimeSpan WaitLimit = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// How far past the end of its watch an update may still be judged: the job runs every
+    /// minute, so the look that ends a watch lands up to a minute after it — and one more
+    /// for a slow Docker.
+    /// </summary>
+    public static readonly TimeSpan Slack = TimeSpan.FromMinutes(2);
+
+    /// <summary>The most any update may stay in progress, from when it was asked for, on top of the watch's own length.</summary>
+    public static readonly TimeSpan MaxAge = TimeSpan.FromHours(2);
 
     /// <summary>How long after the new container is seen before its connections count against it.</summary>
     public static readonly TimeSpan Grace = TimeSpan.FromMinutes(2);
@@ -195,18 +232,32 @@ public static class SafeUpdateRules
     /// <param name="container">What Docker says now, or null when there is no container by that name.</param>
     /// <param name="connections">The connections that reach it by name.</param>
     /// <param name="trouble">Status and alert changes recorded on those connections since the watch started.</param>
+    /// <param name="lastLook">When the job last looked at this update and got an answer from
+    /// Docker, or null if it has not in this run of LabbyTwo — what tells a watch that was
+    /// looked at to its end from one that nobody was watching.</param>
     public static SafeUpdateStep Next(
         SafeUpdate update,
         WatchedContainer? container,
         IReadOnlyList<WatchedConnection> connections,
         IReadOnlyList<Change> trouble,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        DateTimeOffset? lastLook = null)
     {
+        if (Overdue(update, now, lastLook) is { } overdue)
+            return overdue;
+
         switch (update.State)
         {
             case SafeUpdateState.Waiting:
-                if (container is not null && container.ImageId.Length > 0 && container.ImageId != update.PreviousImage)
+                // On the new image and started. "created" is the moment between Watchtower
+                // creating the new container and starting it, and watching from there would
+                // fail it for being stopped. One that is still only created at the wait
+                // limit is watched all the same, and fails for never having started.
+                if (container is not null && container.ImageId.Length > 0 && container.ImageId != update.PreviousImage &&
+                    (container.Status != "created" || now - update.RequestedAt >= WaitLimit))
                     return new SafeUpdateStep(update.Watch ? SafeUpdateState.Watching : SafeUpdateState.Updated);
+                if (container is not null && container.ImageId.Length > 0 && container.ImageId != update.PreviousImage)
+                    return new SafeUpdateStep(SafeUpdateState.Waiting);
                 if (now - update.RequestedAt < WaitLimit)
                     return new SafeUpdateStep(SafeUpdateState.Waiting);
                 return container is null
@@ -237,7 +288,8 @@ public static class SafeUpdateRules
                 "recreated by something else during the watch, so it is no longer the update LabbyTwo made");
         }
 
-        if (container.Status is "exited" or "dead" or "created")
+        if (container.Status is "exited" or "dead" ||
+            (container.Status == "created" && now - (update.WatchFrom ?? now) >= Grace))
         {
             return Fail(container.ExitCode != 0
                 ? $"it stopped with exit code {container.ExitCode}"
@@ -281,4 +333,41 @@ public static class SafeUpdateRules
     }
 
     private static SafeUpdateStep Fail(string reason) => new(SafeUpdateState.RollingBack, reason, RollBack: true);
+
+    /// <summary>
+    /// The verdict for an update whose time is up however it looks now, or null while it
+    /// may still be judged on what is seen. Needs nothing from Docker, so it is asked even
+    /// when Docker is not answering and LabbyTwo cannot see — which is exactly when an
+    /// update would otherwise be left for a verdict hours late.
+    /// </summary>
+    public static SafeUpdateStep? Overdue(SafeUpdate update, DateTimeOffset now, DateTimeOffset? lastLook)
+    {
+        if (!update.IsActive || update.State == SafeUpdateState.RollingBack)
+            return null;
+
+        if (update is { State: SafeUpdateState.Watching, WatchUntil: { } until } && now > until + Slack)
+        {
+            // Looked at right up to the end with nothing wrong: anything wrong would have
+            // ended it at that look, so it passed, only noticed a little late.
+            if (lastLook is { } looked && looked >= until - Slack)
+                return new SafeUpdateStep(SafeUpdateState.Passed);
+
+            return new SafeUpdateStep(SafeUpdateState.NotChecked,
+                $"LabbyTwo could not check on it through its {(int)update.WatchFor.TotalMinutes}-minute watch" +
+                (lastLook is { } last && last >= update.WatchFrom ? $" (the last look was at {last.ToLocalTime():HH:mm})" : "") +
+                ", so it was neither passed nor rolled back — it is left on the new image, and the previous one is kept " +
+                "for rolling back by hand");
+        }
+
+        // Past the watch's own length, so a long watch is not cut short by this.
+        if (now - update.RequestedAt > MaxAge + update.WatchFor)
+        {
+            return new SafeUpdateStep(SafeUpdateState.NotChecked,
+                $"still {(update.State == SafeUpdateState.Waiting ? "waiting to be updated" : "being watched")} " +
+                $"{(int)(now - update.RequestedAt).TotalHours} hours after the update was asked for, so LabbyTwo stopped " +
+                "waiting — nothing was rolled back");
+        }
+
+        return null;
+    }
 }

@@ -19,6 +19,11 @@ public static class ProbeError
     /// </summary>
     public static string Describe(Exception ex, string? target = null)
     {
+        // Noted for whoever asked for the probe — see Capture. Done here because this is
+        // the one place nearly every provider already hands its exception to, so the
+        // monitor learns what kind of failure it was without reading the sentence back.
+        Note(Classify(ex, target));
+
         var where = string.IsNullOrWhiteSpace(target) ? "" : $" at {target}";
         var root = ex.GetBaseException();
 
@@ -50,6 +55,12 @@ public static class ProbeError
                     "docker-compose.yml — your router's address, or 1.1.1.1.",
                 SocketError.HostNotFound or SocketError.NoData =>
                     $"Could not resolve the host{where}. Use an IP address if this container cannot see your DNS.",
+                // EAI_AGAIN: the resolver did not answer, as opposed to answering "no such
+                // name". It is the container's DNS failing, not the name — and when it
+                // happens to everything at once, it is LabbyTwo that cannot see.
+                SocketError.TryAgain =>
+                    $"DNS lookup failed for now{where}: the resolver did not answer (\"{socket.Message}\"). If every " +
+                    "connection says this at once, it is DNS inside LabbyTwo's container that is failing, not the service.",
                 SocketError.NetworkUnreachable or SocketError.HostUnreachable =>
                     $"No route{where}. If LabbyTwo is in a container, it may not be able to reach that network.",
                 SocketError.TimedOut =>
@@ -204,4 +215,161 @@ public static class ProbeError
         host = host.Trim('[', ']');   // an IPv6 literal in a URL is bracketed
         return host.Length > 0 && !System.Net.IPAddress.TryParse(host, out _);
     }
+
+    // ---- what kind of failure --------------------------------------------------------
+
+    /// <summary>
+    /// What kind of failure an exception is, by its type and error code rather than by its
+    /// words. The distinction the monitor needs is between "that service did not answer"
+    /// and "LabbyTwo could not have seen whether it answered" — a DNS resolver that is not
+    /// replying, a probe the monitor gave up waiting for, the local Docker socket hanging,
+    /// LabbyTwo's own database refusing a write. Many of the second kind at once mean
+    /// LabbyTwo is blind, not that the lab is down (see <see cref="BlindnessRules"/>).
+    /// </summary>
+    /// <param name="target">What was being asked. A Docker socket path is what tells a hung
+    /// daemon on this machine apart from a slow web server somewhere else.</param>
+    public static ProbeFailure Classify(Exception ex, string? target = null)
+    {
+        var root = ex.GetBaseException();
+
+        // SqliteException is one of these; naming the base keeps Core free of the driver.
+        if (root is System.Data.Common.DbException)
+            return ProbeFailure.Database;
+
+        if (ex is OperationCanceledException || root is OperationCanceledException || root is TimeoutException)
+            return IsLocalSocket(target) ? ProbeFailure.DockerSocket : ProbeFailure.Timeout;
+
+        if (root is SocketException socket)
+        {
+            return socket.SocketErrorCode switch
+            {
+                SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain => ProbeFailure.Dns,
+                SocketError.ConnectionRefused => ProbeFailure.Refused,
+                SocketError.NetworkUnreachable or SocketError.HostUnreachable => ProbeFailure.NoRoute,
+                SocketError.TimedOut => IsLocalSocket(target) ? ProbeFailure.DockerSocket : ProbeFailure.Timeout,
+                _ => ProbeFailure.Other,
+            };
+        }
+
+        return ProbeFailure.Other;
+    }
+
+    /// <summary>
+    /// The same question for a message that did not come through <see cref="Describe"/> — a
+    /// plugin that wrote its own sentence from <c>ex.Message</c>, say. Only a fallback: it
+    /// knows the words this class, the monitor and the runtime use for the failures that
+    /// matter here, and calls everything else <see cref="ProbeFailure.Other"/>.
+    /// </summary>
+    public static ProbeFailure ClassifyMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return ProbeFailure.Other;
+
+        bool Has(string text) => message.Contains(text, StringComparison.OrdinalIgnoreCase);
+
+        if (message.StartsWith(AbandonedPrefix, StringComparison.Ordinal))
+            return ProbeFailure.Abandoned;
+        if (Has("database is locked") || Has("SQLite Error"))
+            return ProbeFailure.Database;
+        if (Has("Resource temporarily unavailable") || Has("Temporary failure in name resolution") ||
+            Has("Could not resolve the host") || Has("DNS lookup failed") || Has("Name or service not known") ||
+            Has("No such host is known"))
+            return ProbeFailure.Dns;
+        if (Has("Timed out") && Has(".sock"))
+            return ProbeFailure.DockerSocket;
+        return ProbeFailure.Other;
+    }
+
+    /// <summary>How the monitor's own "gave up waiting" message starts, so it is recognised without guessing.</summary>
+    public const string AbandonedPrefix = "No answer within ";
+
+    /// <summary>A Unix socket or a Windows pipe: something on this machine, which no network can be blamed for.</summary>
+    private static bool IsLocalSocket(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+        var t = target.Trim();
+        return t.StartsWith("unix://", StringComparison.OrdinalIgnoreCase) ||
+               t.StartsWith("npipe:", StringComparison.OrdinalIgnoreCase) ||
+               t.EndsWith(".sock", StringComparison.OrdinalIgnoreCase) ||
+               (t.StartsWith('/') && !t.Contains("://", StringComparison.Ordinal));
+    }
+
+    private static readonly AsyncLocal<FailureCapture?> Current = new();
+
+    /// <summary>
+    /// Starts listening for the kind of failure <see cref="Describe"/> sees on this async
+    /// flow — the probe the monitor is about to make and everything it awaits. Dispose it
+    /// when the probe is done. Providers need no change: they already describe their
+    /// exceptions here, and that is all it takes to be heard.
+    /// </summary>
+    public static FailureCapture Capture()
+    {
+        var capture = new FailureCapture(Current.Value);
+        Current.Value = capture;
+        return capture;
+    }
+
+    private static void Note(ProbeFailure kind)
+    {
+        if (Current.Value is { } capture)
+            capture.Kind = kind;
+    }
+
+    /// <summary>What <see cref="Capture"/> hands back: the last failure described while it was listening.</summary>
+    public sealed class FailureCapture : IDisposable
+    {
+        private readonly FailureCapture? _outer;
+
+        internal FailureCapture(FailureCapture? outer) => _outer = outer;
+
+        /// <summary><see cref="ProbeFailure.None"/> until something is described.</summary>
+        public ProbeFailure Kind { get; internal set; }
+
+        public void Dispose() => Current.Value = _outer;
+    }
+}
+
+/// <summary>
+/// The kinds of failure a probe can end in, as far as telling "it is down" from "LabbyTwo
+/// could not see" goes. Stored nowhere: it is worked out again for every probe.
+/// </summary>
+public enum ProbeFailure
+{
+    /// <summary>Nothing was described: the probe worked, or failed without an exception.</summary>
+    None,
+
+    /// <summary>Anything not below: an HTTP error, a bad password, an answer that made no sense.</summary>
+    Other,
+
+    /// <summary>Nothing answered in time, somewhere on the network.</summary>
+    Timeout,
+
+    Refused,
+
+    NoRoute,
+
+    /// <summary>A name could not be resolved — including EAI_AGAIN, the resolver not answering at all.</summary>
+    Dns,
+
+    /// <summary>The monitor gave up waiting for the probe (see <c>HealthMonitor.ProbeDeadline</c>).</summary>
+    Abandoned,
+
+    /// <summary>The Docker socket on this machine did not answer.</summary>
+    DockerSocket,
+
+    /// <summary>LabbyTwo's own database refused — "database is locked".</summary>
+    Database,
+}
+
+public static class ProbeFailures
+{
+    /// <summary>
+    /// A failure that says more about LabbyTwo's own view than about the service: its DNS,
+    /// its patience, its Docker socket, its database. One of these alone is still reported —
+    /// a single name that does not resolve is a real misconfiguration — but many at once are
+    /// what <see cref="BlindnessRules"/> looks for.
+    /// </summary>
+    public static bool IsBlind(this ProbeFailure failure) =>
+        failure is ProbeFailure.Dns or ProbeFailure.Abandoned or ProbeFailure.DockerSocket or ProbeFailure.Database;
 }

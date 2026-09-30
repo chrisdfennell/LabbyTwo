@@ -131,6 +131,43 @@ public static class ChangeLists
             : $"{when}, back after {Ago.Duration(incident.Duration(now))}";
     }
 
+    /// <summary>How many changes an incident's timeline shows before "Show all".</summary>
+    public const int TimelineShown = 50;
+
+    /// <summary>
+    /// Which changes of a timeline to draw, oldest first, with null where a run of them is
+    /// left out. All of them when there are few or <paramref name="all"/> is asked for;
+    /// otherwise the first and last halves of <see cref="TimelineShown"/> — the start, where
+    /// the cause usually is, and the end, where the fix is — and every change in
+    /// <paramref name="keep"/> wherever it falls, because a probable cause's evidence links
+    /// to its row and a link to a row that was not drawn goes nowhere. The page that drew
+    /// sixteen hours of an incident in one go was twenty-two thousand pixels tall.
+    /// </summary>
+    public static IReadOnlyList<Change?> TimelineRows(IReadOnlyList<Change> timeline, IReadOnlySet<long> keep, bool all)
+    {
+        if (all || timeline.Count <= TimelineShown)
+            return [.. timeline];
+
+        var head = TimelineShown / 2;
+        var tail = TimelineShown - head;
+        var rows = new List<Change?>();
+        var gap = false;
+        for (var i = 0; i < timeline.Count; i++)
+        {
+            if (i < head || i >= timeline.Count - tail || keep.Contains(timeline[i].Id))
+            {
+                rows.Add(timeline[i]);
+                gap = false;
+            }
+            else if (!gap)
+            {
+                rows.Add(null);
+                gap = true;
+            }
+        }
+        return rows;
+    }
+
     /// <summary>A member's own line: "down 12m", "fired, cleared after 4m", "still down".</summary>
     public static string MemberWhen(IncidentMember member, DateTimeOffset now)
     {

@@ -49,6 +49,9 @@ public sealed record MonitorStatus(
     IReadOnlyList<ProbeInFlight> InFlight,
     IReadOnlyList<ProbeTiming> Slowest)
 {
+    /// <summary>Whether LabbyTwo can see the lab, as of the last sweep. Not positional, so a test that builds one without it still does.</summary>
+    public Blindness Blindness { get; init; } = Blindness.Clear;
+
     /// <summary>How long the sweep in progress has been going, or null if none is.</summary>
     public TimeSpan? RunningFor(DateTimeOffset now) => CurrentSweepStarted is { } started ? now - started : null;
 
@@ -114,7 +117,7 @@ public sealed partial class HealthMonitor
                     _restore == RestoreOutcome.Running && _restoreStarted is { } began ? now - began : _restoreDuration,
                     _restoreError,
                     _sweeps, _currentSweep, _lastSweepStarted, _lastSweepFinished, _lastSweepDuration,
-                    _lastSweepProbed, _lastSweepError, inFlight, slowest);
+                    _lastSweepProbed, _lastSweepError, inFlight, slowest) { Blindness = Blindness };
             }
         }
     }
@@ -184,12 +187,14 @@ public sealed partial class HealthMonitor
     /// The probe, with a note of who is being waited on. When a sweep is stuck, "which
     /// one" is the next question, and this answers it without a stack dump.
     /// </summary>
-    private async Task TrackedProbeAsync(Connection connection, CancellationToken ct)
+    private async Task<(Connection Connection, ProbeResult Result, ProbeFailure Failure)> TrackedProbeAsync(
+        Connection connection, CancellationToken ct)
     {
         _inFlight[connection.Id] = DateTimeOffset.Now;
         try
         {
-            await ProbeAndRecordAsync(connection, ct);
+            var (result, failure) = await ProbeClassifiedAsync(connection, ct);
+            return (connection, result, failure);
         }
         finally
         {

@@ -53,9 +53,13 @@
     <summary class="tile-meta">How incidents are grouped</summary>
     <ul class="tile-meta mb-0 mt-2">
         <li>A service going down, or an alert rule firing, starts an incident — unless it happens within
-            @IncidentRules.JoinWindow.TotalMinutes minutes of the last thing that happened in another one, in which case it joins that.
+            @IncidentRules.JoinWindow.TotalMinutes minutes of the last failure in another one, and no more than
+            @IncidentRules.MaxGrowth.TotalHours hours after that one started, in which case it joins that.
             So a NAS and everything stored on it going down inside a few minutes is one incident, and something that comes
-            back and falls over again soon after reopens the same one.</li>
+            back and falls over again soon after reopens the same one — listed twice, with each time's own length.
+            Something failing hours later is a new incident.</li>
+        <li>Nothing is added while LabbyTwo itself cannot see the lab — its DNS or Docker not answering — because what it
+            would record then is its own trouble, not your services'.</li>
         <li>An incident ends when everything in it has come back. Its length is from the first failure to the last recovery.</li>
         <li>The timeline shows every change recorded from @IncidentRules.ContextBefore.TotalMinutes minutes before it started
             until @IncidentRules.ContextAfter.TotalMinutes minutes after it ended.</li>
@@ -118,7 +122,7 @@ else
                                 <li>
                                     <span class="status-dot @(member.IsRecovered ? "status-up" : "status-down")" aria-hidden="true"></span>
                                     <span>@member.Name</span>
-                                    <span>— @(member.Kind == ChangeKinds.Alert ? "fired" : "went down") at @member.DownAt.ToLocalTime().ToString("HH:mm"), @ChangeLists.MemberWhen(member, now)</span>
+                                    <span>— @(member.Kind == ChangeKinds.Alert ? "fired" : "went down")@(member.Span > 1 ? " again" : "") at @member.DownAt.ToLocalTime().ToString("HH:mm"), @ChangeLists.MemberWhen(member, now)</span>
                                 </li>
                             }
                         </ul>
@@ -191,9 +195,20 @@ else
                         }
                         else
                         {
+                            var evidenceIds = _causes.GetValueOrDefault(incident.Id)?.SelectMany(c => c.Evidence).Select(e => e.Id).ToHashSet() ?? [];
+                            var rows = ChangeLists.TimelineRows(timeline, evidenceIds, _showAll.Contains(incident.Id));
                             <ol class="change-list">
-                                @foreach (var change in timeline)
+                                @foreach (var (row, index) in rows.Select((r, i) => (r, i)))
                                 {
+                                    if (row is not { } change)
+                                    {
+                                        <li class="change-row incident-gap" @key="@($"gap-{index}")">
+                                            <button type="button" class="btn btn-sm btn-link p-0" @onclick="() => _showAll.Add(incident.Id)">
+                                                … @(timeline.Count - rows.Count(r => r is not null)) more changes — show all @timeline.Count
+                                            </button>
+                                        </li>
+                                        continue;
+                                    }
                                     var where = ChangeLists.Where(change, _connections);
                                     var offset = change.At - incident.StartedAt;
                                     var evidence = _causes.GetValueOrDefault(incident.Id)?.Any(c => c.Evidence.Any(e => e.Id == change.Id)) == true;
@@ -224,6 +239,13 @@ else
                                     </li>
                                 }
                             </ol>
+                            @if (_truncated.Contains(incident.Id))
+                            {
+                                <div class="tile-meta mt-1">
+                                    More changed in this window than one timeline reads — the start and the newest
+                                    @TimelineLimit are here. <a href="changes">Everything that changed</a> has the rest.
+                                </div>
+                            }
                         }
                     </div>
                 }
@@ -242,6 +264,12 @@ else
     private IReadOnlyList<Connection> _connections = [];
     private readonly HashSet<long> _expanded = [];
     private readonly Dictionary<long, IReadOnlyList<Change>> _timelines = [];
+
+    /// <summary>Incidents whose whole timeline was asked for with "show all".</summary>
+    private readonly HashSet<long> _showAll = [];
+
+    /// <summary>Incidents with more changes in their window than one timeline reads.</summary>
+    private readonly HashSet<long> _truncated = [];
     private IReadOnlyDictionary<long, IReadOnlyList<ProbableCause>> _causes = new Dictionary<long, IReadOnlyList<ProbableCause>>();
     private IReadOnlyDictionary<long, WriteUpLink> _writeUps = new Dictionary<long, WriteUpLink>();
     private long? _writing;
@@ -363,18 +391,33 @@ else
     /// </summary>
     private void LoadTimeline(Incident incident)
     {
-        var query = new ChangeQuery(IncidentRules.TimelineFrom(incident), IncidentRules.TimelineTo(incident, DateTimeOffset.Now),
-            Limit: TimelineLimit);
+        var from = IncidentRules.TimelineFrom(incident);
+        var query = new ChangeQuery(from, IncidentRules.TimelineTo(incident, DateTimeOffset.Now), Limit: TimelineLimit);
         _ = Task.Run(async () =>
         {
             try
             {
-                var changes = await Offload.Run(c => Changes.QueryAsync(query, c));
+                var (changes, truncated) = await Offload.Run(async c =>
+                {
+                    // Newest first, so a window with more than the limit loses its oldest —
+                    // which is the start, the part a timeline is for. When that happens the
+                    // start is read on its own too: the same index, a narrower window.
+                    var newest = await Changes.QueryAsync(query, c);
+                    if (newest.Count < TimelineLimit)
+                        return (newest, false);
+                    var start = await Changes.QueryAsync(
+                        new ChangeQuery(from, incident.StartedAt + IncidentRules.JoinWindow, Limit: ChangeLists.TimelineShown), c);
+                    return ((IReadOnlyList<Change>)[.. newest.Concat(start).DistinctBy(x => x.Id).OrderByDescending(x => x.At).ThenByDescending(x => x.Id)], true);
+                });
                 if (_disposed)
                     return;
                 await InvokeAsync(() =>
                 {
                     _timelines[incident.Id] = [.. changes.Reverse()];
+                    if (truncated)
+                        _truncated.Add(incident.Id);
+                    else
+                        _truncated.Remove(incident.Id);
                     StateHasChanged();
                 });
             }

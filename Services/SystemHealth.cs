@@ -273,6 +273,12 @@ public sealed class SystemHealth(
                 "The monitor has stopped."));
         }
 
+        // First among the monitor's findings when it applies, because it changes how every
+        // other red thing on the dashboard should be read.
+        if (m.Blindness is { Impaired: true } blind)
+            findings.Add(new(Level.Bad, "Monitor",
+                $"{blind.Headline} It has lasted {Seconds(blind.For(now))}. {blind.Detail}"));
+
         if (m.LastSweepError is { } sweepError)
             findings.Add(new(Level.Warn, "Monitor", $"The last sweep failed: {sweepError}"));
 

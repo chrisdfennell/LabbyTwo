@@ -301,6 +301,7 @@
                     {
                         <div class="alert alert-info py-2 mb-2">@note</div>
                     }
+                    <UpdateHelperNotice Endpoint="@_helperEndpoint" />
 
                     <button class="btn btn-sm btn-warning" disabled="@_updating" @onclick="() => _confirmUpdate = true">
                         @(_updating ? "Starting…" : "Update now")
@@ -1124,7 +1125,14 @@ docker compose restart labbytwo</code></pre>
         // Local only: which container this is and whether the socket is there. Nothing
         // leaves the machine until the user asks for a check.
         _self = await Updater.StatusAsync();
+
+        // Where a one-shot update helper would be, so one left running is shown here too.
+        // Only when LabbyTwo starts its own: a Watchtower reached by its API is not ours to judge.
+        if (_self?.Mode == SelfUpdater.UpdateMode.DockerApi)
+            _helperEndpoint = await Updater.HelperEndpointAsync();
     }
+
+    private string? _helperEndpoint;
 
     private bool _checkingContainers, _hasDocker;
     private int _containerSchedule;

@@ -72,7 +72,7 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
         foreach (var (m, index) in incident.Members.Select((m, i) => (m, i)))
         {
             seq.Value = index;
-            key.Value = m.Key;
+            key.Value = StoredKey(m);
             kind.Value = m.Kind;
             connectionId.Value = (object?)m.ConnectionId ?? DBNull.Value;
             name.Value = m.Name;
@@ -200,13 +200,14 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
             {
                 while (await reader.ReadAsync(ct))
                 {
+                    var (memberKey, span) = ParseKey(reader.GetString(0));
                     memberList.Add(new IncidentMember(
-                        reader.GetString(0),
+                        memberKey,
                         reader.GetString(1),
                         reader.IsDBNull(2) ? null : reader.GetString(2),
                         reader.GetString(3),
                         Time(reader.GetInt64(4)),
-                        reader.IsDBNull(5) ? null : Time(reader.GetInt64(5))));
+                        reader.IsDBNull(5) ? null : Time(reader.GetInt64(5))) { Span = span });
                 }
             }
 
@@ -214,6 +215,28 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
                 Time(row.Last), row.Maintenance, memberList) { WriteUpNoteId = row.WriteUp });
         }
         return list;
+    }
+
+    /// <summary>What a member row's key column holds.</summary>
+    private const string SpanMark = "#span";
+
+    /// <summary>
+    /// The key a member is stored under. The first span of anything is stored under its own
+    /// key, exactly as before spans existed, so every incident already recorded reads back
+    /// unchanged; a later span gets its number on the end, which keeps the table's primary
+    /// key — one row per incident and key — without a migration.
+    /// </summary>
+    public static string StoredKey(IncidentMember member) =>
+        member.Span > 1 ? $"{member.Key}{SpanMark}{member.Span}" : member.Key;
+
+    /// <summary>The member key and span a stored key stands for.</summary>
+    public static (string Key, int Span) ParseKey(string stored)
+    {
+        var at = stored.LastIndexOf(SpanMark, StringComparison.Ordinal);
+        return at > 0 && int.TryParse(stored.AsSpan(at + SpanMark.Length), System.Globalization.NumberStyles.None,
+                   System.Globalization.CultureInfo.InvariantCulture, out var span) && span > 1
+            ? (stored[..at], span)
+            : (stored, 1);
     }
 
     private static DateTimeOffset Time(long unixSeconds) => DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToLocalTime();

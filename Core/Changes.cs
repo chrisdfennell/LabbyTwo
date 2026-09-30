@@ -79,6 +79,12 @@ public static class ChangeKinds
     /// <summary>Something LabbyTwo did by itself to fix an alert — see <see cref="LabbyTwo.Core.Remediation"/>.</summary>
     public const string Remediation = "remediation";
 
+    /// <summary>
+    /// LabbyTwo itself losing and regaining sight of the lab (see <see cref="BlindnessRules"/>).
+    /// On no connection, so it never becomes part of an incident — it explains them.
+    /// </summary>
+    public const string Monitor = "monitor";
+
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
     public static readonly IReadOnlyList<(string Key, string Label)> All =
     [
@@ -92,6 +98,7 @@ public static class ChangeKinds
         (Report, "Reports from the family"),
         (Remediation, "Self-healing"),
         (Backup, "Backups and restore tests"),
+        (Monitor, "LabbyTwo losing sight of the lab"),
     ];
 
     /// <summary>
@@ -114,6 +121,7 @@ public static class ChangeKinds
             "report" or "reports" or "family" => Report,
             "remediation" or "remediations" or "self-healing" or "selfhealing" or "healing" or "fixes" => Remediation,
             "backup" or "backups" or "restore" or "restores" => Backup,
+            "monitor" or "monitoring" or "blind" or "sight" => Monitor,
             _ => null,
         };
     }
