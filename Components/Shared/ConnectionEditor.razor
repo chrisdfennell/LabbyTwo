@@ -66,6 +66,22 @@
             </div>
         </div>
 
+        @* Where the fix is written down. Offered beside this connection on the phone view
+           whenever it is down or alerting, which is exactly when somebody needs the note
+           and is least likely to remember which tab it is on. *@
+        <div class="mb-3">
+            <label class="form-label" for="conn-runbook">Runbook note</label>
+            <input id="conn-runbook" class="form-control" placeholder="t/runbooks#note-…" @bind="_runbook" @bind:event="oninput" />
+            @if (_runbook.Trim().Length > 0 && PhoneView.RunbookLink(_runbook) is null)
+            {
+                <div class="form-text text-danger">Only a link to a page in LabbyTwo — a note's link from its tab, like t/runbooks#note-abc123.</div>
+            }
+            else
+            {
+                <div class="form-text">Optional. A link to the note that says how to fix this, shown beside it on the phone view when it breaks.</div>
+            }
+        </div>
+
         @* Self-healing, for this connection going down. Read once the editor opens, saved
            with the connection, so Cancel leaves it as it was. *@
         @if (_fixLoaded)
@@ -130,6 +146,7 @@
     private bool _enabled = true;
     private bool _alerts = true;
     private string? _dependsOn;
+    private string _runbook = "";
     private IReadOnlyList<Connection> _candidates = [];
     private SettingsBag _settings = new();
     private ProbeResult? _result;
@@ -147,6 +164,7 @@
         _alerts = Draft.AlertsEnabled;
         _dependsOn = Draft.DependsOn;
         _settings = Draft.Settings.Clone();
+        _runbook = _settings.Get(PhoneView.RunbookKey);
     }
 
     protected override async Task OnInitializedAsync()
@@ -173,8 +191,25 @@
         Enabled = _enabled,
         AlertsEnabled = _alerts,
         DependsOn = _dependsOn,
-        Settings = _settings,
+        Settings = WithRunbook(_settings),
     };
+
+    /// <summary>
+    /// The settings with the runbook link as it will be followed — cut down to a path inside
+    /// LabbyTwo, or left out when it is empty or is not one. Only for monitored things: an
+    /// alert channel has no runbook, and its settings are left exactly as they were.
+    /// </summary>
+    private SettingsBag WithRunbook(SettingsBag settings)
+    {
+        if (IsAlertChannel)
+            return settings;
+        var bag = settings.Clone();
+        if (PhoneView.RunbookLink(_runbook) is { } link)
+            bag[PhoneView.RunbookKey] = link;
+        else
+            bag.Remove(PhoneView.RunbookKey);
+        return bag;
+    }
 
     private async Task SendTestAsync()
     {

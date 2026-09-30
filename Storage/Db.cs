@@ -162,8 +162,19 @@ public sealed class Db
         DefaultTimeout = 10,
     }.ToString();
 
+    private long _opens;
+
+    /// <summary>
+    /// How many connections have been opened since this started. A plain counter, for the
+    /// tests that promise a page is drawn from memory alone: open the page, and this must
+    /// not have moved. Cheaper and blunter than the query log, which is the point — any
+    /// read at all counts, however quick.
+    /// </summary>
+    public long Opens => Interlocked.Read(ref _opens);
+
     public async Task<SqliteConnection> OpenAsync(CancellationToken ct = default)
     {
+        Interlocked.Increment(ref _opens);
         await EnsureSchemaAsync(ct);
         var connection = new SqliteConnection(ConnectionString);
         await connection.OpenAsync(ct);

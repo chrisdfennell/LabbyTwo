@@ -1,0 +1,720 @@
+@page "/m"
+@layout PhoneLayout
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ConfigStore Config
+@inject AppSettingsStore AppSettings
+@inject HealthMonitor Health
+@inject MetricAlertService Evaluator
+@inject AlertRuleStore Rules
+@inject AlertService Alerts
+@inject Registry Registry
+@inject DisplayUnits DisplayUnits
+@inject IncidentTracker Tracker
+@inject ProbableCauses Causes
+@inject BackupProof Backups
+@inject FamilyReportStore FamilyReports
+@inject RemediationStore Remediations
+@inject IRemediationActions Fixes
+@inject ActionRunner Runner
+@inject Offload Offload
+
+@* The phone view: what needs you, and the fix one tap away.
+
+   Built for the moment somebody gets a notification on the bus and opens LabbyTwo on a
+   phone. The dashboard answers "how is everything"; this answers "what is broken, why, for
+   how long, and what do I press" — and nothing else until that list is empty. Everything
+   healthy is folded away under one line at the bottom.
+
+   Drawn from memory. The monitor's states, the evaluator's breaches, the incidents the
+   tracker holds, the backups as last judged and the configuration caches are all already
+   in memory, and the page reads nothing else while it draws — the dashboard got slow in
+   1.10.0 partly because a layout waited on the database on every page, and a page opened
+   on a phone over a weak signal is the last one that should. The few things that may not
+   be in memory yet after a restart (the open incidents, the family reports, the backups
+   before their first judgement) are fetched once in the background and drawn when they
+   land; the probable causes of an open incident are worked out only when the set of open
+   incidents changes.
+
+   Kept current by the same events every card listens to, and redrawn at most every couple
+   of seconds however many arrive: a sweep, an alert pass and a feed write land together,
+   and one redraw of this list is all any of them needs. *@
+
+<PageTitle>@(_model.AllFine ? "All fine" : _model.Headline) · LabbyTwo</PageTitle>
+
+<div class="phone">
+    <header class="phone-top">
+        <span class="phone-brand"><span class="nav-brand-mark" aria-hidden="true">◆</span> @_brand</span>
+        <a class="phone-top-link" href="" title="The full dashboard">Dashboard</a>
+    </header>
+
+    <section class="phone-status @(_model.AllFine ? "is-fine" : HasRed ? "is-red" : "is-amber")" role="status" aria-live="polite">
+        <span class="status-dot @(_model.AllFine ? "status-up" : HasRed ? "status-down" : "status-unknown")" aria-hidden="true"></span>
+        <strong class="phone-headline">@_model.Headline</strong>
+    </section>
+
+    @if (_blind is { Impaired: true } blind)
+    {
+        <section class="phone-banner is-blind" role="status">
+            <strong>LabbyTwo can't see the lab right now</strong>
+            <span class="phone-why">@(blind.Reason.Length > 0 ? char.ToUpperInvariant(blind.Reason[0]) + blind.Reason[1..] : "Its checks are failing") — this is not your services. For @Ago.Duration(blind.For(DateTimeOffset.Now)) so far.</span>
+            <details class="phone-more">
+                <summary>What that means</summary>
+                <p class="phone-why mb-0">@blind.Detail</p>
+            </details>
+            <a class="btn btn-outline-secondary phone-btn" href="health">LabbyTwo's health</a>
+        </section>
+    }
+
+    <section class="phone-banner @(_maintenance.On ? "is-maintenance" : "is-quiet")">
+        @if (_maintenance.On)
+        {
+            <strong>Alerts are silenced</strong>
+            <span class="phone-why">
+                @if (_maintenance.Until is { } until)
+                {
+                    @($"Back on at {until.ToLocalTime():HH:mm} — {Ago.Until(until, DateTimeOffset.Now)}.")
+                }
+                else
+                {
+                    @("Until you turn them back on.")
+                }
+            </span>
+            <button type="button" class="btn btn-outline-secondary phone-btn" disabled="@(_busy == MaintenanceKey)" @onclick="EndMaintenanceAsync">End maintenance</button>
+        }
+        else
+        {
+            <span class="phone-why">Working on something? Hold every alert while you do.</span>
+            <button type="button" class="btn btn-outline-secondary phone-btn" disabled="@(_busy == MaintenanceKey)" @onclick="StartMaintenanceAsync">Maintenance for 1 h</button>
+        }
+    </section>
+
+    @if (_pins.Count > 0)
+    {
+        <section class="phone-pins" aria-label="Quick actions">
+            @foreach (var pin in _pins)
+            {
+                <div class="phone-pin" @key="pin.Stored">
+                    @if (PinConnection(pin) is not { } target)
+                    {
+                        <span class="phone-why">@(pin.Label.Length > 0 ? pin.Label : pin.Target): its connection has been deleted.</span>
+                    }
+                    else if (pin.Kind == PhonePinKind.Action)
+                    {
+                        <ProviderActions Connection="target" Only="@pin.Target" Label="@PinLabel(pin, target)" />
+                    }
+                    else
+                    {
+                        var key = PinKey(pin);
+                        <button type="button" class="btn btn-outline-secondary phone-btn" disabled="@(_busy is not null)"
+                                @onclick="() => AskRestart(key, pin.Target, target, allowProtected: false)">
+                            @(_busy == key ? "Working…" : PinLabel(pin, target))
+                        </button>
+                        @if (_results.GetValueOrDefault(key) is { } said)
+                        {
+                            <div class="phone-result @(said.Ok ? "is-ok" : "is-failed")">@said.Message</div>
+                        }
+                    }
+                </div>
+            }
+        </section>
+    }
+
+    <section class="phone-list" aria-label="Needs attention">
+        @if (_model.Rows.Count == 0)
+        {
+            <p class="phone-empty">
+                @(_model.Monitored == 0 ? "Nothing is monitored yet. Add connections from the full dashboard." : "Nothing needs you.")
+            </p>
+        }
+        @foreach (var row in _model.Rows)
+        {
+            <article class="phone-row @(row.Red ? "is-red" : "is-amber")" @key="row.Key">
+                <div class="phone-row-head">
+                    <span class="status-dot @(row.Red ? "status-down" : "status-warn")" aria-hidden="true"></span>
+                    <strong class="phone-row-title">@row.Title</strong>
+                    @if (row.For is { } lasted)
+                    {
+                        <span class="phone-for">@lasted</span>
+                    }
+                </div>
+                <p class="phone-why">@row.Why</p>
+                @if (row.Probably is { } probably)
+                {
+                    <p class="phone-why phone-probably">Probably: @probably</p>
+                }
+                @if (row.SilencedUntil is { } quietUntil)
+                {
+                    <p class="phone-why">Alerts held until @quietUntil.ToLocalTime().ToString("HH:mm").</p>
+                }
+                @if (row.Acknowledged)
+                {
+                    <p class="phone-why">You're on it — no more escalations for this one.</p>
+                }
+
+                <div class="phone-actions">
+                    @if (row.Restart is { } fix && FixTarget(fix) is { } docker)
+                    {
+                        <button type="button" class="btn btn-outline-danger phone-btn" disabled="@(_busy is not null)"
+                                @onclick="() => AskRestart(row.Key, fix.Container, docker, fix.AllowProtected)">
+                            @(_busy == row.Key ? "Working…" : $"Restart {fix.Container}")
+                        </button>
+                    }
+                    @if (row.Kind is PhoneRowKind.Down or PhoneRowKind.Alert && row.Connection is { } own)
+                    {
+                        <ProviderActions Connection="own" />
+                    }
+                    @if (row.Runbook is { } runbook)
+                    {
+                        <a class="btn btn-outline-secondary phone-btn" href="@runbook">Runbook</a>
+                    }
+                    @if (row.Kind is PhoneRowKind.Down or PhoneRowKind.Alert && row.Connection is { } quiet)
+                    {
+                        @if (row.SilencedUntil is null)
+                        {
+                            <button type="button" class="btn btn-outline-secondary phone-btn" disabled="@(_busy is not null)"
+                                    @onclick="() => SilenceAsync(row.Key, quiet, TimeSpan.FromHours(1))">Silence 1 h</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn btn-outline-secondary phone-btn" disabled="@(_busy is not null)"
+                                    @onclick="() => SilenceAsync(row.Key, quiet, null)">Unsilence</button>
+                        }
+                    }
+                    @if (row.AlertKey is { } alertKey && !row.Acknowledged)
+                    {
+                        <button type="button" class="btn btn-outline-secondary phone-btn" @onclick="() => Acknowledge(row.Key, alertKey)">I'm on it</button>
+                    }
+                    @if (row.ReportId is { } reportId)
+                    {
+                        <button type="button" class="btn btn-outline-secondary phone-btn" disabled="@(_busy is not null)"
+                                @onclick="() => DismissAsync(row.Key, reportId)">Dismiss</button>
+                    }
+                    @if (row.Link is { } link)
+                    {
+                        <a class="btn btn-outline-secondary phone-btn" href="@link">@row.LinkText</a>
+                    }
+                </div>
+                @if (_results.GetValueOrDefault(row.Key) is { } result)
+                {
+                    <div class="phone-result @(result.Ok ? "is-ok" : "is-failed")">@result.Message</div>
+                }
+            </article>
+        }
+    </section>
+
+    @if (_model.Groups.Count > 0)
+    {
+        <details class="phone-rest">
+            <summary>Everything else <span class="phone-count">@_model.Monitored</span></summary>
+            @foreach (var group in _model.Groups)
+            {
+                <div class="phone-group" @key="group.Title">
+                    <div class="phone-group-title">
+                        @if (group.Icon.Length > 0)
+                        {
+                            <span aria-hidden="true">@group.Icon</span>
+                        }
+                        @group.Title
+                        @if (group.Down > 0)
+                        {
+                            <span class="phone-count is-red">@group.Down down</span>
+                        }
+                    </div>
+                    <ul class="phone-dots">
+                        @foreach (var dot in group.Items)
+                        {
+                            <li @key="dot.Connection.Id">
+                                <span class="status-dot status-@dot.State" aria-hidden="true"></span>
+                                <span class="phone-dot-name">@dot.Connection.Name</span>
+                                <span class="phone-dot-state">@dot.Text</span>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            }
+        </details>
+    }
+
+    <details class="phone-rest phone-setup">
+        <summary>Set up this page</summary>
+
+        <div class="phone-setup-body">
+            <p class="phone-why">Pin the things you do from your phone — restart Plex, wake the PC — to the top of this page.</p>
+            @foreach (var pin in _pins)
+            {
+                <div class="phone-setup-pin" @key="pin.Stored">
+                    <span>@(PinConnection(pin) is { } c ? PinLabel(pin, c) : pin.Target)</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="@($"Unpin {pin.Target}")" @onclick="() => UnpinAsync(pin)">Unpin</button>
+                </div>
+            }
+
+            <label class="form-label" for="phone-pin-connection">Pin an action from</label>
+            <select id="phone-pin-connection" class="form-select mb-2" value="@_pinConnection" @onchange="PickConnection">
+                <option value="">Choose a connection…</option>
+                @foreach (var connection in _pinnable)
+                {
+                    <option value="@connection.Id">@connection.Name</option>
+                }
+            </select>
+            @if (PickedConnection is { } picked)
+            {
+                @if (picked.Provider == DockerProvider)
+                {
+                    <label class="form-label" for="phone-pin-container">Container to restart</label>
+                    <input id="phone-pin-container" class="form-control mb-2" placeholder="plex" @bind="_pinTarget" @bind:event="oninput" />
+                }
+                else
+                {
+                    <label class="form-label" for="phone-pin-action">Action</label>
+                    <select id="phone-pin-action" class="form-select mb-2" @bind="_pinTarget">
+                        <option value="">Choose an action…</option>
+                        @foreach (var action in Runner.ActionsFor(picked))
+                        {
+                            <option value="@action.Id">@action.Label</option>
+                        }
+                    </select>
+                }
+                <label class="form-label" for="phone-pin-label">Button says (optional)</label>
+                <input id="phone-pin-label" class="form-control mb-2" placeholder="@($"{picked.Name}: …")" @bind="_pinLabel" @bind:event="oninput" />
+                <button type="button" class="btn btn-primary phone-btn" disabled="@(_pinTarget.Trim().Length == 0)" @onclick="PinAsync">Pin it</button>
+            }
+
+            <div class="form-check form-switch mt-3">
+                <input class="form-check-input" type="checkbox" role="switch" id="phone-start" checked="@_opensHere" @onchange="SetStartAsync" />
+                <label class="form-check-label" for="phone-start">
+                    Open the installed app on this page
+                    <span class="form-text d-block">For LabbyTwo added to a phone's home screen. Phones read this when the app is installed, so add it again after changing it.</span>
+                </label>
+            </div>
+        </div>
+    </details>
+</div>
+
+@if (_confirm is { } ask)
+{
+    <ConfirmDialog Title="@($"Restart {ask.Container}?")"
+                   Message="@($"This restarts the {ask.Container} container on {ask.Docker.Name}. Anything using it drops for the few seconds it takes.")"
+                   ConfirmText="Restart"
+                   OnConfirm="RestartAsync"
+                   OnCancel="() => _confirm = null" />
+}
+
+@code {
+    /// <summary>The Docker provider's type, whose connections pin a container rather than an action.</summary>
+    private const string DockerProvider = "docker";
+
+    private const string MaintenanceKey = "maintenance";
+
+    /// <summary>The least time between two redraws caused by events. A sweep and the alert pass after it are one redraw.</summary>
+    private static readonly TimeSpan RedrawGap = TimeSpan.FromSeconds(2);
+
+    private PhoneModel _model = new("Checking…", false, [], [], 0);
+    private IReadOnlyList<Connection> _connections = [];
+    private IReadOnlyList<Tab> _tabs = [];
+    private IReadOnlyList<Widget> _widgets = [];
+    private IReadOnlyList<AlertRule> _rules = [];
+    private SettingsBag _settings = new();
+    private Maintenance _maintenance = Maintenance.Off;
+    private Blindness? _blind;
+    private string _brand = Appearance.Default.BrandName;
+    private IReadOnlyList<PhonePin> _pins = [];
+    private IReadOnlyList<Connection> _pinnable = [];
+    private bool _opensHere;
+
+    private IReadOnlyList<Incident>? _incidents;
+    private IReadOnlyDictionary<long, IReadOnlyList<ProbableCause>> _causes = new Dictionary<long, IReadOnlyList<ProbableCause>>();
+    private string _causesFor = "";
+    private IReadOnlyList<FamilyReport>? _reports;
+
+    private BackgroundLoad _incidentLoad = default!;
+    private BackgroundLoad _causeLoad = default!;
+    private BackgroundLoad _reportLoad = default!;
+    private BackgroundLoad _backupLoad = default!;
+    private BackgroundLoad _fixLoad = default!;
+
+    private string? _busy;
+    private readonly Dictionary<string, ActionResult> _results = [];
+    private RestartAsk? _confirm;
+
+    private string _pinConnection = "";
+    private string _pinTarget = "";
+    private string _pinLabel = "";
+
+    /// <summary>A container restart waiting for its "are you sure".</summary>
+    private sealed record RestartAsk(string Key, string Container, Connection Docker, bool AllowProtected);
+
+    private bool HasRed => _model.Rows.Any(r => r.Red);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var interactive = RendererInfo.IsInteractive;
+        _incidentLoad = Offload.Loader(InvokeAsync, Redraw, interactive);
+        _causeLoad = Offload.Loader(InvokeAsync, Redraw, interactive);
+        _reportLoad = Offload.Loader(InvokeAsync, Redraw, interactive);
+        _backupLoad = Offload.Loader(InvokeAsync, Redraw, interactive);
+        _fixLoad = Offload.Loader(InvokeAsync, Redraw, interactive);
+
+        // Every one of these is a cache the rest of the app keeps warm: the monitor reads the
+        // connections every sweep, the evaluator the rules, and the layout the settings.
+        await LoadCachedAsync();
+
+        _incidents = Tracker.Open;
+        if (_incidents is null)
+            _ = _incidentLoad.Load("open", ct => Offload.Run(c => Tracker.OpenAsync(c), ct), list => _incidents = list);
+        if (Backups.Latest is null)
+            _ = _backupLoad.Load("rows", ct => Offload.Run(c => Backups.RowsAsync(DateTimeOffset.Now, c), ct), _ => { });
+        if (Remediations.Current.Count == 0)
+            _ = _fixLoad.Load("fixes", ct => Offload.Run(c => Remediations.AllAsync(c), ct), _ => { });
+        LoadReports(refresh: false);
+
+        Rebuild();
+
+        Health.Updated += Poke;
+        Evaluator.Updated += Poke;
+        Alerts.Acknowledged += Poke;
+        Backups.Judged += Poke;
+        DisplayUnits.Changed += Poke;
+        Remediations.Changed += Poke;
+        Tracker.OpenChanged += Poke;
+        FamilyReports.Changed += OnReportsChanged;
+        Config.Changed += OnCachesChanged;
+        AppSettings.Changed += OnCachesChanged;
+        Rules.Changed += OnCachesChanged;
+    }
+
+    private async Task LoadCachedAsync()
+    {
+        _connections = await Config.ConnectionsAsync();
+        _tabs = await Config.TabsAsync();
+        _widgets = await Config.WidgetsAsync();
+        _rules = await Rules.AllAsync();
+        _settings = await AppSettings.AllAsync();
+        _brand = _settings.Get(Appearance.BrandKey, Appearance.Default.BrandName);
+        _pins = PhonePin.ParseAll(_settings.Get(PhoneView.PinsKey));
+        _opensHere = PhoneView.OpensOnPhone(_settings);
+        _pinnable =
+        [
+            .. _connections.Where(c => c.Enabled && Registry.Provider(c.Provider) is not IAlertChannel
+                                       && (c.Provider == DockerProvider || Runner.ActionsFor(c).Count > 0)),
+        ];
+    }
+
+    /// <summary>
+    /// The model, from what is in memory now. Cheap — a pass over a few dozen connections —
+    /// but done once per redraw rather than in the markup, so the markup only reads it.
+    /// </summary>
+    private void Rebuild()
+    {
+        var now = DateTimeOffset.Now;
+        _maintenance = Maintenance.From(_settings, now);
+        _blind = Health.Blindness;
+
+        var incidents = Tracker.Open ?? _incidents;
+        _incidents = incidents;
+        ExplainIfChanged(incidents);
+
+        var lines = MarkdownLists.Alerts(Evaluator.Firing, _rules, _connections, Registry, null, DisplayUnits.Current,
+            (ruleId, connectionId) => Alerts.MutedBy(ruleId, connectionId, now)?.Name);
+
+        _model = PhoneBoard.Build(new PhoneInputs(
+            _connections, _tabs, _widgets,
+            Health.IsMonitored,
+            Health.State,
+            lines,
+            Backups.Latest,
+            incidents,
+            _causes,
+            _reports,
+            Remediations.Current,
+            key => Alerts.Delivery(key) is not null,
+            Alerts.IsAcknowledged,
+            now));
+    }
+
+    /// <summary>
+    /// "Probably: …" reads the feed around each incident, so it is worked out only when the
+    /// open incidents change — by id and last activity — and never while drawing.
+    /// </summary>
+    private void ExplainIfChanged(IReadOnlyList<Incident>? incidents)
+    {
+        var open = (incidents ?? []).Where(i => i.IsOpen).ToList();
+        var signature = string.Join(',', open.Select(i => $"{i.Id}@{i.LastActivity.ToUnixTimeSeconds()}"));
+        if (signature == _causesFor)
+            return;
+        _causesFor = signature;
+        if (open.Count == 0)
+        {
+            _causes = new Dictionary<long, IReadOnlyList<ProbableCause>>();
+            return;
+        }
+        _ = _causeLoad.Load(signature, ct => Offload.Run(c => Causes.ExplainAsync(open, c), ct), found => _causes = found);
+    }
+
+    private void LoadReports(bool refresh)
+    {
+        // The count is kept in memory once read — the nav reads it on every page — and with
+        // none waiting, which is nearly always, there is nothing to list and nothing to read.
+        if (!refresh && FamilyReports.KnownCount == 0)
+        {
+            _reports = [];
+            return;
+        }
+        Task<IReadOnlyList<FamilyReport>> Fetch(CancellationToken ct) => Offload.Run<IReadOnlyList<FamilyReport>>(async c =>
+            await FamilyReports.CountAsync(c) == 0 ? [] : await FamilyReports.ListAsync(20, c), ct);
+        if (refresh)
+            _ = _reportLoad.Refresh("reports", Fetch, list => _reports = list);
+        else
+            _ = _reportLoad.Load("reports", Fetch, list => _reports = list);
+    }
+
+    private void Redraw()
+    {
+        Rebuild();
+        StateHasChanged();
+    }
+
+    // ---------- throttled redraws ----------
+
+    private readonly Lock _throttle = new();
+    private bool _pending;
+    private bool _disposed;
+    private DateTime _lastDraw = DateTime.MinValue;
+    private Timer? _timer;
+
+    /// <summary>
+    /// Something changed. Redraws now if the last redraw was long enough ago, otherwise once
+    /// when it will be — however many more changes arrive before then.
+    /// </summary>
+    private void Poke()
+    {
+        TimeSpan wait;
+        lock (_throttle)
+        {
+            if (_pending || _disposed)
+                return;
+            _pending = true;
+            wait = RedrawGap - (DateTime.UtcNow - _lastDraw);
+            if (wait > TimeSpan.Zero)
+            {
+                _timer?.Dispose();
+                _timer = new Timer(_ => _ = InvokeAsync(DrawNow), null, wait, Timeout.InfiniteTimeSpan);
+                return;
+            }
+        }
+        _ = InvokeAsync(DrawNow);
+    }
+
+    private void DrawNow()
+    {
+        lock (_throttle)
+        {
+            if (_disposed)
+                return;
+            _pending = false;
+            _lastDraw = DateTime.UtcNow;
+        }
+        Redraw();
+    }
+
+    private void OnCachesChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadCachedAsync();
+        Poke();
+    });
+
+    private void OnReportsChanged() => _ = InvokeAsync(() => LoadReports(refresh: true));
+
+    // ---------- actions ----------
+
+    private async Task StartMaintenanceAsync()
+    {
+        _busy = MaintenanceKey;
+        try
+        {
+            await AppSettings.SaveAsync(Maintenance.Key, Maintenance.Value(TimeSpan.FromHours(1), DateTimeOffset.Now));
+            await LoadCachedAsync();
+            Rebuild();
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private async Task EndMaintenanceAsync()
+    {
+        _busy = MaintenanceKey;
+        try
+        {
+            await AppSettings.SaveAsync(Maintenance.Key, Maintenance.Cleared);
+            await LoadCachedAsync();
+            Rebuild();
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private async Task SilenceAsync(string key, Connection connection, TimeSpan? span)
+    {
+        _busy = key;
+        try
+        {
+            await Config.SilenceAsync(connection.Id, span is { } length ? DateTimeOffset.Now + length : null);
+            _results[key] = ActionResult.Done(span is null
+                ? $"{connection.Name} will alert again."
+                : $"{connection.Name}'s alerts are held for an hour.");
+            await LoadCachedAsync();
+            Rebuild();
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private void Acknowledge(string key, string alertKey)
+    {
+        _results[key] = Alerts.Acknowledge(alertKey)
+            ? ActionResult.Done("Got it. It will not be escalated while it lasts; you'll still hear when it's fixed.")
+            : ActionResult.Failed("It has already cleared.");
+        Rebuild();
+    }
+
+    private async Task DismissAsync(string key, long reportId)
+    {
+        _busy = key;
+        try
+        {
+            await FamilyReports.DismissAsync(reportId);
+            _reports = _reports?.Where(r => r.Id != reportId).ToList();
+            Rebuild();
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private void AskRestart(string key, string container, Connection docker, bool allowProtected) =>
+        _confirm = new RestartAsk(key, container, docker, allowProtected);
+
+    /// <summary>
+    /// Restarts a container through the same code self-healing uses — which is what refuses
+    /// LabbyTwo's own container and the protected ones, the tunnel and the proxy that a
+    /// restart from outside the house could lock you out through.
+    /// </summary>
+    private async Task RestartAsync()
+    {
+        if (_confirm is not { } ask)
+            return;
+        _confirm = null;
+        _busy = ask.Key;
+        StateHasChanged();
+        try
+        {
+            var fix = new Remediation
+            {
+                Kind = RemediationKind.RestartContainer,
+                TargetConnectionId = ask.Docker.Id,
+                Container = ask.Container,
+                AllowProtected = ask.AllowProtected,
+            };
+            using var deadline = new CancellationTokenSource(ActionRunner.Timeout);
+            var plan = await Offload.Run(ct => Fixes.PrepareAsync(fix, ct), deadline.Token);
+            _results[ask.Key] = plan is { Refused: null, Run: { } run }
+                ? await run(deadline.Token)
+                : ActionResult.Failed($"Not restarted: {plan.Refused}");
+        }
+        catch (Exception ex)
+        {
+            _results[ask.Key] = ActionResult.Failed(ex is OperationCanceledException
+                ? "Docker did not answer in time."
+                : ex.GetBaseException().Message);
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    // ---------- pins ----------
+
+    private Connection? PinConnection(PhonePin pin) => _connections.FirstOrDefault(c => c.Id == pin.ConnectionId);
+
+    private Connection? FixTarget(Remediation fix) => _connections.FirstOrDefault(c => c.Id == fix.TargetConnectionId);
+
+    private Connection? PickedConnection => _pinnable.FirstOrDefault(c => c.Id == _pinConnection);
+
+    private static string PinKey(PhonePin pin) => $"pin:{pin.Stored}";
+
+    private string PinLabel(PhonePin pin, Connection connection)
+    {
+        if (pin.Label.Length > 0)
+            return pin.Label;
+        if (pin.Kind == PhonePinKind.Container)
+            return $"Restart {pin.Target}";
+        var action = Runner.ActionsFor(connection).FirstOrDefault(a => string.Equals(a.Id, pin.Target, StringComparison.OrdinalIgnoreCase));
+        return $"{connection.Name}: {action?.Label ?? pin.Target}";
+    }
+
+    private void PickConnection(ChangeEventArgs args)
+    {
+        _pinConnection = args.Value?.ToString() ?? "";
+        _pinTarget = "";
+        _pinLabel = "";
+    }
+
+    private async Task PinAsync()
+    {
+        if (PickedConnection is not { } picked || _pinTarget.Trim().Length == 0)
+            return;
+        var pin = new PhonePin(picked.Provider == DockerProvider ? PhonePinKind.Container : PhonePinKind.Action,
+            picked.Id, _pinTarget.Trim(), _pinLabel.Trim());
+        await SavePinsAsync([.. _pins.Where(p => !p.SameAs(pin)), pin]);
+        _pinConnection = _pinTarget = _pinLabel = "";
+    }
+
+    private Task UnpinAsync(PhonePin pin) => SavePinsAsync([.. _pins.Where(p => !p.SameAs(pin))]);
+
+    private async Task SavePinsAsync(IReadOnlyList<PhonePin> pins)
+    {
+        await AppSettings.SaveAsync(PhoneView.PinsKey, PhonePin.Store(pins));
+        await LoadCachedAsync();
+        Rebuild();
+    }
+
+    private async Task SetStartAsync(ChangeEventArgs args)
+    {
+        var on = args.Value is true || string.Equals(args.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        await AppSettings.SaveAsync(PhoneView.StartKey, on ? PhoneView.StartPhone : "");
+        await LoadCachedAsync();
+    }
+
+    public void Dispose()
+    {
+        lock (_throttle)
+        {
+            _disposed = true;
+            _timer?.Dispose();
+        }
+        Health.Updated -= Poke;
+        Evaluator.Updated -= Poke;
+        Alerts.Acknowledged -= Poke;
+        Backups.Judged -= Poke;
+        DisplayUnits.Changed -= Poke;
+        Remediations.Changed -= Poke;
+        Tracker.OpenChanged -= Poke;
+        FamilyReports.Changed -= OnReportsChanged;
+        Config.Changed -= OnCachesChanged;
+        AppSettings.Changed -= OnCachesChanged;
+        Rules.Changed -= OnCachesChanged;
+        _incidentLoad?.Dispose();
+        _causeLoad?.Dispose();
+        _reportLoad?.Dispose();
+        _backupLoad?.Dispose();
+        _fixLoad?.Dispose();
+    }
+}

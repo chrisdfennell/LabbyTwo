@@ -1,0 +1,49 @@
+@inject IJSRuntime JS
+
+@* "There is a page made for this screen." Shown on a narrow screen, above whatever page is
+   open, until somebody opens the phone view or says not now — and then never again in that
+   browser (phone.js keeps the answer). Draws nothing on the server's first pass: only the
+   browser knows how wide it is, so the hint appears a moment after the page rather than
+   flashing on a desktop that then has to take it away. *@
+
+@if (_show)
+{
+    <div class="phone-hint" role="note">
+        <span class="phone-hint-text">On a phone? The phone view shows only what needs you.</span>
+        <a class="btn btn-sm btn-primary" href="m" @onclick="DismissAsync">Open it</a>
+        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="DismissAsync">Not now</button>
+    </div>
+}
+
+@code {
+    private bool _show;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        try
+        {
+            _show = await JS.InvokeAsync<bool>("labbyPhone.shouldSuggest");
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or TaskCanceledException or InvalidOperationException)
+        {
+            // A courtesy; a browser that cannot answer simply does not get it.
+            _show = false;
+        }
+        if (_show)
+            StateHasChanged();
+    }
+
+    private async Task DismissAsync()
+    {
+        _show = false;
+        try
+        {
+            await JS.InvokeVoidAsync("labbyPhone.dismiss");
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or TaskCanceledException)
+        {
+        }
+    }
+}

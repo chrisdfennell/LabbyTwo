@@ -1460,6 +1460,45 @@ Every setting can be overridden in the address, so each screen can bookmark its 
 so when the server restarts and the page reloads itself it comes back to the same tab. With
 a password set, the wall signs in like any other page.
 
+### Phone view
+
+`/m` is LabbyTwo for the moment a notification arrives and you are not at a desk. It shows
+only what needs you, and the fix beside it:
+
+- **One line at the top** — "All 24 fine", or "2 down, 1 alert". If LabbyTwo itself cannot
+  see the lab (see [When LabbyTwo cannot see](#when-labbytwo-cannot-see)) that is said next,
+  so a page of stale states is not mistaken for an outage. Then maintenance: **Maintenance
+  for 1 h** holds every alert while you work, and **End maintenance** lifts it.
+- **Only what is red or amber** — services down, alert rules firing, open incidents with
+  their "Probably: …", late backups and family reports — each one big row saying what, why,
+  and for how long, with its buttons: the connection's own actions (dangerous ones ask
+  first), **Restart** the container its self-healing is set to restart, **Runbook** if the
+  connection has one, **Silence 1 h**, **I'm on it** and **Dismiss**.
+- **Everything else**, folded away and grouped by tab, one dot each.
+- **Pinned quick actions** at the top — "restart Plex", "wake the PC". Choose them under
+  **Set up this page** at the bottom: any connection's action, or any container on a Docker
+  connection.
+
+**I'm on it** acknowledges an alert: it will not be escalated for as long as it lasts, and
+you still hear when it is fixed. It is kept in memory, so a restart during the outage
+brings escalation back — being told twice beats not being told. Container restarts go
+through the same guard rails as self-healing: LabbyTwo's own container and the ones on a
+Containers tab's protected list are refused. A connection's runbook is set in its editor
+under **Runbook note** — paste a note's link, like `t/runbooks#note-abc123`; only links
+inside LabbyTwo are accepted.
+
+The page is drawn from what LabbyTwo already holds in memory — the monitor's states, the
+alerts firing, the incidents it is tracking, the backups as last checked — and redraws at
+most every couple of seconds as they change, so opening it on a weak signal costs no
+database reads once LabbyTwo has been running a minute. It uses the dashboard's theme and
+its login.
+
+On a narrow screen every page offers it once, until **Not now**; the link is also at the
+bottom of the sidebar as **📱 Phone view**. To have LabbyTwo added to a phone's home screen
+open straight onto it, switch on **Open the installed app on this page** under **Set up this
+page**, then add it to the home screen again — phones read where an installed app starts
+only when it is installed.
+
 ---
 
 ## Adding an integration

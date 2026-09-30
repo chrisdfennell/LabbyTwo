@@ -3,7 +3,7 @@
   "short_name": "LabbyTwo",
   "description": "A home lab dashboard you build from the browser.",
   "id": "/",
-  "start_url": "/",
+  "start_url": "/m",
   "display": "standalone",
   "background_color": "#0a0e13",
   "theme_color": "#0a0e13",

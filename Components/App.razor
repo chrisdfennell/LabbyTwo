@@ -34,7 +34,10 @@
     <link rel="icon" type="image/svg+xml" href="icon.svg" />
     <link rel="alternate icon" type="image/png" href="icon-192.png" />
     <link rel="apple-touch-icon" href="icon-192.png" />
-    <link rel="manifest" href="manifest.webmanifest" />
+    @* Which one is a setting on the phone view: an installed app can open there instead of
+       on the dashboard. Both are static files with the same id, so switching is the same
+       app opening somewhere else rather than a second one on the home screen. *@
+    <link rel="manifest" href="@_manifest" />
     <meta name="theme-color" content="@(_look.Theme == "light" ? "#f2f5f9" : "#0a0e13")" />
     <HeadOutlet />
     @* Bootstrap picks its own palette from data-bs-theme, and on "system" the server has
@@ -70,6 +73,7 @@
     <script src="@Assets["widget-drag.js"]"></script>
     <script src="@Assets["chart-hover.js"]"></script>
     <script src="@Assets["wall.js"]"></script>
+    <script src="@Assets["phone.js"]"></script>
 </body>
 
 </html>
@@ -77,13 +81,16 @@
 @code {
     private Appearance _look = Appearance.Default;
     private string _face = "";
+    private string _manifest = "manifest.webmanifest";
 
     /// <summary>On "system" the script above takes over; this is the pre-script value.</summary>
     private string BootstrapTheme => _look.Theme == "light" ? "light" : "dark";
 
     protected override async Task OnInitializedAsync()
     {
-        var look = Appearance.From(await AppSettings.AllAsync());
+        var settings = await AppSettings.AllAsync();
+        var look = Appearance.From(settings);
+        _manifest = PhoneView.Manifest(settings);
 
         // Whether the file is there is asked of the disk, not of a setting. A setting saying
         // a font exists can be wrong; the file cannot.
