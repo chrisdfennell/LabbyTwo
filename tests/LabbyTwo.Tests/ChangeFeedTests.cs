@@ -71,6 +71,8 @@ public sealed class ChangeFeedTests : IAsyncDisposable
         services.AddSingleton<ActionRunner>();
         services.AddSingleton<ChangeStore>();
         services.AddSingleton<IncidentStore>();
+        services.AddSingleton<ContainerConfigStore>();
+        services.AddSingleton<ContainerConfigHistory>();
         services.AddSingleton<ChangeWatcher>();
         services.AddSingleton<IncidentTracker>();
         services.AddSingleton<DnsCheck>();

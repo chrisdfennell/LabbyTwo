@@ -40,11 +40,12 @@ public sealed record Change(
     public long Id { get; init; }
 
     /// <summary>Something breaking — the red end of the feed.</summary>
-    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped or ChangeActions.Late;
+    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped or ChangeActions.Late
+        or ChangeActions.Failed;
 
     /// <summary>Something coming back — the green end.</summary>
     public bool IsRecovery => Action is ChangeActions.Up or ChangeActions.Cleared or ChangeActions.Started
-        or ChangeActions.Completed or ChangeActions.Tested;
+        or ChangeActions.Completed or ChangeActions.Tested or ChangeActions.Passed;
 
     /// <summary>
     /// The status dot a change is drawn with: red for trouble, green for recovery, amber for
@@ -53,7 +54,7 @@ public sealed record Change(
     /// </summary>
     public string Dot => IsTrouble ? "status-down"
         : IsRecovery ? "status-up"
-        : Action is ChangeActions.Restarted or ChangeActions.Remediated ? "status-flapping"
+        : Action is ChangeActions.Restarted or ChangeActions.Remediated or ChangeActions.RolledBack ? "status-flapping"
         // Self-healing's verdicts, which are neither a failure nor a recovery of the thing
         // itself but say which way it went: red for "did not help", green for "fixed it".
         : Action is ChangeActions.NotHelped or ChangeActions.Failed ? "status-down"
@@ -161,6 +162,18 @@ public static class ChangeActions
 
     /// <summary>Somebody recorded that they tried restoring it.</summary>
     public const string Tested = "tested";
+
+    /// <summary>A container updated from the Containers tab, now being watched (see <see cref="SafeUpdateRules"/>).</summary>
+    public const string Watching = "watching";
+
+    /// <summary>A safe update's watch ended with nothing wrong.</summary>
+    public const string Passed = "passed";
+
+    // Failed, above, is shared: self-healing's action that could not run, and a safe
+    // update's watch that found something wrong or a roll-back that could not be done.
+
+    /// <summary>A container put back on the image it ran before an update.</summary>
+    public const string RolledBack = "rolled-back";
 }
 
 /// <summary>

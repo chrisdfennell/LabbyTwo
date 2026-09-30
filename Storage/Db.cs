@@ -553,6 +553,52 @@ public sealed class Db
             notes   TEXT    NOT NULL DEFAULT '');
         CREATE INDEX IF NOT EXISTS ix_restore_tests_item ON restore_tests (item_id, ts);
         """,
+
+        // 28 — each container's configuration, one row per version, written only when a
+        // container is seen with a new id and its settings differ from the last version.
+        // Keyed by the container's name, which is what survives a recreate. Every read is
+        // "this host's containers" or "this container's versions, newest first", both of
+        // which are a range on the one index; the id doubles as the order they were written.
+        """
+        CREATE TABLE IF NOT EXISTS container_configs (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id TEXT    NOT NULL,
+            container     TEXT    NOT NULL,
+            container_id  TEXT    NOT NULL,
+            ts            INTEGER NOT NULL,
+            config        TEXT    NOT NULL);
+        CREATE INDEX IF NOT EXISTS ix_container_configs_name ON container_configs (connection_id, container, id);
+        """,
+
+        // 29 — safe updates: one row per container update started from the Containers tab,
+        // holding the image it ran before (so it can be put back) and where the watch after
+        // the update has got to. The watch job reads only the rows still in progress, through
+        // a partial index that is empty whenever nothing is being watched; the tab reads the
+        // newest row per container on one host.
+        """
+        CREATE TABLE IF NOT EXISTS safe_updates (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id    TEXT    NOT NULL,
+            container        TEXT    NOT NULL,
+            container_id     TEXT    NOT NULL,
+            reference        TEXT    NOT NULL,
+            previous_image   TEXT    NOT NULL,
+            previous_digest  TEXT    NOT NULL DEFAULT '',
+            rollback_tag     TEXT    NOT NULL DEFAULT '',
+            requested_ts     INTEGER NOT NULL,
+            watch            INTEGER NOT NULL,
+            watch_seconds    INTEGER NOT NULL,
+            state            TEXT    NOT NULL,
+            new_image        TEXT    NOT NULL DEFAULT '',
+            new_container_id TEXT    NOT NULL DEFAULT '',
+            watch_from_ts    INTEGER,
+            restart_baseline INTEGER NOT NULL DEFAULT 0,
+            ended_ts         INTEGER,
+            reason           TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_safe_updates_container ON safe_updates (connection_id, container, id);
+        CREATE INDEX IF NOT EXISTS ix_safe_updates_active ON safe_updates (id)
+            WHERE state IN ('waiting', 'watching', 'rolling-back');
+        """,
     ];
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)

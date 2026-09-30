@@ -58,6 +58,18 @@ public sealed class ContainersTabKind : ITabKind
                   "whether its tag now points at something newer, and an Update button for those that are behind. " +
                   "Nothing is asked until the button is pressed.") { Advanced = true },
 
+        new(LabbyTwo.Services.SafeUpdates.TabKey, "Safe updates", FieldKind.Select, Default: "",
+            Help: "After an Update from this page, watch the container for a while and put its previous image back if " +
+                  "it stops, restarts, turns unhealthy, or a connection pointing at it goes down. The default and the " +
+                  "length of the watch are in Settings → Updates. Never applies to LabbyTwo's own container, which cannot " +
+                  "watch itself once it has been replaced.",
+            Options:
+            [
+                new SelectOption("", "As set in Settings → Updates"),
+                new SelectOption("on", "On for this tab"),
+                new SelectOption("off", "Off for this tab"),
+            ]) { Advanced = true },
+
         new("log_lines", "Log lines to load", FieldKind.Number, Default: "200") { Advanced = true },
     ];
 

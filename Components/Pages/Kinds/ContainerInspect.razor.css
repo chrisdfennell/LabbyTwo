@@ -32,3 +32,15 @@
     color: var(--muted);
     background: var(--panel-2);
 }
+
+.ct-history { list-style: none; padding-left: 0; font-size: .85rem; }
+.ct-history li { border-top: 1px solid var(--edge); padding: .3rem 0; }
+.ct-history summary { cursor: pointer; overflow-wrap: anywhere; }
+.ct-history-when { font-weight: 500; }
+
+.ct-diff { padding-left: 1.1rem; margin: .3rem 0 .2rem; }
+.ct-diff li { border: 0; padding: .1rem 0; overflow-wrap: anywhere; }
+
+/* What it was is struck through and muted; what it is now is not. */
+.ct-was { color: var(--muted); text-decoration: line-through; }
+.ct-now { color: var(--text, inherit); }
