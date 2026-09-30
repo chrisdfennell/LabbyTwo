@@ -237,6 +237,70 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **TLS certificate** | Days until a certificate expires, and who issued it. The outage that gives no warning: automatic renewal fails *silently*, and the only sign is a number counting down that nobody is watching. |
 | **MQTT broker** | Any broker — Zigbee2MQTT, Tasmota, ESPHome. Subscribes and turns messages into metrics: `name = topic:path`, the same shape the JSON API provider already used. The one integration here that holds a connection open rather than asking. |
 
+#### Found on your Docker hosts
+
+Once there is a Docker connection, the Connections page lists the containers LabbyTwo has an
+integration for and that are not connections yet — **🔎 Discovered on your Docker hosts** —
+and the Containers tab says so in one dismissible line. Nothing is ever added by itself:
+
+- **Add** opens the ordinary editor, filled in: the provider, a name, and the address
+  LabbyTwo can reach it at, with a sentence saying why that one. Where the provider needs no
+  key it runs **Test** straight away; where it does, the row says where in the app to find
+  it. You paste the key, test, and save — or cancel, and nothing was written.
+- **Ignore** stops suggesting that one (remembered, and undoable from the *ignored* list).
+- A service that already has a connection of its kind reaching it — by container name, by
+  the gateway it sits behind, or by the exact host and port — is listed as *already added*.
+
+The address is chosen in this order: a `labbytwo.url` label; the **container's name** when
+LabbyTwo shares a user-defined network with it (Docker's default `bridge` does not count —
+names do not resolve there); the host's address for a container on `network_mode: host`; the
+**published port** on the host (the Docker connection's host when it is remote, otherwise
+the gateway of LabbyTwo's own network); and failing all of those, the container's name with
+a note saying which network to join. A container on `network_mode: service:gluetun` is
+proposed at the gateway container's name, and starts out *sitting behind* whatever already
+watches that gateway.
+
+**Look for services** asks Docker now; **Keep looking as containers change** (on by default)
+reuses the list the Docker check already fetches every sweep, so it costs no requests.
+LabbyTwo never reads another container's environment or config files to fetch a key.
+
+Recognised by image — any registry, any tag (`lscr.io/linuxserver/…`, `ghcr.io/hotio/…`,
+Docker Hub, pinned digests):
+
+| Service | Images | Port |
+|---|---|---|
+| Sonarr / Radarr / Lidarr / Readarr / Whisparr / Prowlarr / Bazarr | linuxserver, hotio, or anyone's `*/sonarr` etc. | 8989 / 7878 / 8686 / 8787 / 6969 / 9696 / 6767 |
+| Plex | `plexinc/pms-docker`, `*/plex` | 32400 |
+| Jellyfin | `jellyfin/jellyfin`, `*/jellyfin` | 8096 |
+| Tautulli | `tautulli/tautulli`, `*/tautulli` | 8181 |
+| Seerr | `seerr-team/seerr`, `sctx/overseerr`, `fallenbagel/jellyseerr` | 5055 |
+| qBittorrent / Transmission / SABnzbd / NZBGet | linuxserver, hotio, `nzbgetcom/nzbget` | 8080 / 9091 / 8080 / 6789 |
+| Home Assistant | `home-assistant/home-assistant`, `homeassistant/home-assistant`, `linuxserver/homeassistant` | 8123 |
+| Pi-hole / AdGuard Home | `pihole/pihole` / `adguard/adguardhome` | 80 |
+| Uptime Kuma | `louislam/uptime-kuma` | 3001 |
+| Frigate | `blakeblackshear/frigate` | 5000 |
+| Immich | `immich-app/immich-server` | 2283 |
+| Nextcloud | `nextcloud` (http 80), `linuxserver/nextcloud` (https 443) | |
+| Scrutiny, Speedtest Tracker, Duplicati, Healthchecks, Gitea, Prometheus | their official or linuxserver images | 8080, 80, 8200, 8000, 3000, 9090 |
+| ErsatzTV, Unmanic, Tdarr, Audiobookshelf, Komga, Navidrome, Mylar3 | their official or linuxserver images | 8409, 8888, 8265, 80, 25600, 4533, 8090 |
+| Gluetun, Syncthing, Paperless-ngx | with their plugins installed | 8000, 8384, 8000 |
+
+When Docker lists an image only by id (the tag was pulled again since), the container's exact
+name is used instead. Anything else can say what it is with labels — the same ones the Docker
+labels import plugin reads:
+
+```yaml
+labels:
+  labbytwo.provider: "sonarr"          # any installed provider
+  labbytwo.port: "8989"                # the port inside the container
+  labbytwo.url: "http://sonarr:8989"   # skip the guessing entirely
+  labbytwo.name: "Sonarr 4K"
+  labbytwo.icon: "📺"
+  labbytwo.discover: "false"           # never suggest this one
+```
+
+The table lives in `Core/KnownServices.cs`; adding a service is one line there.
+
 #### Watching cloudflared without a token
 
 The **Cloudflare Tunnel** provider asks Cloudflare's API, which needs an account ID and a

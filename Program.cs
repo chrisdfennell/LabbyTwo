@@ -203,6 +203,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricAlertService
 // writes the feed; the tracker listens to the feed and groups outages into incidents.
 builder.Services.AddSingleton<ChangeStore>();
 builder.Services.AddSingleton<IncidentStore>();
+// "Add a connection for this": the change watcher hands it each sweep's container list.
+builder.Services.AddSingleton<ServiceDiscovery>();
 builder.Services.AddSingleton<ChangeWatcher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChangeWatcher>());
 builder.Services.AddSingleton<IncidentTracker>();
