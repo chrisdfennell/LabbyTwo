@@ -142,6 +142,11 @@ builder.Services.AddSingleton<DashboardImportService>();
 builder.Services.AddSingleton<LabbyTwo.Services.Offsite.OffsiteSettingsStore>();
 builder.Services.AddSingleton<LabbyTwo.Services.Offsite.OffsiteBackups>();
 
+// The Backups page: what ought to be backed up, what proves it was, and when a restore was
+// last tried. The job that checks it every few minutes is an IBackgroundJob and is discovered.
+builder.Services.AddSingleton<BackupStore>();
+builder.Services.AddSingleton<BackupProof>();
+
 // The only scoped pair in here, and deliberately. An undo offer is one person's last
 // action rather than a fact about the installation: as a singleton it would survive across
 // browser sessions and, with auth switched on, offer your deletion to somebody else.

@@ -1,0 +1,128 @@
+@implements IDisposable
+@inject BackupProof Proof
+@inject BackupStore Store
+@inject HealthMonitor Health
+@inject Offload Offload
+
+@* {{backups}}: the Backups page in a runbook — each thing that ought to be backed up, when
+   it last was, and whether that is on time; late ones first, in red, and a restore test
+   that is overdue marked. {{backups: late}} lists only what needs attention. Which options
+   mean what is BackupListOptions.Parse, where it is tested.
+
+   Read off the render thread, then again whenever an item is saved, ticked or judged
+   differently by the sweep. Between those the ages are brought up to date on each probe
+   sweep, from memory. *@
+
+@if (_problem is not null)
+{
+    <div class="md-down md-backups" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_problem} ({Code.Source})")" aria-label="@_problem">?</span>
+            <span class="tile-meta">@_problem</span>
+        </div>
+    </div>
+}
+else if (!_load.Ready || _options is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else
+{
+    var now = DateTimeOffset.Now;
+    var rows = _options.Pick(_rows);
+    <div class="md-down md-backups" role="list" aria-label="Backups">
+        @if (_rows.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-unknown" aria-hidden="true"></span>
+                <span>Nothing is on the <a href="backups">Backups</a> list yet</span>
+            </div>
+        }
+        else if (rows.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>Every backup is on time</span>
+            </div>
+        }
+        @foreach (var row in rows)
+        {
+            <div class="md-down-row @(row.Status.State == BackupState.Late ? "is-overdue" : "")" role="listitem" @key="row.Item.Id">
+                <span class="status-dot @BackupSchedule.Dot(row.Status.State)" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div>
+                        <strong>@row.Item.Name</strong>
+                        <span class="tile-meta"> · @BackupSchedule.Describe(row.Item.Frequency)</span>
+                        @if (row.DrillOverdue)
+                        {
+                            <span class="badge text-bg-warning ms-1" title="@DrillTitle(row, now)">restore test due</span>
+                        }
+                    </div>
+                    <div class="tile-meta md-down-message">@BackupSchedule.Summary(row, now, TimeZoneInfo.Local)</div>
+                </div>
+            </div>
+        }
+        @if (_rows.Count > 0)
+        {
+            <div class="md-down-row"><a class="tile-meta" href="backups">All backups and restore tests</a></div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>Not needed — items name themselves — but every list shortcode is handed it.</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private BackupListOptions? _options;
+    private string? _problem;
+    private IReadOnlyList<BackupRow> _rows = [];
+    private BackgroundLoad _load = default!;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Store.Changed += OnStoreChanged;
+        Health.Updated += OnSweep;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _options = BackupListOptions.Parse(Code, out _problem);
+        Load(refresh: false);
+    }
+
+    private void Load(bool refresh)
+    {
+        if (_options is null)
+            return;
+
+        Task<IReadOnlyList<BackupRow>> Fetch(CancellationToken ct) => Offload.Run(c => Proof.RowsAsync(DateTimeOffset.Now, c), ct);
+
+        if (refresh)
+            _ = _load.Refresh(Code.Source, Fetch, list => _rows = list);
+        else
+            _ = _load.Load(Code.Source, Fetch, list => _rows = list);
+    }
+
+    private static string DrillTitle(BackupRow row, DateTimeOffset now) =>
+        row.Item.LastRestoreTest is { } tested
+            ? $"Last restore test {BackupSchedule.Day(tested, now, TimeZoneInfo.Local)}; due {BackupSchedule.Day(row.DrillDue!.Value, now, TimeZoneInfo.Local)}"
+            : "Never test-restored";
+
+    private void OnStoreChanged() => _ = InvokeAsync(() => Load(refresh: true));
+
+    private void OnSweep()
+    {
+        if (_rows.Count > 0)
+            _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Store.Changed -= OnStoreChanged;
+        Health.Updated -= OnSweep;
+        _load.Dispose();
+    }
+}

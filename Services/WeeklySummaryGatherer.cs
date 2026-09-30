@@ -30,7 +30,8 @@ public sealed class WeeklySummaryGatherer(
     UpdateChecker updates,
     AppSettingsStore settings,
     ILogger<WeeklySummaryGatherer> log,
-    PowerCosts? power = null)
+    PowerCosts? power = null,
+    BackupProof? backups = null)
 {
     /// <summary>The connections, by id and name, as of the last scheduled summary — what "now watching" is measured against.</summary>
     public const string RosterKey = "weekly_summary_roster";
@@ -103,6 +104,8 @@ public sealed class WeeklySummaryGatherer(
         var updated = previousVersion.Length > 0 && previousVersion != "dev" && Version != "dev"
                       && !string.Equals(previousVersion, Version, StringComparison.Ordinal);
 
+        var backupLines = await BackupsAsync(now, ct);
+
         return new WeeklySummaryData
         {
             From = from,
@@ -113,6 +116,7 @@ public sealed class WeeklySummaryGatherer(
             Expiries = expiries,
             Speed = speed,
             Power = await PowerAsync(now, zone, ct),
+            Backups = backupLines,
             Added = added,
             Removed = removed,
             UpdatedFrom = updated ? previousVersion : null,
@@ -149,6 +153,30 @@ public sealed class WeeklySummaryGatherer(
         {
             log.LogWarning(ex, "Could not work out the week's electricity for the weekly summary");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The Backups page as it stands, judged at the moment of sending. Empty when nothing is
+    /// listed, when this gatherer was built without the page (a test), or when it cannot be
+    /// read — a lost section, not a lost summary.
+    /// </summary>
+    private async Task<IReadOnlyList<BackupLine>> BackupsAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        if (backups is null)
+            return [];
+        try
+        {
+            return
+            [
+                .. (await backups.RowsAsync(now, ct)).Select(r => new BackupLine(
+                    r.Item.Name, r.Status.State, r.Status.LastSuccess, r.DrillOverdue, r.Item.LastRestoreTest)),
+            ];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Could not read the backups for the weekly summary");
+            return [];
         }
     }
 

@@ -113,6 +113,12 @@ public sealed record ExpiryLine(string Name, string What, double DaysLeft, int O
 public sealed record PowerWeek(
     double Kwh, double Cost, string Currency, IReadOnlyList<(string Name, double Cost)> Top, double? ProjectedMonth = null);
 
+/// <summary>
+/// One item from the Backups page, as the summary needs it: whether it is on time, and
+/// whether its restore test is overdue.
+/// </summary>
+public sealed record BackupLine(string Name, BackupState State, DateTimeOffset? LastSuccess, bool DrillOverdue, DateTimeOffset? LastRestoreTest);
+
 /// <summary>A week of internet speed tests on one connection, as averages.</summary>
 public sealed record SpeedWeek(string Name, double? Download, double? DownloadLowest, double? Upload, double? Ping);
 
@@ -139,6 +145,8 @@ public sealed record WeeklySummaryData
 
     /// <summary>The week's electricity, when anything reports power. Null leaves the section out.</summary>
     public PowerWeek? Power { get; init; }
+    /// <summary>Everything on the Backups page. Empty for an install that lists nothing, which leaves the section out.</summary>
+    public IReadOnlyList<BackupLine> Backups { get; init; } = [];
 
     /// <summary>Connections that appeared or went away since the last summary.</summary>
     public IReadOnlyList<string> Added { get; init; } = [];
@@ -217,6 +225,7 @@ public static class WeeklySummary
         Add(sections, ExpirySection(data));
         Add(sections, SpeedSection(data));
         Add(sections, PowerSection(data));
+        Add(sections, BackupsSection(data));
         Add(sections, ChangesSection(data));
 
         var text = new StringBuilder(headline);
@@ -507,6 +516,69 @@ public static class WeeklySummary
             var names = string.Join(", ", top.Select(t => $"{t.Name} {PowerTariff.FormatMoney(t.Cost, power.Currency)}"));
             section.Plain.Add("Most: " + names);
             section.Markdown.Add("Most: " + string.Join(", ", top.Select(t => $"{Escape(t.Name)} {PowerTariff.FormatMoney(t.Cost, power.Currency)}")));
+        }
+        return section;
+    }
+
+    /// <summary>The most backup lines listed by name.</summary>
+    public const int MaxBackups = 6;
+
+    /// <summary>
+    /// A line of reassurance when every backup is on time and every restore test done — the
+    /// thing somebody who set the list up wants to hear once a week — and otherwise only
+    /// what needs doing: late first, then without a date, then restore tests overdue.
+    /// </summary>
+    private static Section? BackupsSection(WeeklySummaryData data)
+    {
+        if (data.Backups.Count == 0)
+            return null;
+
+        var section = new Section("🛟", "Backups", [], []);
+        var wanting = data.Backups
+            .Where(b => b.State != BackupState.Ok || b.DrillOverdue)
+            .OrderBy(b => b.State switch { BackupState.Late => 0, BackupState.Missing => 1, BackupState.Never => 2, _ => 3 })
+            .ThenBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (wanting.Count == 0)
+        {
+            var fine = data.Backups.Count == 1 ? "The one backup listed is on time." : $"All {data.Backups.Count} backups are on time.";
+            section.Plain.Add(fine);
+            section.Markdown.Add(fine);
+            return section;
+        }
+
+        foreach (var backup in wanting.Take(MaxBackups))
+        {
+            var parts = new List<string>();
+            switch (backup.State)
+            {
+                case BackupState.Late:
+                    parts.Add(backup.LastSuccess is { } last ? $"late, last one {When(last, data)}" : "late");
+                    break;
+                case BackupState.Missing:
+                    parts.Add("nothing can say when it was last backed up");
+                    break;
+                case BackupState.Never:
+                    parts.Add("never backed up");
+                    break;
+            }
+            if (backup.DrillOverdue)
+            {
+                parts.Add(backup.LastRestoreTest is { } tested
+                    ? $"restore test due, last tried {TimeZoneInfo.ConvertTime(tested, data.Zone).ToString("d MMM", Culture)}"
+                    : "never test-restored");
+            }
+            var detail = string.Join("; ", parts);
+            section.Plain.Add($"{backup.Name} — {detail}");
+            section.Markdown.Add($"**{Escape(backup.Name)}** — {detail}");
+        }
+
+        if (wanting.Count > MaxBackups)
+        {
+            var more = $"…and {wanting.Count - MaxBackups} more on the Backups page";
+            section.Plain.Add(more);
+            section.Markdown.Add(more);
         }
         return section;
     }

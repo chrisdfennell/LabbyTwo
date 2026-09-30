@@ -1542,6 +1542,16 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .change-row.is-evidence { box-shadow: inset 3px 0 0 var(--warn); padding-left: .4rem; }
 .change-row:target { background: color-mix(in srgb, var(--warn) 18%, transparent); border-radius: .25rem; }
 
+/* The Backups page: a late backup is the row to look at, so it carries the red edge an
+   open incident does; one that cannot be proven, or whose restore test is overdue, amber. */
+.backup-row.is-late { border-left: 4px solid var(--down); background: color-mix(in srgb, var(--down) 6%, var(--panel)); }
+.backup-row.is-attention { border-left: 4px solid var(--warn); }
+.backup-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .35rem 1rem; }
+.backup-facts dt { font-weight: 500; color: var(--muted); font-size: .8rem; }
+.backup-facts dd { margin: 0; overflow-wrap: anywhere; }
+.backup-tests { list-style: none; padding: 0; margin: 0; display: grid; gap: .4rem; }
+.backup-tests .notes { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* {{button: NAS / restart}}: a small button that can sit inside a sentence. */
 .md-action { display: inline-flex; align-items: baseline; flex-wrap: wrap; vertical-align: baseline; }
 

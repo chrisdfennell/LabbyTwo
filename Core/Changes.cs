@@ -40,10 +40,11 @@ public sealed record Change(
     public long Id { get; init; }
 
     /// <summary>Something breaking — the red end of the feed.</summary>
-    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped;
+    public bool IsTrouble => Action is ChangeActions.Down or ChangeActions.Firing or ChangeActions.Stopped or ChangeActions.Late;
 
     /// <summary>Something coming back — the green end.</summary>
-    public bool IsRecovery => Action is ChangeActions.Up or ChangeActions.Cleared or ChangeActions.Started;
+    public bool IsRecovery => Action is ChangeActions.Up or ChangeActions.Cleared or ChangeActions.Started
+        or ChangeActions.Completed or ChangeActions.Tested;
 
     /// <summary>
     /// The status dot a change is drawn with: red for trouble, green for recovery, amber for
@@ -70,6 +71,7 @@ public static class ChangeKinds
     public const string Dns = "dns";
     public const string Device = "device";
     public const string Update = "update";
+    public const string Backup = "backup";
 
     /// <summary>Somebody pressed "Something's broken" on the family status page.</summary>
     public const string Report = "report";
@@ -88,6 +90,7 @@ public static class ChangeKinds
         (Update, "LabbyTwo updates"),
         (Report, "Reports from the family"),
         (Remediation, "Self-healing"),
+        (Backup, "Backups and restore tests"),
     ];
 
     /// <summary>
@@ -109,6 +112,7 @@ public static class ChangeKinds
             "update" or "updates" or "labbytwo" => Update,
             "report" or "reports" or "family" => Report,
             "remediation" or "remediations" or "self-healing" or "selfhealing" or "healing" or "fixes" => Remediation,
+            "backup" or "backups" or "restore" or "restores" => Backup,
             _ => null,
         };
     }
@@ -148,6 +152,15 @@ public static class ChangeActions
     public const string NotHelped = "not_helped";
     public const string Failed = "failed";
     public const string Skipped = "skipped";
+
+    /// <summary>A backup was proven to have finished — by its source, or ticked by hand.</summary>
+    public const string Completed = "completed";
+
+    /// <summary>A backup went past its due time with nothing newer to prove it.</summary>
+    public const string Late = "late";
+
+    /// <summary>Somebody recorded that they tried restoring it.</summary>
+    public const string Tested = "tested";
 }
 
 /// <summary>

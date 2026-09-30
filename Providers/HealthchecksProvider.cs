@@ -37,6 +37,7 @@ public sealed class HealthchecksProvider(IHttpClientFactory httpFactory) : IConn
         new("checks_down", "Checks down"),
         new("checks_late", "Checks late"),
         new("checks_paused", "Checks paused"),
+        // Also reported per check, as hours_since_ping:<check name>, for the Backups page.
         new("hours_since_ping", "Quietest check", " h", 1),
         new("latency_ms", "Response time", " ms"),
     ];
@@ -83,6 +84,7 @@ public sealed class HealthchecksProvider(IHttpClientFactory httpFactory) : IConn
             int total = 0, down = 0, late = 0, paused = 0;
             double quietest = 0;
             var failing = new List<string>();
+            var perCheck = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var check in checks.EnumerateArray())
             {
@@ -109,7 +111,14 @@ public sealed class HealthchecksProvider(IHttpClientFactory httpFactory) : IConn
                 }
 
                 if (status != "paused" && When(check, "last_ping") is { } pinged)
-                    quietest = Math.Max(quietest, (DateTimeOffset.UtcNow - pinged).TotalHours);
+                {
+                    var hours = Math.Max(0, (DateTimeOffset.UtcNow - pinged).TotalHours);
+                    quietest = Math.Max(quietest, hours);
+                    // Per check as well: a backup script that pings Healthchecks when it
+                    // finishes is exactly the proof the Backups page wants, one check each.
+                    if (name.Trim().Length > 0)
+                        perCheck[name.Trim()] = hours;
+                }
             }
 
             var metrics = new Dictionary<string, double>
@@ -123,6 +132,8 @@ public sealed class HealthchecksProvider(IHttpClientFactory httpFactory) : IConn
 
             if (quietest > 0)
                 metrics["hours_since_ping"] = quietest;
+            foreach (var (check, hours) in perCheck)
+                metrics[$"hours_since_ping:{check}"] = hours;
 
             var message = down > 0
                 ? $"{down} down: {string.Join(", ", failing.Take(3))}"
