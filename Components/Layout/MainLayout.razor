@@ -9,6 +9,8 @@
            opened on the Connections page is still visible — and still liftable — from a
            dashboard tab that renders statically. *@
         <MaintenanceBanner @rendermode="InteractiveServer" />
+        @* Likewise: LabbyTwo saying it cannot see the lab has to be on whatever page is open. *@
+        <BlindBanner @rendermode="InteractiveServer" />
         @Body
     </main>
 </div>

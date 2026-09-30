@@ -90,20 +90,37 @@ public sealed class IncidentTracker(
         // own: two services going down in the same sweep arrive a moment apart, and which
         // was first is what names the incident. Off the recorder's thread all the same —
         // it is in the middle of a sweep.
+        //
+        // Whether LabbyTwo could see is read now, as the change is recorded, not when the
+        // queue reaches it: by then sight may be back, and a failure recorded blind would
+        // be counted after all.
+        var blind = monitor.IsBlind;
         lock (_queueLock)
-            _queue = _queue.ContinueWith(_ => ApplyChangeAsync(change, CancellationToken.None), TaskScheduler.Default).Unwrap();
+            _queue = _queue.ContinueWith(_ => ApplyChangeAsync(change, blind, CancellationToken.None), TaskScheduler.Default).Unwrap();
     }
 
     private readonly Lock _queueLock = new();
     private Task _queue = Task.CompletedTask;
 
-    private async Task ApplyChangeAsync(Change change, CancellationToken ct)
+    private async Task ApplyChangeAsync(Change change, bool blind, CancellationToken ct)
     {
         try
         {
             var maintenance = Maintenance.From(await settings.AllAsync(ct), change.At).On;
-            if (SignalFor(change, maintenance) is { } signal)
-                await ApplyAsync(signal, ct);
+            if (SignalFor(change, maintenance) is not { } signal)
+                return;
+
+            // A failure while LabbyTwo cannot see the lab neither opens an incident nor
+            // grows one. The monitor already holds its own failures back while that lasts;
+            // this is for anything else in the feed that says "down" in the meantime.
+            // Recoveries still count — something coming back is an answer.
+            if (signal.Bad && blind)
+            {
+                log.LogInformation("Not adding \"{Title}\" to an incident: LabbyTwo cannot see the lab right now", change.Title);
+                return;
+            }
+
+            await ApplyAsync(signal, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

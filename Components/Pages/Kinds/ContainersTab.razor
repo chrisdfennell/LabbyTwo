@@ -155,6 +155,8 @@
             <div class="ct-result @(_resultFailed ? "text-danger" : "text-success")" role="status">@_result</div>
         }
 
+        <UpdateHelperNotice Endpoint="@Endpoint" />
+
         @if (_error is { Length: > 0 })
         {
             <div class="alert alert-warning py-2 ct-error">@_error</div>

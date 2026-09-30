@@ -39,6 +39,13 @@ public sealed partial class AlertService(
     /// </summary>
     public Func<Connection, DateTimeOffset, CancellationToken, Task<string?>>? ExplainDown { get; set; }
 
+    /// <summary>
+    /// Whether LabbyTwo cannot see the lab right now (see <see cref="HealthMonitor.Blindness"/>).
+    /// Here so that what already depends on alerting — self-healing — can ask without a
+    /// dependency on the monitor of its own.
+    /// </summary>
+    public bool Blind => monitor.IsBlind;
+
     public Task StartAsync(CancellationToken ct)
     {
         monitor.StatusChanged += OnStatusChangedAsync;
@@ -113,6 +120,13 @@ public sealed partial class AlertService(
         // which connection was held rather than only which alert.
         if (Maintenance.From(await settings.AllAsync(ct), now) is { On: true } maintenance)
             return maintenance.Reason;
+
+        // LabbyTwo cannot see the lab, so what it would be saying is about itself. Only
+        // new trouble is held: a recovery is an answer, and an answer is proof. The monitor
+        // already keeps failures out of the status while this holds; this is for what
+        // arrives by another road — a threshold rule, an escalation coming due.
+        if (!isRecovery && monitor.Blindness is { Impaired: true } blind)
+            return $"LabbyTwo can't see the lab right now ({blind.Reason})";
 
         if (connection.IsSilenced(now))
             return $"silenced until {connection.SilencedUntil:HH:mm}";

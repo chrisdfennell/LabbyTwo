@@ -1,0 +1,164 @@
+@implements IDisposable
+@inject ILogger<UpdateHelperNotice> Log
+
+@* The one-shot Watchtower LabbyTwo started to update containers, while it is still there.
+   Running for a few minutes is the job being done, and says only that. Running far longer
+   than updating that many containers takes (UpdateHelperRules.Limit) is a helper that is
+   stuck — one on a NAS stayed for fifteen hours after "Update all" — and it is shown with
+   the end of its log and a button to stop it. Never stopped without somebody pressing it:
+   it may be half-way through recreating a container.
+
+   Asks Docker when drawn and then every minute, off the render thread. Says nothing at all
+   when there is no helper, or Docker cannot be asked. *@
+
+@foreach (var helper in _helpers.Where(h => h.IsRunning))
+{
+    var now = DateTimeOffset.Now;
+    var stuck = helper.IsStuck(now);
+    <div class="alert @(stuck ? "alert-warning" : "alert-info") py-2 update-helper" role="status" @key="helper.Id">
+        @if (stuck)
+        {
+            <div>
+                <strong>The update helper has been running for @Ago.Duration(helper.Age(now)) — it may be stuck.</strong>
+                It is @Name(helper), started by LabbyTwo to update @Count(helper), which should take well under
+                @Ago.Duration(helper.Limit). While it is there Docker may be busy with it, and LabbyTwo cannot tell
+                whether it is still working.
+            </div>
+            @if (_logs.GetValueOrDefault(helper.Id) is { Count: > 0 } lines)
+            {
+                <div class="tile-meta mt-1">Its log ends:</div>
+                <pre class="update-helper-log mb-1">@string.Join("\n", lines)</pre>
+            }
+            @if (_confirming == helper.Id)
+            {
+                <div class="mt-1">
+                    Stop it? Containers it has already updated stay updated. One it is in the middle of recreating may be
+                    left stopped — check the list afterwards and start it if so.
+                </div>
+                <div class="d-flex gap-2 mt-1">
+                    <button class="btn btn-sm btn-warning" disabled="@(_stopping == helper.Id)" @onclick="() => StopAsync(helper)">
+                        @(_stopping == helper.Id ? "Stopping…" : "Stop the helper")
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirming = null">Leave it running</button>
+                </div>
+            }
+            else
+            {
+                <button class="btn btn-sm btn-outline-secondary mt-1" @onclick="() => _confirming = helper.Id">Stop it…</button>
+            }
+        }
+        else
+        {
+            <span>An update is running: @Name(helper) has been updating @Count(helper) for @Ago.Duration(helper.Age(now)).</span>
+        }
+        @if (_problem is { } problem && _problemFor == helper.Id)
+        {
+            <div class="text-danger small mt-1" role="alert">@problem</div>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>The Docker endpoint to look on; nothing is shown without one.</summary>
+    [Parameter] public string? Endpoint { get; set; }
+
+    private IReadOnlyList<UpdateHelper> _helpers = [];
+    private readonly Dictionary<string, IReadOnlyList<string>> _logs = [];
+    private string? _confirming;
+    private string? _stopping;
+    private string? _problem;
+    private string? _problemFor;
+    private Timer? _timer;
+    private string? _looking;
+    private bool _disposed;
+
+    protected override void OnParametersSet()
+    {
+        if (_looking == Endpoint)
+            return;
+        _looking = Endpoint;
+        _timer?.Dispose();
+        if (Endpoint is { Length: > 0 })
+            _timer = new Timer(_ => _ = LookAsync(), null, TimeSpan.Zero, TimeSpan.FromMinutes(1));
+    }
+
+    private async Task LookAsync()
+    {
+        if (_looking is not { Length: > 0 } endpoint || _disposed)
+            return;
+        try
+        {
+            var helpers = await Task.Run(() => UpdateHelpers.FindAsync(endpoint));
+            var logs = new Dictionary<string, IReadOnlyList<string>>();
+            foreach (var helper in helpers.Where(h => h.IsStuck(DateTimeOffset.Now)))
+            {
+                try
+                {
+                    logs[helper.Id] = await Task.Run(() => UpdateHelpers.LogTailAsync(endpoint, helper.Id));
+                }
+                catch (Exception ex)
+                {
+                    logs[helper.Id] = [$"(its log could not be read: {ex.GetBaseException().Message})"];
+                }
+            }
+            if (_disposed)
+                return;
+            await InvokeAsync(() =>
+            {
+                _helpers = helpers;
+                _logs.Clear();
+                foreach (var (id, lines) in logs)
+                    _logs[id] = lines;
+                StateHasChanged();
+            });
+        }
+        catch (Exception ex) when (!_disposed)
+        {
+            // Docker not answering is shown where Docker is; this only has nothing to add.
+            Log.LogDebug(ex, "Could not look for update helpers on {Endpoint}", endpoint);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private async Task StopAsync(UpdateHelper helper)
+    {
+        if (_looking is not { Length: > 0 } endpoint)
+            return;
+        _stopping = helper.Id;
+        _problem = null;
+        try
+        {
+            await Task.Run(() => UpdateHelpers.StopAsync(endpoint, helper.Id));
+            Log.LogWarning("Stopped the update helper {Name} after {Minutes:0} min, by hand", helper.Name,
+                helper.Age(DateTimeOffset.Now).TotalMinutes);
+            _confirming = null;
+        }
+        catch (Exception ex)
+        {
+            _problem = $"Docker would not stop it: {ex.GetBaseException().Message}";
+            _problemFor = helper.Id;
+        }
+        finally
+        {
+            _stopping = null;
+        }
+        await LookAsync();
+    }
+
+    private static string Name(UpdateHelper helper) => helper.Name.Length > 0 ? $"“{helper.Name}”" : "a Watchtower container";
+
+    private static string Count(UpdateHelper helper) => helper.Targets switch
+    {
+        <= 0 => "some containers",
+        1 => "one container",
+        var n => $"{n} containers",
+    };
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _timer?.Dispose();
+    }
+}

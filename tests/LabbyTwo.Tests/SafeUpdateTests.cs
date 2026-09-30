@@ -458,6 +458,93 @@ public class SafeUpdateRuleTests
     }
 
     [Fact]
+    public void AWatchIsNeverFailedOnWhatIsSeenAfterItEnded()
+    {
+        // What happened on the NAS: a ten-minute watch from 21:28, the job not getting a look
+        // in, and at 11:57 the next morning a connection down (falsely) and a down in the
+        // feed — rolled back fourteen and a half hours late.
+        var down = new WatchedConnection("tautulli-api", "Tautulli", false, "Resource temporarily unavailable", T0.AddHours(3));
+        var went = new Change(T0.AddHours(3), ChangeKinds.Status, ChangeActions.Down, "tautulli-api", "", "Tautulli went down");
+        var late = T0.AddHours(14).AddMinutes(30);
+
+        var step = SafeUpdateRules.Next(Watching(), Running(), [down], [went], late);
+        Assert.False(step.RollBack);
+        Assert.Equal(SafeUpdateState.NotChecked, step.State);
+        Assert.Contains("could not check on it through its 10-minute watch", step.Reason);
+
+        // Even the container itself looking broken now is not the update's verdict any more.
+        var crashed = new WatchedContainer("new-container", "sha256:new", "exited", "", 0, 1);
+        Assert.False(SafeUpdateRules.Next(Watching(), crashed, [], [], late).RollBack);
+    }
+
+    [Fact]
+    public void AWatchLookedAtToItsEndPassesEvenWhenTheVerdictIsLate()
+    {
+        var until = Watching().WatchUntil!.Value;
+        var down = new WatchedConnection("sonarr-api", "Sonarr", false, "Resource temporarily unavailable", until.AddHours(1));
+
+        var step = SafeUpdateRules.Next(Watching(), Running(), [down], [], until.AddHours(2), lastLook: until.AddMinutes(-1));
+        Assert.Equal(SafeUpdateState.Passed, step.State);
+
+        // Last looked at halfway through: not enough to say it passed.
+        Assert.Equal(SafeUpdateState.NotChecked,
+            SafeUpdateRules.Next(Watching(), Running(), [], [], until.AddHours(2), lastLook: until.AddMinutes(-5)).State);
+    }
+
+    [Fact]
+    public void EvidenceInsideTheWindowAndItsSlackStillCounts()
+    {
+        var until = Watching().WatchUntil!.Value;
+        var down = new WatchedConnection("sonarr-api", "Sonarr", false, "Connection refused", until.AddMinutes(-2));
+
+        Assert.True(SafeUpdateRules.Next(Watching(), Running(), [down], [], until.AddMinutes(1)).RollBack);
+        Assert.False(SafeUpdateRules.Next(Watching(), Running(), [down], [], until + SafeUpdateRules.Slack + TimeSpan.FromSeconds(1)).RollBack);
+    }
+
+    [Fact]
+    public void NothingStaysInProgressForHours()
+    {
+        var old = Running("sha256:old", "old-container");
+        var step = SafeUpdateRules.Next(Waiting(), old, [], [], T0 + SafeUpdateRules.MaxAge + TimeSpan.FromMinutes(11));
+        Assert.Equal(SafeUpdateState.NotChecked, step.State);
+        Assert.Contains("stopped waiting", step.Reason);
+
+        // Needs nothing from Docker to say so.
+        Assert.NotNull(SafeUpdateRules.Overdue(Waiting(), T0.AddHours(3), null));
+        Assert.Null(SafeUpdateRules.Overdue(Waiting(), T0.AddMinutes(5), null));
+        Assert.Null(SafeUpdateRules.Overdue(Watching() with { State = SafeUpdateState.Passed }, T0.AddDays(1), null));
+    }
+
+    [Fact]
+    public void TheWatchStartsOnlyOnceTheNewContainerHasBeenStarted()
+    {
+        // Watchtower has created it on the new image and not started it yet.
+        var created = new WatchedContainer("new-container", "sha256:new", "created", "", 0, 0);
+        Assert.Equal(SafeUpdateState.Waiting, SafeUpdateRules.Next(Waiting(), created, [], [], T0.AddMinutes(2)).State);
+        Assert.Equal(SafeUpdateState.Watching, SafeUpdateRules.Next(Waiting(), Running(), [], [], T0.AddMinutes(2)).State);
+
+        // Seen as merely created in the first moment of a watch is not a failure; still only
+        // created after the grace is.
+        Assert.Equal(SafeUpdateState.Watching, SafeUpdateRules.Next(Watching(), created, [], [], T0.AddMinutes(2)).State);
+        Assert.True(SafeUpdateRules.Next(Watching(), created, [], [], T0.AddMinutes(4)).RollBack);
+
+        // Created and never started by the wait limit: watched, so that it fails.
+        Assert.Equal(SafeUpdateState.Watching, SafeUpdateRules.Next(Waiting(), created, [], [], T0.AddMinutes(31)).State);
+    }
+
+    [Fact]
+    public void NotCheckedIsStoredAndCanStillBeRolledBackByHand()
+    {
+        Assert.Equal("not-checked", SafeUpdate.Word(SafeUpdateState.NotChecked));
+        Assert.Equal(SafeUpdateState.NotChecked, SafeUpdate.Parse("not-checked"));
+
+        var notChecked = Watching() with { State = SafeUpdateState.NotChecked, EndedAt = T0.AddHours(1), Reason = "…" };
+        Assert.True(notChecked.CanRollBack);
+        Assert.False(notChecked.IsActive);
+        Assert.Equal("update not checked — see What changed", notChecked.Badge(T0.AddHours(2)));
+    }
+
+    [Fact]
     public void TheBadgeCountsDownAndSaysWhyItRolledBack()
     {
         var watching = Watching();
@@ -643,6 +730,15 @@ public class ContainerRollbackTests
     {
         using var keep = JsonDocument.Parse(SelfUpdater.OneShotRequest("/var/run/docker.sock", ["sonarr"], null, null, cleanup: false));
         Assert.Equal(["--run-once", "sonarr"], keep.RootElement.GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
+    public void AOneShotIsLabelledSoAStuckOneCanBeFoundAgain()
+    {
+        using var request = JsonDocument.Parse(SelfUpdater.OneShotRequest("/var/run/docker.sock", ["sonarr", "radarr"], null, null));
+        var labels = request.RootElement.GetProperty("Labels");
+        Assert.Equal("true", labels.GetProperty(UpdateHelperRules.Label).GetString());
+        Assert.Equal("2", labels.GetProperty(UpdateHelperRules.TargetsLabel).GetString());
     }
 }
 

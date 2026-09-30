@@ -3,13 +3,19 @@ namespace LabbyTwo.Core;
 /// <summary>
 /// One service or alert rule caught up in an incident.
 /// </summary>
-/// <param name="Key">What it is, stably: <c>status:{connection}</c> or <c>alert:{rule}:{connection}</c>.
-/// The same thing failing twice in one incident is one member, not two.</param>
+/// <param name="Key">What it is, stably: <c>status:{connection}</c> or <c>alert:{rule}:{connection}</c>.</param>
 /// <param name="Kind"><see cref="ChangeKinds.Status"/> or <see cref="ChangeKinds.Alert"/>.</param>
 /// <param name="Name">What to call it, as it was called when it failed — a connection
 /// renamed or a rule deleted later does not rewrite history.</param>
-/// <param name="DownAt">When it first went down or fired in this incident.</param>
+/// <param name="DownAt">When this span of it began: when it went down or fired.</param>
 /// <param name="UpAt">When it came back, or null while it has not.</param>
+/// <remarks>
+/// One row per <em>span</em>. Something that goes down, comes back and goes down again in
+/// the same incident has two: the first keeps the recovery it had. It used to be one row
+/// whose recovery was wiped by the second failure, so a service that was back in 28
+/// seconds was listed as "down for 14h 33m" when it failed again hours later and that
+/// second outage ended — the first down time and the last up time of two different events.
+/// </remarks>
 public sealed record IncidentMember(
     string Key,
     string Kind,
@@ -18,6 +24,9 @@ public sealed record IncidentMember(
     DateTimeOffset DownAt,
     DateTimeOffset? UpAt)
 {
+    /// <summary>Which time this thing failed in the incident: 1 for the first, 2 for the next.</summary>
+    public int Span { get; init; } = 1;
+
     public bool IsRecovered => UpAt is not null;
 
     public static string StatusKey(string connectionId) => $"status:{connectionId}";
@@ -108,16 +117,19 @@ public sealed record IncidentSignal(
 /// <list type="number">
 /// <item><b>A failure already counted is ignored.</b> Something that is down in an open
 /// incident and is reported down again changes nothing.</item>
-/// <item><b>A member failing again rejoins its incident.</b> A service that flaps inside an
-/// open incident is one member whose recovery is undone, not a new incident.</item>
-/// <item><b>A failure within <see cref="JoinWindow"/> of an incident's last activity joins
-/// it</b> — open or recently closed. A cascade takes a few sweeps to spread (the NAS, then
-/// what is stored on it, then what depends on that), and a service that comes back and
-/// falls over again five minutes later is the same outage. A closed incident that is
-/// joined opens again. Measured from the last activity rather than the start, so a
-/// cascade that keeps spreading keeps being one incident; and not simply "while any is
-/// open", so a disk that has been full for a week does not swallow every unrelated outage
-/// that happens during it.</item>
+/// <item><b>A failure within <see cref="JoinWindow"/> of an incident's last failure, and
+/// within <see cref="MaxGrowth"/> of its start, joins it</b> — open or recently closed. A
+/// cascade takes a few sweeps to spread (the NAS, then what is stored on it, then what
+/// depends on that), and a service that comes back and falls over again five minutes
+/// later is the same outage. A closed incident that is joined opens again. Measured from
+/// the last <em>failure</em>, not the last thing that happened: a recovery is the outage
+/// ending, not spreading, and counting recoveries let an incident whose members kept
+/// trickling back absorb every unrelated failure for sixteen hours. And capped from the
+/// start, so however it spreads, something failing hours later is a new incident rather
+/// than the tail of an old one; not simply "while any is open", so a disk that has been
+/// full for a week does not swallow every unrelated outage that happens during it.</item>
+/// <item><b>A member failing again in its incident is a new span of it</b> — a second row
+/// with its own down and up times — so the first keeps the recovery it had.</item>
 /// <item><b>Otherwise it starts a new incident.</b></item>
 /// <item><b>A recovery closes its member</b> in the open incident that holds it; when every
 /// member has recovered the incident ends at that moment. A recovery with no open incident
@@ -129,8 +141,21 @@ public sealed record IncidentSignal(
 /// </summary>
 public static class IncidentRules
 {
-    /// <summary>How close to an incident's last activity a new failure must be to join it.</summary>
+    /// <summary>How close to an incident's last failure a new failure must be to join it.</summary>
     public static readonly TimeSpan JoinWindow = TimeSpan.FromMinutes(15);
+
+    /// <summary>How long after an incident started a new failure may still join it.</summary>
+    public static readonly TimeSpan MaxGrowth = TimeSpan.FromHours(2);
+
+    /// <summary>When the last thing in it failed — the newest span's start.</summary>
+    public static DateTimeOffset LastFailure(Incident incident) =>
+        incident.Members.Count > 0 ? incident.Members.Max(m => m.DownAt) : incident.StartedAt;
+
+    /// <summary>Whether a failure at <paramref name="at"/> belongs to this incident rather than a new one.</summary>
+    public static bool CanJoin(Incident incident, DateTimeOffset at) =>
+        at >= incident.StartedAt &&
+        at - LastFailure(incident) <= JoinWindow &&
+        at - incident.StartedAt <= MaxGrowth;
 
     /// <summary>
     /// How far before the start the timeline reaches back for changes. Half an hour catches
@@ -171,11 +196,13 @@ public static class IncidentRules
         if (candidates.Any(i => i.IsOpen && i.Members.Any(m => m.Key == signal.Key && !m.IsRecovered)))
             return null;
 
-        var target =
-            candidates.Where(i => i.IsOpen && i.Members.Any(m => m.Key == signal.Key))
-                .OrderByDescending(i => i.LastActivity).FirstOrDefault()
-            ?? candidates.Where(i => signal.At >= i.StartedAt && signal.At - i.LastActivity <= JoinWindow)
-                .OrderByDescending(i => i.LastActivity).FirstOrDefault();
+        // Among those it could join, the one it has already been part of first — a flap is
+        // the same outage before it is a neighbour's — then the most recently active.
+        var target = candidates
+            .Where(i => CanJoin(i, signal.At))
+            .OrderByDescending(i => i.Members.Any(m => m.Key == signal.Key))
+            .ThenByDescending(i => i.LastActivity)
+            .FirstOrDefault();
 
         if (target is null)
         {
@@ -184,11 +211,11 @@ public static class IncidentRules
         }
 
         var members = target.Members.ToList();
-        var index = members.FindIndex(m => m.Key == signal.Key);
-        if (index >= 0)
-            members[index] = members[index] with { UpAt = null };
-        else
-            members.Add(new IncidentMember(signal.Key, signal.Kind, signal.ConnectionId, signal.Name, signal.At, null));
+        var spans = members.Count(m => m.Key == signal.Key);
+        members.Add(new IncidentMember(signal.Key, signal.Kind, signal.ConnectionId, signal.Name, signal.At, null)
+        {
+            Span = spans + 1,
+        });
 
         return target with
         {

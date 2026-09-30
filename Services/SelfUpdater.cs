@@ -171,6 +171,12 @@ public sealed class SelfUpdater(
     /// endpoint they already got working — a named pipe, a socket proxy's TCP address — is
     /// the one this uses too.
     /// </summary>
+    /// <summary>
+    /// The Docker endpoint the one-shot helper is started on, or null when there is none —
+    /// for finding a helper that is still running (see <see cref="UpdateHelpers"/>).
+    /// </summary>
+    public Task<string?> HelperEndpointAsync() => EndpointAsync();
+
     private async Task<string?> EndpointAsync()
     {
         var connections = await config.ConnectionsAsync();
@@ -565,8 +571,11 @@ public sealed class SelfUpdater(
         await DockerSocket.PostAsync(endpoint, TimeSpan.FromMinutes(3),
             $"/images/create?fromImage={Uri.EscapeDataString(WatchtowerImage)}&tag=latest", null, ct);
 
+        // Named, so it is recognisable in `docker ps` as LabbyTwo's rather than Docker's
+        // made-up "jolly_bardeen" — which is all anybody had to go on when one hung.
         using var created = JsonDocument.Parse(await DockerSocket.PostAsync(
-            endpoint, Timeout, "/containers/create", OneShotRequest(endpoint, containers, dns, network, cleanup), ct));
+            endpoint, Timeout, $"/containers/create?name={UpdateHelperRules.NameFor(DateTimeOffset.Now)}",
+            OneShotRequest(endpoint, containers, dns, network, cleanup), ct));
 
         var id = created.RootElement.TryGetProperty("Id", out var identifier) ? identifier.GetString() : null;
         if (id is null)
@@ -615,6 +624,14 @@ public sealed class SelfUpdater(
             Env = target.IsTcp
                 ? new[] { $"DOCKER_HOST={target}", $"DOCKER_API_VERSION={DockerSocket.ApiVersionNumber}" }
                 : new[] { $"DOCKER_API_VERSION={DockerSocket.ApiVersionNumber}" },
+            // So LabbyTwo can find it again — after a restart too — and say when it has
+            // been running far longer than updating that many containers takes (see
+            // UpdateHelperRules). The count sets its time limit.
+            Labels = new Dictionary<string, string>
+            {
+                [UpdateHelperRules.Label] = "true",
+                [UpdateHelperRules.TargetsLabel] = containers.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            },
             HostConfig = new
             {
                 Binds = target.IsTcp

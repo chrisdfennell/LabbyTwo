@@ -34,7 +34,16 @@ public sealed partial class HealthMonitor(
         DateTimeOffset? ChangedAt,
         int ConsecutiveFailures,
         IReadOnlyDictionary<string, double> Metrics,
-        IReadOnlyDictionary<string, string> Details);
+        IReadOnlyDictionary<string, string> Details)
+    {
+        /// <summary>
+        /// Set when the last probe failed while LabbyTwo could not see the lab (see
+        /// <see cref="Blindness"/>): what that probe said. Everything else in the state is
+        /// the last thing known before, kept rather than overwritten with a failure that was
+        /// LabbyTwo's own. Null for an ordinary probe.
+        /// </summary>
+        public string? CantCheck { get; init; }
+    }
 
     /// <summary>Fires after every sweep so open pages can re-render.</summary>
     public event Action? Updated;
@@ -249,7 +258,20 @@ public sealed partial class HealthMonitor(
 
         // Probes are independent and mostly waiting on the network; running them together
         // keeps a sweep as slow as the slowest host rather than the sum of all of them.
-        await Task.WhenAll(due.Select(connection => TrackedProbeAsync(connection, ct)));
+        var probed = await Task.WhenAll(due.Select(connection => TrackedProbeAsync(connection, ct)));
+
+        // Every answer is in before any is recorded, because what one failure means depends
+        // on the others: half the lab failing DNS in the same thirty seconds is LabbyTwo
+        // unable to see, not half the lab down, and has to be known before the first of
+        // them is turned red, alerted on or opened as an incident. Probes are bounded by
+        // ProbeDeadline, so this waits forty seconds at worst.
+        TimeSpan? lastSweep;
+        lock (_bookkeeping)
+            lastSweep = _lastSweepDuration;
+        var blindness = Judge(
+            [.. probed.Select(p => new ProbeOutcome(p.Connection.Id, p.Result.Ok, p.Failure))], lastSweep, DateTimeOffset.Now);
+
+        await Task.WhenAll(probed.Select(p => RecordProbeAsync(p.Connection, p.Result, blindness, ct)));
 
         Updated?.Invoke();
 
@@ -267,11 +289,28 @@ public sealed partial class HealthMonitor(
         }
     }
 
-    private async Task ProbeAndRecordAsync(Connection connection, CancellationToken ct)
+    /// <summary>
+    /// Folds one probe's answer into the live state, records it and tells whoever listens.
+    /// While LabbyTwo cannot see (<paramref name="blindness"/>), a failure is not recorded
+    /// as one: the connection keeps what was last known about it, marked
+    /// <see cref="ProbeState.CantCheck"/>, and its run of failures does not grow — so nothing
+    /// turns red, nothing is alerted on, and when sight comes back it takes the usual
+    /// number of real failures to call it down. A success is always recorded: an answer
+    /// is proof whatever else is going on.
+    /// </summary>
+    private async Task RecordProbeAsync(Connection connection, ProbeResult result, Blindness blindness, CancellationToken ct)
     {
-        var result = await ProbeAsync(connection, ct);
         var previous = State(connection.Id);
         var now = DateTimeOffset.Now;
+
+        if (!result.Ok && blindness.Impaired)
+        {
+            _states[connection.Id] = (previous is null
+                ? new ProbeState(connection.Id, null, result.Message, result.Duration, now, null, 0,
+                    new Dictionary<string, double>(), new Dictionary<string, string>())
+                : previous with { Duration = result.Duration, At = now }) with { CantCheck = result.Message };
+            return;
+        }
 
         // A single failed probe is usually a dropped packet, not an outage. Only flip to
         // DOWN after N in a row; recovery is immediate, since one good response proves it.
@@ -382,11 +421,30 @@ public sealed partial class HealthMonitor(
     /// </summary>
     public TimeSpan ProbeDeadline { get; set; } = TimeSpan.FromSeconds(40);
 
-    public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
+    public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct) =>
+        (await ProbeClassifiedAsync(connection, ct)).Result;
+
+    /// <summary>
+    /// The probe, and what kind of failure it was: by the exception, as
+    /// <see cref="ProbeError.Describe"/> saw it on this probe's own async flow, and only
+    /// when nothing was described by the words of the message.
+    /// </summary>
+    private async Task<(ProbeResult Result, ProbeFailure Failure)> ProbeClassifiedAsync(Connection connection, CancellationToken ct)
+    {
+        using var capture = ProbeError.Capture();
+        var (result, failure) = await ProbeCapturedAsync(connection, ct);
+        if (result.Ok)
+            return (result, ProbeFailure.None);
+        if (failure == ProbeFailure.None)
+            failure = capture.Kind != ProbeFailure.None ? capture.Kind : ProbeError.ClassifyMessage(result.Message);
+        return (result, failure);
+    }
+
+    private async Task<(ProbeResult Result, ProbeFailure Failure)> ProbeCapturedAsync(Connection connection, CancellationToken ct)
     {
         var provider = registry.Provider(connection.Provider);
         if (provider is null)
-            return ProbeResult.Down(TimeSpan.Zero, $"No provider named \"{connection.Provider}\" is installed.");
+            return (ProbeResult.Down(TimeSpan.Zero, $"No provider named \"{connection.Provider}\" is installed."), ProbeFailure.Other);
         // A deadline of the monitor's own. The HTTP client gives up after thirty seconds,
         // but not every probe is HTTP — MQTT, SSH, sockets, a plugin's own client — and the
         // sweep waits for every probe before it records any of them. One that never
@@ -397,28 +455,34 @@ public sealed partial class HealthMonitor(
         deadline.CancelAfter(ProbeDeadline);
         try
         {
-            return await provider.ProbeAsync(connection, deadline.Token).WaitAsync(ProbeDeadline, ct);
+            return (await provider.ProbeAsync(connection, deadline.Token).WaitAsync(ProbeDeadline, ct), ProbeFailure.None);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested &&
                                    (ex is TimeoutException || deadline.IsCancellationRequested))
         {
             log.LogWarning("Probing {Connection} took longer than {Seconds}s and was abandoned",
                 connection.Name, ProbeDeadline.TotalSeconds);
-            return ProbeResult.Down(ProbeDeadline,
-                $"No answer within {ProbeDeadline.TotalSeconds:0} seconds, so this check was abandoned.");
+            return (ProbeResult.Down(ProbeDeadline,
+                $"{ProbeError.AbandonedPrefix}{ProbeDeadline.TotalSeconds:0} seconds, so this check was abandoned."),
+                ProbeFailure.Abandoned);
         }
         catch (Exception ex)
         {
             // A provider that throws is a bug in the provider, not a reason to lose the sweep.
             log.LogError(ex, "Provider {Provider} threw while probing {Connection}", connection.Provider, connection.Name);
-            return ProbeResult.Down(TimeSpan.Zero, ex.GetBaseException().Message);
+            return (ProbeResult.Down(TimeSpan.Zero, ex.GetBaseException().Message), ProbeError.Classify(ex));
         }
     }
 
-    /// <summary>Probes one connection immediately and folds the result into the live state.</summary>
+    /// <summary>
+    /// Probes one connection immediately and folds the result into the live state. Judged
+    /// by whether LabbyTwo could see as of the last sweep: one probe on its own is not
+    /// enough to say.
+    /// </summary>
     public async Task RefreshAsync(Connection connection, CancellationToken ct = default)
     {
-        await ProbeAndRecordAsync(connection, ct);
+        var (result, _) = await ProbeClassifiedAsync(connection, ct);
+        await RecordProbeAsync(connection, result, Blindness, ct);
         Updated?.Invoke();
     }
 }

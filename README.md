@@ -582,6 +582,41 @@ outside service to say so — and whenever it can, the internet is not down. So 
 signal: the missing check-ins *are* the report, and the first ping once the line is back is
 the recovery.
 
+### When LabbyTwo cannot see
+
+Sometimes it is LabbyTwo that is broken, not the lab: Docker's DNS inside its container stops
+answering (often just after many containers are recreated at once), the Docker socket hangs,
+or its own database is locked. Every check then fails at once, and without care every one of
+them would be reported as that service going down — paged, opened as an incident, even used
+to roll back an update that was fine.
+
+So after each sweep LabbyTwo asks whether it can see. It decides it **cannot** when, in one
+sweep, at least 4 checks and at least half of all of them failed in a way that is LabbyTwo's
+own — a name that would not resolve (including `EAI_AGAIN`, "Resource temporarily
+unavailable"), a check abandoned at its 40-second deadline, the local Docker socket timing
+out, or "database is locked" — or when the Docker socket on its own machine does not answer,
+or when the previous sweep took many times longer than it should. The kind of failure is read
+from the error itself, not guessed from the message. One name that does not resolve is still
+reported as the real problem it is.
+
+While it cannot see:
+
+- every connection keeps its last known state — a tile says *can't check right now* — and
+  nothing is turned red;
+- no down notification is sent, no incident is opened or grown, no threshold rule is
+  judged, nothing is self-healed, and no safe update is judged or rolled back;
+- a banner on every page, the dashboard included, and the top of the **health** page say
+  what is wrong: *LabbyTwo can't see the lab right now: DNS lookups are failing inside its
+  container — this is not your services*;
+- **What changed** gets one line when it starts and one when it ends;
+- if it lasts more than 15 minutes, you get **one** notification saying so — a monitor that
+  has quietly stopped seeing is worth knowing about.
+
+A check that succeeds is always recorded — an answer is proof. It ends after two clean
+sweeps in a row, and anything that really went down meanwhile is then reported by the next
+checks in the usual way. Giving LabbyTwo's container a DNS server with `dns:` in
+docker-compose.yml makes it independent of Docker's own resolver, which is the usual cause.
+
 ### What changed, and incidents
 
 When something breaks, the first question is *what changed?* **What changed** in the nav
@@ -599,7 +634,8 @@ kind, by connection and by how far back:
 | Updates | LabbyTwo starts as a different version from last time | a comparison at startup |
 | Backups | a backup on the [Backups](#backups--dates-not-hope) page is proven newer, goes late, or has a restore test recorded | the Backups check, every five minutes |
 | Container settings | a container is recreated with different settings — "sonarr config changed: env PUID; ports" | the same container list: only a container with a new id is inspected, and only one whose settings differ is written (see [Config history](#config-history)) |
-| Safe updates | an update from the Containers tab is being watched, passes, fails, or is rolled back | the watch after the update (see [Safe updates](#safe-updates)) |
+| Safe updates | an update from the Containers tab is being watched, passes, fails, is rolled back, or could not be checked | the watch after the update (see [Safe updates](#safe-updates)) |
+| LabbyTwo losing sight | LabbyTwo stops being able to see the lab, and when it can again | the monitor's own judgement after each sweep (see [When LabbyTwo cannot see](#when-labbytwo-cannot-see)) |
 
 Containers are compared by polling rather than by Docker's event stream on purpose: the
 stream is a request held open for ever, and socket proxies, TCP endpoints and restarts all
@@ -610,13 +646,19 @@ database, so after a restart it compares with what was true before, and a sweep 
 nothing changed writes nothing.
 
 **Incidents** groups outages. A service going down or an alert rule firing starts one;
-anything else that goes down or fires within 15 minutes of the last thing that happened in
-it joins it — so the NAS and the six things stored on it are one incident, not seven — and
-something that comes back and falls over again soon after reopens it rather than starting
-another. It ends when everything in it has come back. Each one lists what was involved,
-when each part went down and for how long, and opens up into a **timeline**: every change
-recorded from half an hour before it started until just after it ended, marked with how
-long before or after the first failure it was. That half hour is usually where the cause
+anything else that goes down or fires within 15 minutes of the last *failure* in it — and no
+more than two hours after it started — joins it, so the NAS and the six things stored on it
+are one incident, not seven, while something failing hours later is an incident of its own
+however long the first stays open. Something that comes back and falls over again soon after
+reopens it rather than starting another, and is listed once for each time, with each time's
+own length — a service back in 28 seconds is never shown as down for the hours of a later
+failure. It ends when everything in it has come back. Nothing is added to an incident while
+LabbyTwo cannot see the lab (see [When LabbyTwo cannot see](#when-labbytwo-cannot-see)). Each
+one lists what was involved, when each part went down and for how long, and opens up into a
+**timeline**: every change recorded from half an hour before it started until just after it
+ended, marked with how long before or after the first failure it was. Timelines are read
+only when opened, and a long one shows its first and last 25 changes (and any a probable
+cause rests on) with **show all** for the rest. That half hour is usually where the cause
 is — the image that was pulled, the container that was recreated, the certificate that was
 replaced. Anything that happens while alerts are silenced for maintenance is still
 recorded, and marked **during maintenance**, since "it did not come back after I restarted
@@ -2154,6 +2196,33 @@ A container replaced or removed by somebody else during the watch is left alone 
 no longer the update LabbyTwo made. An update that never happens (Watchtower found nothing,
 or does not watch that container) is given up after half an hour. A watch outlives a restart
 of LabbyTwo: it is kept in the database and picked up again within a minute.
+
+The rules that keep a watch honest:
+
+- **The watch starts when the new container has been started**, not merely created —
+  Watchtower creates it and then starts it, and a look in between is not a failure.
+- **A watch is only judged on what is seen inside it**: from the moment the new container is
+  first seen running to the end of the watch, plus two minutes for the job's own rhythm.
+  Nothing seen after that can fail it. If LabbyTwo looked at it right up to the end, it
+  passed; if it could not — the job stalled, Docker did not answer, or LabbyTwo could not
+  see the lab — it ends as **not checked**, is left on the new image, and **↶** is there if
+  you want the old one back. **It is never rolled back later.**
+- **Nothing is judged while LabbyTwo cannot see the lab** (see
+  [When LabbyTwo cannot see](#when-labbytwo-cannot-see)) — a connection that looks down then
+  is LabbyTwo's trouble, not the new version's.
+- **Nothing waits for ever**: an update still waiting or watching two hours past its watch's
+  length is closed as not checked.
+
+#### A stuck update helper
+
+The one-shot Watchtower is named `labbytwo-update-helper-<date>-<time>` and labelled
+`labbytwo.update-helper`, so it is recognisable in `docker ps`. It is meant to finish and
+remove itself in minutes. While it runs, the Containers tab (and **Settings → Updates**, for
+LabbyTwo's own update) says so; if it is still running after half an hour plus a minute for
+each container it was given, it says **it may be stuck**, shows the last lines of its log,
+and offers **Stop it…**. LabbyTwo never stops it by itself — it may be half-way through
+recreating a container, and somebody should see that. Helpers started by older versions,
+with Docker's made-up names, are recognised by being a Watchtower told `--run-once`.
 
 **Rolling back** recreates the container on the previous image with the settings it has now,
 the way Compose or Watchtower would, since Watchtower itself can only move a container
