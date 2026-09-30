@@ -512,6 +512,48 @@ The guardrails:
   database, so an update in the middle neither restarts plex twice nor forgets to say whether
   it worked.
 
+#### Scheduled actions
+
+Self-healing acts when something breaks; **Settings → Alerts → Scheduled actions** acts when
+the clock says so — *"restart the flaky container every Sunday at 4am"*, *"trigger the backup
+script nightly"*. Each one is a name, a target and a schedule:
+
+- **Target** — restart, start or stop a Docker container (by name or Compose service), or run
+  one of a connection's action buttons, through the same code self-healing and the Controls
+  card use.
+- **Schedule** — chosen weekdays at one or more times; every so many minutes or hours;
+  once a month on a given day (a shorter month runs on its last day); or a five-field cron
+  expression such as `0 4 * * 0`, which the editor says back in words — *"Sundays at 04:00"* —
+  along with the next three times it will run. Nothing runs more often than every 5 minutes.
+
+Times are local and behave on the nights the clocks change: a time the clocks skip runs just
+after the jump, and a time that happens twice runs once. Intervals of whole hours count from
+midnight (every 6 hours is 00:00, 06:00, 12:00, 18:00); intervals in minutes are real minutes.
+
+Each action shows its next three runs, its last result, and a history of its last 20 runs;
+**Run now** runs it straight away through the same checks, without moving the schedule. Every
+run, skip and miss is in **What changed** (kind *Scheduled actions*) against the connection it
+acted on, and a failure can be sent to your alert channels — tick *Tell me if it fails* —
+held by quiet hours, maintenance and mute windows like any alert.
+
+The guardrails are self-healing's, from the same code:
+
+- **Not during maintenance**, unless the action ticks *Run during maintenance* (a backup script
+  can; a restart in the middle of your work should not).
+- **Never LabbyTwo's own container**, whatever you tick; a **protected container** or an action
+  the integration marks **dangerous** only with *Allow protected containers and dangerous
+  actions*; an action that **asks for input** cannot be scheduled at all.
+- **Never twice at once.** A run that is still going when the next one is due makes that one
+  a recorded skip, not a second run on top of the first.
+- **No bursts after downtime.** If LabbyTwo was not running when an action was due, it runs
+  once when it comes back — if that is within the grace period (an hour by default, set on the
+  page) — and otherwise the miss is recorded and it waits for its next time. A weekend of
+  downtime never comes back as a queue of restarts.
+
+The job that runs them ticks once a minute and reads nothing from the database unless
+something is due. Scheduled actions are included in **Export** and restored by **Import**;
+their history is not.
+
 Alert channels are connections too. Add a webhook or Pushover channel and both kinds start
 being delivered — there is no separate notification settings screen.
 

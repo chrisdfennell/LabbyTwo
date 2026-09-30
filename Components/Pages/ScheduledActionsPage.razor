@@ -1,0 +1,678 @@
+@page "/settings/scheduled"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ScheduledActions Scheduled
+@inject ScheduledActionStore Store
+@inject ConfigStore Config
+@inject ActionRunner Runner
+@inject AlertService Alerts
+@inject AppSettingsStore AppSettings
+@inject Offload Offload
+
+<PageTitle>Scheduled actions · LabbyTwo</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>⏰ Scheduled actions</h1>
+        <p class="subtitle">
+            Press a button on a timetable: restart the flaky container every Sunday at 4am, trigger the
+            backup script every night. Anything a connection's action button or a container restart can
+            do, done for you at the time you choose.
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="settings/alerts">🚨 Alerts and self-healing</a>
+        <button class="btn btn-sm btn-primary" @onclick="StartNew">+ New scheduled action</button>
+    </div>
+</div>
+
+<div class="widget mb-3">
+    <div class="widget-head">
+        <h2 class="widget-title">How they run</h2>
+        <span class="tile-meta">@(!_settings.Enabled ? "Switched off." : $"{_actions.Count(a => a.Enabled)} on.")</span>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            Held back during maintenance unless an action says otherwise. Never touches LabbyTwo's own
+            container, and a protected container or a dangerous action only when that action says so.
+            An action that asks a question before it runs cannot be scheduled — nobody is there to answer.
+            Every run goes into the <a href="changes?kind=scheduled">change feed</a>.
+        </p>
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-6">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="scheduled-enabled"
+                           checked="@_settings.Enabled"
+                           @onchange="e => SaveSettingsAsync(_settings with { Enabled = e.Value is true })" />
+                    <label class="form-check-label" for="scheduled-enabled">
+                        Allow scheduled actions
+                        <span class="form-text d-block">Off stops every one of them at once, without losing how they are set up. Switching back on never runs what was passed over.</span>
+                    </label>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="scheduled-grace">Catch up within (minutes)</label>
+                <input id="scheduled-grace" type="number" min="0" class="form-control" value="@_settings.GraceMinutes"
+                       @onchange="e => SaveSettingsAsync(_settings with { GraceMinutes = Int(e.Value, ScheduledSettings.DefaultGraceMinutes) })" />
+                <div class="form-text">
+                    If LabbyTwo was not running when one was due, it runs once when it comes back — if it is
+                    no later than this. Never more than once, however many were missed.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="widget mb-3">
+    <div class="widget-head">
+        <h2 class="widget-title">Scheduled</h2>
+    </div>
+    <div class="widget-body">
+        @if (!_loaded)
+        {
+            <p class="tile-meta mb-0">Loading…</p>
+        }
+        else if (_actions.Count == 0)
+        {
+            <p class="tile-meta mb-0">Nothing scheduled yet. <a href="" @onclick="StartNew" @onclick:preventDefault>Schedule the first one.</a></p>
+        }
+        else
+        {
+            <div class="d-flex flex-column gap-3">
+                @foreach (var action in _actions)
+                {
+                    var current = action;
+                    var runs = _runs.GetValueOrDefault(action.Id) ?? [];
+                    var last = runs.FirstOrDefault();
+                    var running = Scheduled.IsRunning(action.Id) || _pressed.Contains(action.Id);
+                    var upcoming = Scheduled.Upcoming(action, DateTimeOffset.Now);
+                    <div class="d-flex align-items-start gap-2">
+                        <span class="status-dot mt-1 @(running ? "status-flapping" : !action.Enabled ? "status-unknown" : last?.Dot ?? "status-unknown")"
+                              title="@(running ? "Running" : !action.Enabled ? "Off" : last is null ? "Not run yet" : last.Outcome)"></span>
+                        <div class="min-w-0 flex-grow-1">
+                            <div class="tile-name">
+                                @action.Name
+                                <span class="tile-meta">@TargetText(action)</span>
+                            </div>
+                            <div class="tile-meta">
+                                @action.Schedule.Describe()
+                                @if (!action.Enabled)
+                                {
+                                    <text> · off</text>
+                                }
+                                @if (action.RunInMaintenance)
+                                {
+                                    <text> · runs during maintenance</text>
+                                }
+                            </div>
+                            @if (action.Enabled && _settings.Enabled && upcoming.Count > 0)
+                            {
+                                <div class="tile-meta">Next: @string.Join(" · then ", upcoming.Select(When))</div>
+                            }
+                            @if (running)
+                            {
+                                <div class="tile-meta"><strong>Running now…</strong></div>
+                            }
+                            else if (last is not null)
+                            {
+                                <div class="tile-meta">
+                                    Last: @Outcome(last) @Ago.Since(last.At)@(last.Message.Length > 0 ? $" — {last.Message}" : "")
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="tile-meta">Not run yet.</div>
+                            }
+                            @if (_showHistory.Contains(action.Id))
+                            {
+                                <ul class="list-unstyled mb-0 mt-1 small">
+                                    @foreach (var run in runs)
+                                    {
+                                        <li class="d-flex align-items-start gap-2 mb-1">
+                                            <span class="status-dot @run.Dot mt-1" aria-hidden="true"></span>
+                                            <div class="min-w-0">
+                                                <span>@run.At.ToString("ddd d MMM, HH:mm")</span>
+                                                <span class="tile-meta">· @TriggerText(run) · @Outcome(run)@(run.Duration > TimeSpan.FromSeconds(1) ? $" in {Ago.Duration(run.Duration)}" : "")</span>
+                                                @if (run.Message.Length > 0)
+                                                {
+                                                    <div class="tile-meta">@run.Message</div>
+                                                }
+                                            </div>
+                                        </li>
+                                    }
+                                    @if (runs.Count == 0)
+                                    {
+                                        <li class="tile-meta">No runs yet.</li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                        <div class="text-end flex-none d-flex flex-wrap gap-1 justify-content-end">
+                            <button class="btn btn-sm btn-outline-primary" disabled="@running"
+                                    title="Run it now, through the same checks as the schedule. Does not move the next run."
+                                    @onclick="() => RunNowAsync(current)">Run now</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleHistory(current.Id)">
+                                @(_showHistory.Contains(action.Id) ? "Hide history" : "History")
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(current)">Edit</button>
+                            <button class="btn btn-sm btn-outline-danger" aria-label="Delete" @onclick="() => _confirmDelete = current">✕</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        @if (_notice is { } notice)
+        {
+            <div class="alert @(notice.Ok ? "alert-success" : "alert-warning") py-2 mt-3 mb-0">@notice.Text</div>
+        }
+    </div>
+</div>
+
+@if (_draft is { } draft)
+{
+    var problem = draft.Schedule.Problem();
+    <Modal Title="@(_isNew ? "New scheduled action" : $"Edit “{_originalName}”")" OnClose="() => _draft = null">
+        <ChildContent>
+            <div class="mb-3">
+                <label class="form-label" for="sa-name">Name</label>
+                <input id="sa-name" class="form-control" value="@draft.Name" placeholder="Restart plex on Sunday mornings"
+                       @onchange="e => _draft = draft with { Name = e.Value?.ToString() ?? string.Empty }" />
+            </div>
+
+            <fieldset class="border rounded p-2 mb-3">
+                <legend class="form-label float-none w-auto px-1 mb-0 small">What it does</legend>
+                <select class="form-select form-select-sm" aria-label="What it does" value="@(draft.Target == ScheduledTarget.Container ? "container" : "action")"
+                        @onchange='e => SetTarget(e.Value?.ToString() == "action" ? ScheduledTarget.ProviderAction : ScheduledTarget.Container)'>
+                    <option value="container">Restart, start or stop a Docker container</option>
+                    <option value="action" disabled="@(_withActions.Count == 0)">
+                        Run one of a connection's actions@(_withActions.Count == 0 ? " (none has any)" : "")
+                    </option>
+                </select>
+
+                <div class="row g-2 mt-1">
+                    @if (draft.Target == ScheduledTarget.Container)
+                    {
+                        <div class="col-12 col-md-4">
+                            <label class="form-label small" for="sa-verb">Do</label>
+                            <select id="sa-verb" class="form-select form-select-sm" value="@ScheduledAction.StoredVerb(draft.Verb)"
+                                    @onchange="e => _draft = draft with { Verb = ScheduledAction.ParseVerb(e.Value?.ToString()) }">
+                                <option value="restart">Restart</option>
+                                <option value="start">Start</option>
+                                <option value="stop">Stop</option>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <label class="form-label small" for="sa-container">Container</label>
+                            <input id="sa-container" class="form-control form-control-sm" value="@draft.Container" placeholder="plex"
+                                   @onchange="e => _draft = draft with { Container = e.Value?.ToString()?.Trim() ?? string.Empty }" />
+                            <div class="form-text">Its name, or its Compose service.</div>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <label class="form-label small" for="sa-docker">On</label>
+                            <select id="sa-docker" class="form-select form-select-sm" value="@draft.TargetConnectionId"
+                                    @onchange="e => _draft = draft with { TargetConnectionId = e.Value?.ToString() ?? string.Empty }">
+                                <option value="">Choose a Docker connection…</option>
+                                @foreach (var docker in _dockers)
+                                {
+                                    <option value="@docker.Id">@docker.Icon @docker.Name</option>
+                                }
+                            </select>
+                            @if (_dockers.Count == 0)
+                            {
+                                <div class="form-text">Add a Docker connection first.</div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        var chosen = _withActions.FirstOrDefault(c => c.Id == draft.TargetConnectionId);
+                        <div class="col-6">
+                            <label class="form-label small" for="sa-target">Connection</label>
+                            <select id="sa-target" class="form-select form-select-sm" value="@draft.TargetConnectionId"
+                                    @onchange="e => _draft = draft with { TargetConnectionId = e.Value?.ToString() ?? string.Empty, ActionId = string.Empty }">
+                                <option value="">Choose…</option>
+                                @foreach (var connection in _withActions)
+                                {
+                                    <option value="@connection.Id">@connection.Icon @connection.Name</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small" for="sa-action">Action</label>
+                            <select id="sa-action" class="form-select form-select-sm" value="@draft.ActionId" disabled="@(chosen is null)"
+                                    @onchange="e => _draft = draft with { ActionId = e.Value?.ToString() ?? string.Empty }">
+                                <option value="">Choose…</option>
+                                @if (chosen is not null)
+                                {
+                                    @foreach (var offered in Runner.ActionsFor(chosen))
+                                    {
+                                        var asks = offered.Fields.Any(f => f.Required);
+                                        <option value="@offered.Id" disabled="@asks">
+                                            @offered.Label@(asks ? " (asks for input — can't be scheduled)" : offered.Dangerous ? " (dangerous)" : "")
+                                        </option>
+                                    }
+                                }
+                            </select>
+                            <div class="form-text">The same buttons the Controls card and a runbook's <code>{{button}}</code> offer.</div>
+                        </div>
+                    }
+                </div>
+            </fieldset>
+
+            <fieldset class="border rounded p-2 mb-3">
+                <legend class="form-label float-none w-auto px-1 mb-0 small">When</legend>
+                <select class="form-select form-select-sm" aria-label="When" value="@ActionSchedule.StoredKind(draft.Schedule.Kind)"
+                        @onchange="e => SetSchedule(draft.Schedule with { Kind = ActionSchedule.ParseKind(e.Value?.ToString()) })">
+                    <option value="weekly">On chosen days of the week</option>
+                    <option value="interval">Every so many minutes or hours</option>
+                    <option value="monthly">Once a month</option>
+                    <option value="cron">A cron expression</option>
+                </select>
+
+                <div class="row g-2 mt-1">
+                    @switch (draft.Schedule.Kind)
+                    {
+                        case ScheduleKind.Weekly:
+                            <div class="col-12">
+                                <div class="d-flex flex-wrap gap-3">
+                                    @foreach (var day in MuteWindow.Week)
+                                    {
+                                        var d = day;
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="@($"sa-day-{d}")"
+                                                   checked="@draft.Schedule.Days.Contains(d)"
+                                                   @onchange="e => SetSchedule(draft.Schedule with { Days = ToggleDay(draft.Schedule.Days, d, e.Value is true) })" />
+                                            <label class="form-check-label" for="@($"sa-day-{d}")">@d.ToString()[..3]</label>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                            @TimesField
+                            break;
+
+                        case ScheduleKind.Monthly:
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small" for="sa-dom">Day of the month</label>
+                                <input id="sa-dom" type="number" min="1" max="31" class="form-control form-control-sm" value="@draft.Schedule.DayOfMonth"
+                                       @onchange="e => SetSchedule(draft.Schedule with { DayOfMonth = Int(e.Value, 1) })" />
+                                <div class="form-text">A shorter month runs on its last day.</div>
+                            </div>
+                            @TimesField
+                            break;
+
+                        case ScheduleKind.Interval:
+                            var hours = draft.Schedule.IntervalMinutes % 60 == 0;
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small" for="sa-every">Every</label>
+                                <input id="sa-every" type="number" min="1" class="form-control form-control-sm"
+                                       value="@(hours ? draft.Schedule.IntervalMinutes / 60 : draft.Schedule.IntervalMinutes)"
+                                       @onchange="e => SetSchedule(draft.Schedule with { IntervalMinutes = Int(e.Value, 1) * (hours ? 60 : 1) })" />
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small" for="sa-unit">&nbsp;</label>
+                                <select id="sa-unit" class="form-select form-select-sm" value="@(hours ? "hours" : "minutes")"
+                                        @onchange='e => SetSchedule(draft.Schedule with { IntervalMinutes = ChangeUnit(draft.Schedule.IntervalMinutes, hours, e.Value?.ToString() == "hours") })'>
+                                    <option value="minutes">minutes</option>
+                                    <option value="hours">hours</option>
+                                </select>
+                            </div>
+                            <div class="col-12">
+                                <div class="form-text">
+                                    Hours count from midnight — every 6 hours is 00:00, 06:00, 12:00 and 18:00. Minutes are
+                                    real minutes, unaffected by the clocks changing. At least every @ActionSchedule.MinimumMinutes minutes.
+                                </div>
+                            </div>
+                            break;
+
+                        case ScheduleKind.Cron:
+                            <div class="col-12">
+                                <label class="form-label small" for="sa-cron">Cron expression</label>
+                                <input id="sa-cron" class="form-control form-control-sm font-monospace" value="@draft.Schedule.Cron" placeholder="0 4 * * 0"
+                                       @oninput="e => SetSchedule(draft.Schedule with { Cron = e.Value?.ToString() ?? string.Empty })" />
+                                <div class="form-text">Minute, hour, day of month, month, day of week — <code>0 4 * * 0</code> is Sundays at 04:00.</div>
+                            </div>
+                            break;
+                    }
+                </div>
+
+                <div class="form-text mt-2">
+                    @if (problem is not null)
+                    {
+                        <span class="text-warning">@problem</span>
+                    }
+                    else
+                    {
+                        <strong>@draft.Schedule.Describe().</strong>
+                        var preview = draft.Schedule.Upcoming(DateTimeOffset.Now, Scheduled.Zone, 3);
+                        @if (preview.Count > 0)
+                        {
+                            <text> Next: @string.Join(" · then ", preview.Select(When)).</text>
+                        }
+                    }
+                </div>
+            </fieldset>
+
+            <div class="row g-2">
+                <div class="col-12 col-md-6">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="sa-enabled" checked="@draft.Enabled"
+                               @onchange="e => _draft = draft with { Enabled = e.Value is true }" />
+                        <label class="form-check-label" for="sa-enabled">On</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="sa-maintenance" checked="@draft.RunInMaintenance"
+                               @onchange="e => _draft = draft with { RunInMaintenance = e.Value is true }" />
+                        <label class="form-check-label" for="sa-maintenance">
+                            Run during maintenance
+                            <span class="form-text d-block">For jobs that do not care what you are working on, like a backup.</span>
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="sa-protected" checked="@draft.AllowProtected"
+                               @onchange="e => _draft = draft with { AllowProtected = e.Value is true }" />
+                        <label class="form-check-label" for="sa-protected">
+                            Allow protected containers and dangerous actions
+                            <span class="form-text d-block">Never LabbyTwo's own container, whatever this says.</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="sa-notify" checked="@draft.NotifyOnFailure"
+                               @onchange="e => _draft = draft with { NotifyOnFailure = e.Value is true }" />
+                        <label class="form-check-label" for="sa-notify">
+                            Tell me if it fails
+                            <span class="form-text d-block">Held by quiet hours, maintenance and mute windows, like any alert.</span>
+                        </label>
+                    </div>
+                    <label class="form-label small mt-1" for="sa-channel">Through</label>
+                    <select id="sa-channel" class="form-select form-select-sm" value="@draft.ChannelId" disabled="@(!draft.NotifyOnFailure)"
+                            @onchange="e => _draft = draft with { ChannelId = e.Value?.ToString() ?? string.Empty }">
+                        <option value="">Every alert channel</option>
+                        @foreach (var channel in _channels)
+                        {
+                            <option value="@channel.Id">@channel.Icon @channel.Name</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            @if (_error is { } error)
+            {
+                <div class="alert alert-warning py-2 mt-3 mb-0">@error</div>
+            }
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _draft = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" disabled="@_saving" @onclick="SaveAsync">Save</button>
+        </Footer>
+    </Modal>
+}
+
+@if (_confirmDelete is { } deleting)
+{
+    <ConfirmDialog Title="Delete this scheduled action?"
+                   Message="@($"“{deleting.Name}” will stop running, and its history goes with it. Runs already in the change feed stay there.")"
+                   OnConfirm="DeleteAsync"
+                   OnCancel="() => _confirmDelete = null" />
+}
+
+@code {
+    private IReadOnlyList<ScheduledAction> _actions = [];
+    private Dictionary<string, IReadOnlyList<ScheduledRun>> _runs = [];
+    private IReadOnlyList<Connection> _connections = [];
+    private IReadOnlyList<Connection> _dockers = [];
+    private IReadOnlyList<Connection> _withActions = [];
+    private IReadOnlyList<Connection> _channels = [];
+    private ScheduledSettings _settings = new(true, ScheduledSettings.DefaultGraceMinutes);
+    private bool _loaded;
+
+    private readonly HashSet<string> _showHistory = [];
+
+    /// <summary>"Run now" pressed and not yet answered — shown as running before the service has registered it.</summary>
+    private readonly HashSet<string> _pressed = [];
+
+    private ScheduledAction? _draft;
+    private bool _isNew;
+    private string _originalName = "";
+    private string? _error;
+    private bool _saving;
+    private string _timesText = "";
+    private ScheduledAction? _confirmDelete;
+    private (bool Ok, string Text)? _notice;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Scheduled.Ran += OnRan;
+        Store.Changed += OnStoreChanged;
+        await LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        Scheduled.Ran -= OnRan;
+        Store.Changed -= OnStoreChanged;
+    }
+
+    /// <summary>
+    /// Everything the page shows, in one trip through <see cref="Offload"/>: the actions and
+    /// settings come from memory, and each action's history is one short indexed read.
+    /// </summary>
+    private async Task LoadAsync()
+    {
+        var (actions, runs, connections, channels, settings) = await Offload.Run(async ct =>
+        {
+            var actions = await Store.AllAsync(ct);
+            var runs = new Dictionary<string, IReadOnlyList<ScheduledRun>>();
+            foreach (var action in actions)
+                runs[action.Id] = await Store.RunsAsync(action.Id, ScheduledActionStore.HistoryLength, ct);
+            var connections = await Config.ConnectionsAsync(ct);
+            var channels = (await Alerts.ChannelsAsync(ct)).Select(pair => pair.Connection).ToList();
+            var settings = ScheduledSettings.From(await AppSettings.AllAsync(ct));
+            return (actions, runs, connections, channels, settings);
+        });
+
+        _actions = actions;
+        _runs = runs;
+        _connections = connections;
+        _dockers = [.. connections.Where(c => c.Provider == "docker")];
+        _withActions = [.. connections.Where(c => Runner.ActionsFor(c).Count > 0)];
+        _channels = channels;
+        _settings = settings;
+        _loaded = true;
+    }
+
+    private void OnRan(ScheduledRun run) => _ = InvokeAsync(async () =>
+    {
+        _runs[run.ActionId] = await Offload.Run(ct => Store.RunsAsync(run.ActionId, ScheduledActionStore.HistoryLength, ct));
+        StateHasChanged();
+    });
+
+    private void OnStoreChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private async Task SaveSettingsAsync(ScheduledSettings next)
+    {
+        await Offload.Run(async ct =>
+        {
+            await AppSettings.SaveAsync(next.ToSettings(), ct);
+            return true;
+        });
+        _settings = ScheduledSettings.From(new SettingsBag(next.ToSettings()));
+    }
+
+    private void StartNew()
+    {
+        _isNew = true;
+        _originalName = "";
+        _error = null;
+        _draft = new ScheduledAction
+        {
+            TargetConnectionId = _dockers.Count == 1 ? _dockers[0].Id : "",
+            Schedule = new ActionSchedule { Kind = ScheduleKind.Weekly, Days = [DayOfWeek.Sunday], Times = [new TimeOnly(4, 0)] },
+        };
+        _timesText = ActionSchedule.StoredTimes(_draft.Schedule.Times).Replace(",", ", ");
+    }
+
+    private void Edit(ScheduledAction action)
+    {
+        _isNew = false;
+        _originalName = action.Name;
+        _error = null;
+        _draft = action;
+        _timesText = ActionSchedule.StoredTimes(action.Schedule.Times).Replace(",", ", ");
+    }
+
+    private void SetTarget(ScheduledTarget target)
+    {
+        if (_draft is not { } draft || draft.Target == target)
+            return;
+        _draft = draft with
+        {
+            Target = target,
+            TargetConnectionId = target == ScheduledTarget.Container && _dockers.Count == 1 ? _dockers[0].Id : "",
+            ActionId = "",
+        };
+    }
+
+    private void SetSchedule(ActionSchedule schedule)
+    {
+        if (_draft is { } draft)
+            _draft = draft with { Schedule = schedule };
+    }
+
+    /// <summary>The times box, shared by weekly and monthly: a comma-separated list, kept as typed while it is being typed.</summary>
+    private RenderFragment TimesField =>
+        @<div class="col-12 col-md-8">
+            <label class="form-label small" for="sa-times">At</label>
+            <input id="sa-times" class="form-control form-control-sm" value="@_timesText" placeholder="04:00"
+                   @onchange="e => SetTimes(e.Value?.ToString())" />
+            <div class="form-text">24-hour time. More than one? Separate them with commas: 04:00, 16:00.</div>
+        </div>;
+
+    private void SetTimes(string? text)
+    {
+        _timesText = text ?? "";
+        if (_draft is { } draft)
+            _draft = draft with { Schedule = draft.Schedule with { Times = ActionSchedule.ParseTimes(_timesText) } };
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_draft is not { } draft)
+            return;
+
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Offload.Run(async ct =>
+            {
+                await Scheduled.SaveAsync(draft, DateTimeOffset.Now, ct);
+                return true;
+            });
+            _draft = null;
+            await LoadAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_confirmDelete is not { } action)
+            return;
+        _confirmDelete = null;
+        await Offload.Run(async ct =>
+        {
+            await Scheduled.DeleteAsync(action.Id, ct);
+            return true;
+        });
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// Runs it now and says how it went. Not through <see cref="Offload"/>: this is not a
+    /// read, it is waiting on a container or a provider for up to a minute and a half, and
+    /// it should not hold one of the few slots every chart on the dashboard shares.
+    /// </summary>
+    private async Task RunNowAsync(ScheduledAction action)
+    {
+        _pressed.Add(action.Id);
+        _notice = null;
+        try
+        {
+            var run = await Task.Run(() => Scheduled.RunNowAsync(action.Id));
+            _notice = (run.Ok, $"{action.Name}: {Outcome(run)}{(run.Message.Length > 0 ? $" — {run.Message}" : "")}");
+            _runs[action.Id] = await Offload.Run(ct => Store.RunsAsync(action.Id, ScheduledActionStore.HistoryLength, ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            _notice = (false, ex.Message);
+        }
+        finally
+        {
+            _pressed.Remove(action.Id);
+        }
+    }
+
+    private void ToggleHistory(string id)
+    {
+        if (!_showHistory.Remove(id))
+            _showHistory.Add(id);
+    }
+
+    private string TargetText(ScheduledAction action)
+    {
+        var connection = _connections.FirstOrDefault(c => c.Id == action.TargetConnectionId);
+        var on = connection?.Name ?? "a deleted connection";
+        if (action.Target == ScheduledTarget.Container)
+            return $"{action.Verb.ToString().ToLowerInvariant()} {action.Container} on {on}";
+        var label = connection is null ? action.ActionId
+            : Runner.ActionsFor(connection).FirstOrDefault(a => string.Equals(a.Id, action.ActionId, StringComparison.OrdinalIgnoreCase))?.Label ?? action.ActionId;
+        return $"“{label}” on {on}";
+    }
+
+    /// <summary>"Sun 4 Oct, 04:00 (in 2d 3h)" — the day and time, and how far off it is.</summary>
+    private string When(DateTimeOffset at)
+    {
+        var local = TimeZoneInfo.ConvertTime(at, Scheduled.Zone);
+        return $"{local:ddd d MMM, HH:mm} (in {Ago.Duration(at - DateTimeOffset.Now)})";
+    }
+
+    private static string Outcome(ScheduledRun run) => run.Outcome switch
+    {
+        ScheduledOutcomes.Ok => "done",
+        ScheduledOutcomes.Failed => "failed",
+        _ => "skipped",
+    };
+
+    private static string TriggerText(ScheduledRun run) => run.Trigger switch
+    {
+        ScheduledTriggers.Manual => "Run now",
+        ScheduledTriggers.CatchUp => "caught up",
+        _ => "on schedule",
+    };
+
+    private static IReadOnlyList<DayOfWeek> ToggleDay(IReadOnlyList<DayOfWeek> days, DayOfWeek day, bool on) =>
+        on ? [.. days.Append(day).Distinct()] : [.. days.Where(d => d != day)];
+
+    /// <summary>Keeps the number shown when the unit changes: 6 minutes becomes 6 hours, not 360.</summary>
+    private static int ChangeUnit(int minutes, bool wasHours, bool toHours)
+    {
+        var shown = wasHours ? minutes / 60 : minutes;
+        return toHours ? Math.Max(1, shown) * 60 : Math.Max(ActionSchedule.MinimumMinutes, shown);
+    }
+
+    private static int Int(object? value, int fallback) =>
+        int.TryParse(value?.ToString(), out var parsed) ? parsed : fallback;
+}
