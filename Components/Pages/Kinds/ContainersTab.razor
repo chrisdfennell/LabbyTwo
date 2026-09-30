@@ -157,6 +157,11 @@
 
         <UpdateHelperNotice Endpoint="@Endpoint" />
 
+        @if (_error is null && _rows.Count > 0)
+        {
+            <DiscoveryHint Docker="_docker" Rows="_rows" />
+        }
+
         @if (_error is { Length: > 0 })
         {
             <div class="alert alert-warning py-2 ct-error">@_error</div>
