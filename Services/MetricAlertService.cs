@@ -86,7 +86,19 @@ public sealed class MetricAlertService(
         return Task.CompletedTask;
     }
 
-    private void OnSweepCompleted() => _ = EvaluateSafelyAsync();
+    /// <summary>
+    /// Not while LabbyTwo cannot see the lab: the readings it would compare are the last
+    /// ones it had, or none, and a rule judged on those fires or clears on LabbyTwo's
+    /// trouble rather than the lab's. Skipping the pass also skips what hangs off it —
+    /// self-healing and incident reconciling — which is the point: nothing acts on a
+    /// view LabbyTwo knows is broken. Breaches keep their state and carry on afterwards.
+    /// </summary>
+    private void OnSweepCompleted()
+    {
+        if (monitor.IsBlind)
+            return;
+        _ = EvaluateSafelyAsync();
+    }
 
     private async Task EvaluateSafelyAsync()
     {

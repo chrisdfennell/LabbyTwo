@@ -242,6 +242,22 @@ public sealed class SystemHealthTests : IDisposable
             TimeSpan.FromHours(1), 50_000_000, 150_000_000, 30, 0, 8, 4));
 
     [Fact]
+    public void LabbyTwo_being_unable_to_see_the_lab_is_reported_as_its_own_fault()
+    {
+        var monitor = Healthy(Now) with
+        {
+            Blindness = new Blindness(true, BlindCause.Dns, Now - TimeSpan.FromMinutes(20), 9, 12),
+        };
+
+        var finding = Assert.Single(SystemHealth.Assess(Live(monitor), null, TimeSpan.FromSeconds(30)));
+        Assert.Equal(SystemHealth.Level.Bad, finding.Level);
+        Assert.Contains("LabbyTwo can't see the lab right now: DNS lookups are failing inside its container — this is not your services.",
+            finding.Text);
+        Assert.Contains("20 min", finding.Text);
+        Assert.Contains("9 of 12 checks", finding.Text);
+    }
+
+    [Fact]
     public void A_monitor_sweeping_on_time_has_nothing_to_report()
     {
         Assert.Empty(SystemHealth.Assess(Live(Healthy(Now)), null, TimeSpan.FromSeconds(30)));

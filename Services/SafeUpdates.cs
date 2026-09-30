@@ -263,12 +263,30 @@ public sealed class SafeUpdates(
                     _gate.Release();
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            // A Docker call that timed out is a cancellation too — HttpClient's timeout is
+            // one — and letting it through failed the whole job ("Operation canceled") and
+            // left every other update in the list unlooked-at. Only the job being stopped
+            // is a reason to stop.
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                log.LogWarning(ex, "Could not check on the update of {Container}", update.Container);
+                log.LogWarning("Could not check on the update of {Container}: {Reason}", update.Container,
+                    ex is OperationCanceledException ? "Docker did not answer in time" : ex.GetBaseException().Message);
             }
         }
+
+        // Forget looks at updates that are over.
+        foreach (var id in _looked.Keys.Where(id => active.All(u => u.Id != id)))
+            _looked.TryRemove(id, out _);
     }
+
+    /// <summary>
+    /// When each update in progress was last looked at with an answer from Docker. In
+    /// memory: after a restart nothing has been looked at, which is the honest answer —
+    /// a watch that ended while LabbyTwo was down was not watched.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, DateTimeOffset> _looked = new();
+
+    private DateTimeOffset? LastLook(long id) => _looked.TryGetValue(id, out var at) ? at : null;
 
     private async Task StepAsync(SafeUpdate update, IReadOnlyList<Connection> connections, DateTimeOffset now, CancellationToken ct)
     {
@@ -293,6 +311,20 @@ public sealed class SafeUpdates(
             return;
         }
 
+        // Time up, whatever Docker would say: decided before asking it, so a Docker that is
+        // not answering cannot leave an update hanging for a verdict that comes hours late.
+        if (SafeUpdateRules.Overdue(update, now, LastLook(update.Id)) is { } overdue)
+        {
+            await FinishAsync(update, overdue, now, ct);
+            return;
+        }
+
+        // Nothing is judged while LabbyTwo cannot see the lab: a connection that looks down
+        // then is LabbyTwo's trouble, not the update's. Not looking also means this is not
+        // counted as a look, so a watch that spends its end blind ends as not checked.
+        if (monitor.IsBlind)
+            return;
+
         var endpoint = Endpoint(docker);
         var timeout = TimeSpan.FromSeconds(Math.Clamp(docker.Settings.GetInt("timeout", 10), 1, 120));
         var (container, labels) = await LookAsync(endpoint, timeout, update.Container, ct);
@@ -308,7 +340,8 @@ public sealed class SafeUpdates(
         if (update is { State: SafeUpdateState.Watching, WatchFrom: { } from } && watched.Count > 0)
             trouble = await changes.QueryAsync(new ChangeQuery(from, now, [ChangeKinds.Status, ChangeKinds.Alert]), ct);
 
-        var step = SafeUpdateRules.Next(update, container, watched, trouble, now);
+        var step = SafeUpdateRules.Next(update, container, watched, trouble, now, LastLook(update.Id));
+        _looked[update.Id] = now;
         if (step.State == update.State)
             return;
 
@@ -345,13 +378,8 @@ public sealed class SafeUpdates(
                 }, ct);
                 break;
 
-            case SafeUpdateState.Passed:
-                await SaveAndRecordAsync(update with { State = SafeUpdateState.Passed, EndedAt = now },
-                    new Change(now, ChangeKinds.Container, ChangeActions.Passed, update.ConnectionId, name,
-                        $"{name} passed its {Minutes(update.WatchFor)} watch after updating",
-                        update.RollbackTag.Length > 0
-                            ? $"The previous image is kept as {update.RollbackTag}, for rolling back by hand."
-                            : "The previous image is kept while nothing deletes it, for rolling back by hand."), ct);
+            case SafeUpdateState.Passed or SafeUpdateState.NotChecked:
+                await FinishAsync(update, step, now, ct);
                 break;
 
             case SafeUpdateState.NotUpdated or SafeUpdateState.Abandoned:
@@ -368,6 +396,27 @@ public sealed class SafeUpdates(
                 await RollBackLockedAsync(update, docker, connections, step.Reason, reaching, ct);
                 break;
         }
+    }
+
+    /// <summary>Ends a watch without touching the container: it passed, or it could not be checked.</summary>
+    private async Task FinishAsync(SafeUpdate update, SafeUpdateStep step, DateTimeOffset now, CancellationToken ct)
+    {
+        var name = update.Container;
+        var kept = update.RollbackTag.Length > 0
+            ? $"The previous image is kept as {update.RollbackTag}, for rolling back by hand."
+            : "The previous image is kept while nothing deletes it, for rolling back by hand.";
+
+        if (step.State == SafeUpdateState.Passed)
+        {
+            await SaveAndRecordAsync(update with { State = SafeUpdateState.Passed, EndedAt = now },
+                new Change(now, ChangeKinds.Container, ChangeActions.Passed, update.ConnectionId, name,
+                    $"{name} passed its {Minutes(update.WatchFor)} watch after updating", kept), ct);
+            return;
+        }
+
+        await SaveAndRecordAsync(update with { State = step.State, EndedAt = now, Reason = step.Reason },
+            new Change(now, ChangeKinds.Container, ChangeActions.Changed, update.ConnectionId, name,
+                $"{name}'s update was not checked", $"{Sentence(Capitalise(step.Reason))} {(step.Reason.Contains("kept") ? "" : kept)}".Trim()), ct);
     }
 
     // ---- rolling back -------------------------------------------------------------

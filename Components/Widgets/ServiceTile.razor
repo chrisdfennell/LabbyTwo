@@ -17,8 +17,10 @@ else
                 @(string.IsNullOrWhiteSpace(Context.Connection.Icon) ? "" : Context.Connection.Icon + " ")@Context.Connection.Name
             </span>
         </div>
-        <div class="tile-meta text-truncate" title="@(_state?.Message)">
-            @(_state is null ? "checking…" : _state.Message)
+        @* While LabbyTwo cannot see the lab, the state is the last one known and this says so,
+           rather than showing a failure that was LabbyTwo's own as if it were the service's. *@
+        <div class="tile-meta text-truncate" title="@(_state?.CantCheck is { } cant ? $"Can't check right now: {cant}" : _state?.Message)">
+            @(_state is null ? "checking…" : _state.CantCheck is not null ? $"can't check right now · last: {_state.Message}" : _state.Message)
         </div>
     </a>
 

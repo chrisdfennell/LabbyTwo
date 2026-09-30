@@ -1837,7 +1837,24 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 
 /* Pushes the button to the right on a wide banner, and lets it fall below on a narrow
    one rather than squeezing the sentence into a column. */
-.maintenance-banner > button { margin-left: auto; }
+.maintenance-banner > button,
+.maintenance-banner > a.btn { margin-left: auto; }
+
+/* LabbyTwo cannot see the lab. Warn-coloured like maintenance and for the same reason:
+   the services are probably fine, and red would say otherwise. */
+.blind-banner .tile-meta { font-size: .85rem; }
+
+/* The end of a stuck update helper's log: a few lines, kept from pushing the page wide. */
+.update-helper-log {
+    max-height: 10rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: .8rem;
+    padding: .4rem .5rem;
+    border-radius: .35rem;
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+}
 
 /* ---------- speed test ---------- */
 

@@ -1,0 +1,48 @@
+@implements IDisposable
+@inject HealthMonitor Health
+
+@* Shown on every page while LabbyTwo cannot see the lab — its DNS has stopped answering,
+   its Docker socket hangs, its database is locked. Every red thing on a dashboard during
+   that would otherwise read as the lab being down, and the point of this is that it says,
+   before anything else on the page does, that it is LabbyTwo's eyes and not the services.
+
+   Reads memory only (HealthMonitor.Blindness), and redraws on each sweep. *@
+
+@if (_blind is { Impaired: true } blind)
+{
+    <div class="maintenance-banner blind-banner" role="status">
+        <span class="maintenance-dot" aria-hidden="true"></span>
+        <div class="min-w-0">
+            <strong>@blind.Headline</strong>
+            <span class="tile-meta"> For @Ago.Duration(blind.For(DateTimeOffset.Now)) so far.</span>
+            <div class="tile-meta">@blind.Detail</div>
+        </div>
+        <a class="btn btn-sm btn-outline-secondary flex-none" href="health">LabbyTwo's health</a>
+    </div>
+}
+
+@code {
+    private Blindness? _blind;
+
+    protected override void OnInitialized()
+    {
+        _blind = Health.Blindness;
+        Health.Updated += OnSweep;
+    }
+
+    private void OnSweep()
+    {
+        var now = Health.Blindness;
+        // Only redraw when there is something to show or to take away; the rest of the time
+        // a sweep is none of this banner's business.
+        if (!now.Impaired && _blind is not { Impaired: true })
+            return;
+        _ = InvokeAsync(() =>
+        {
+            _blind = now;
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose() => Health.Updated -= OnSweep;
+}

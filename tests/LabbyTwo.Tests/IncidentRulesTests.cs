@@ -117,8 +117,101 @@ public sealed class IncidentRulesTests
             Down("nas", T0.AddMinutes(10))));
 
         Assert.True(incident.IsOpen);
-        Assert.Single(incident.Members);
         Assert.Equal(T0, incident.StartedAt);
+
+        // Two spans of the one service: the first keeps its recovery.
+        Assert.Collection(incident.Members.OrderBy(m => m.DownAt),
+            first =>
+            {
+                Assert.Equal(1, first.Span);
+                Assert.Equal(T0.AddMinutes(3), first.UpAt);
+            },
+            second =>
+            {
+                Assert.Equal(2, second.Span);
+                Assert.Equal(T0.AddMinutes(10), second.DownAt);
+                Assert.Null(second.UpAt);
+            });
+        Assert.Equal("NAS", incident.Title);
+    }
+
+    [Fact]
+    public void AServiceBackIn28SecondsIsNotListedAsDownForHoursWhenItFailsAgainLater()
+    {
+        // What the NAS showed: NZBGet went down with the update and came back 28 seconds
+        // later, while Sonarr stayed down. Later NZBGet failed again, and when that ended the
+        // incident said "NZBGet — went down at 21:28, down for 14h 33m".
+        var incidents = Run(
+            Down("sonarr", T0),
+            Down("nzbget", T0.AddSeconds(30)),
+            Up("nzbget", T0.AddSeconds(58)),
+            Down("nzbget", T0.AddMinutes(5)),
+            Up("nzbget", T0.AddMinutes(6)),
+            Up("sonarr", T0.AddMinutes(8)));
+
+        var incident = Assert.Single(incidents);
+        var nzbget = incident.Members.Where(m => m.ConnectionId == "nzbget").OrderBy(m => m.DownAt).ToList();
+        Assert.Equal(2, nzbget.Count);
+        Assert.Equal(TimeSpan.FromSeconds(28), nzbget[0].UpAt - nzbget[0].DownAt);
+        Assert.Equal(TimeSpan.FromMinutes(1), nzbget[1].UpAt - nzbget[1].DownAt);
+        Assert.False(incident.IsOpen);
+        Assert.Equal(T0.AddMinutes(8), incident.EndedAt);
+    }
+
+    [Fact]
+    public void AFailureLongAfterTheLastFailureStartsANewIncidentEvenWhileTheOldOneIsOpen()
+    {
+        // Sonarr stays down; its members trickle back; three hours later something else fails.
+        var incidents = Run(
+            Down("sonarr", T0),
+            Down("plex", T0.AddMinutes(1)),
+            Up("plex", T0.AddMinutes(40)),
+            Down("github", T0.AddHours(3)));
+
+        Assert.Equal(2, incidents.Count);
+        Assert.True(incidents[0].IsOpen);
+        Assert.Equal(["SONARR", "PLEX"], incidents[0].Members.Select(m => m.Name));
+        Assert.Equal("GITHUB", Assert.Single(incidents[1].Members).Name);
+    }
+
+    [Fact]
+    public void ARecoveryDoesNotKeepAnIncidentOpenForNewFailures()
+    {
+        // Twenty minutes after the last failure, though only five after a recovery: joining
+        // is measured from the last failure, so this is a new incident.
+        var incidents = Run(
+            Down("sonarr", T0),
+            Up("sonarr", T0.AddMinutes(15)),
+            Down("radarr", T0.AddMinutes(20)));
+
+        Assert.Equal(2, incidents.Count);
+    }
+
+    [Fact]
+    public void AnIncidentStopsGrowingTwoHoursAfterItStarted()
+    {
+        // A cascade that keeps spreading every ten minutes: joins until two hours, then not.
+        var signals = Enumerable.Range(0, 15).Select(i => Down($"svc{i}", T0.AddMinutes(10 * i))).ToArray();
+        var incidents = Run(signals);
+
+        Assert.Equal(2, incidents.Count);
+        Assert.Equal(13, incidents[0].Members.Count);   // 0 … 120 minutes
+        Assert.Equal(2, incidents[1].Members.Count);    // 130 and 140
+        Assert.True(IncidentRules.CanJoin(incidents[0], T0.AddHours(2)));
+        Assert.False(IncidentRules.CanJoin(incidents[0], T0.AddHours(2).AddMinutes(1)));
+    }
+
+    [Fact]
+    public void SpansAreStoredUnderTheirOwnKeysAndReadBack()
+    {
+        var first = new IncidentMember("status:nzbget", ChangeKinds.Status, "nzbget", "NZBGet", T0, T0.AddSeconds(28));
+        var second = first with { DownAt = T0.AddHours(3), UpAt = null, Span = 2 };
+
+        Assert.Equal("status:nzbget", LabbyTwo.Storage.IncidentStore.StoredKey(first));
+        Assert.Equal("status:nzbget#span2", LabbyTwo.Storage.IncidentStore.StoredKey(second));
+        Assert.Equal(("status:nzbget", 2), LabbyTwo.Storage.IncidentStore.ParseKey("status:nzbget#span2"));
+        Assert.Equal(("alert:r1:nas", 1), LabbyTwo.Storage.IncidentStore.ParseKey("alert:r1:nas"));
+        Assert.Equal(("status:odd#spanx", 1), LabbyTwo.Storage.IncidentStore.ParseKey("status:odd#spanx"));
     }
 
     [Fact]

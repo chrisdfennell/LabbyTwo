@@ -110,7 +110,7 @@ public sealed class ProbableCauses(
         try
         {
             var open = await incidents.OpenAsync(budget.Token);
-            var joined = open.Where(i => at - i.LastActivity <= IncidentRules.JoinWindow).OrderByDescending(i => i.LastActivity).FirstOrDefault();
+            var joined = open.Where(i => IncidentRules.CanJoin(i, at)).OrderByDescending(i => i.LastActivity).FirstOrDefault();
             var key = IncidentMember.StatusKey(connection.Id);
             var member = new IncidentMember(key, ChangeKinds.Status, connection.Id, connection.Name, at, null);
             var incident = joined is null
