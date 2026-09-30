@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
+using LabbyTwo.Services;
 using LabbyTwo.Storage;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LabbyTwo.Tests;
@@ -66,6 +68,32 @@ public sealed class BigDatabaseTimings
             {
                 await history.UptimeAsync(id, month);
                 await history.DailyUptimeAsync(id, 30);
+            });
+
+            // {{chart: … from= to=}} over a month that has ended, as the monthly report draws
+            // it: bounded at both ends, hourly, from the covering index and the summaries.
+            var spanTo = DateTimeOffset.UtcNow.AddDays(-1);
+            var spanFrom = spanTo - month;
+            await TimeAsync(lines, "chart-span", connections, id => history.SamplesBetweenAsync(id, "cpu_percent", spanFrom, spanTo));
+
+            // Three pages open on a runbook with every connection's month on it, through the
+            // shared path the charts use: the second and third page must not read again.
+            {
+                using var shared = new SharedSeries(history, new Offload(NullLogger<Offload>.Instance));
+                var sharedClock = Stopwatch.StartNew();
+                for (var page = 0; page < 3; page++)
+                    await Task.WhenAll(connections.Select(id => shared.SamplesAsync(id, "cpu_percent", month, SharedSeries.LongestFresh)));
+                sharedClock.Stop();
+                lines.Add(Line("chart-shared", sharedClock.Elapsed,
+                    $"{connections.Count * 3} charts on 3 pages, {shared.Queries} queries"));
+            }
+
+            // The monthly report's heavy part: each service's month of transitions and its
+            // average response time.
+            await TimeAsync(lines, "month-report", connections, async id =>
+            {
+                await history.StatusBetweenAsync(id, spanFrom, spanTo, MonthlyReportGatherer.EventLimit);
+                await history.AggregateAsync(id, "latency_ms", spanFrom, spanTo);
             });
 
             // Once, and last: it changes the database the other timings read.

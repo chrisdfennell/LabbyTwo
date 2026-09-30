@@ -58,7 +58,7 @@
             Live values: <code>{{status: NAS}}</code>, <code>{{metric: NAS / cpu_percent}}</code>, <code>{{widget: card title}}</code>.
             Runbooks: <code>{{down}}</code>, <code>{{if down: NAS}}</code> … <code>{{end}}</code>, <code>{{button: NAS / restart}}</code>, <code>{{details: Title}}</code> … <code>{{end}}</code>, <code>&gt; [!WARNING]</code>.
             Lists: <code>{{alerts}}</code>, <code>{{containers: stopped}}</code>, <code>{{renewals}}</code>.
-            History: <code>{{changes: last=24h}}</code>, <code>{{incidents: open}}</code>, <code>{{backups: late}}</code>.
+            History: <code>{{chart: NAS / cpu_percent last=7d}}</code>, <code>{{changes: last=24h}}</code>, <code>{{incidents: open}}</code>, <code>{{backups: late}}</code>.
             Power: <code>{{power}}</code>, <code>{{power: "NAS plug" period=today}}</code>.
         </span>
         <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAsync" aria-expanded="@(_open ? "true" : "false")">
@@ -90,6 +90,7 @@
                             <option value="if-down">A section shown while it’s down</option>
                             <option value="button">One of its action buttons</option>
                             <option value="sparkline">A tiny trend line</option>
+                            <option value="chart">A full-size history chart</option>
                             <option value="uptimebar">A daily uptime strip</option>
                             <option value="link">A link to its web page</option>
                             <option value="ago">When it was last checked</option>
@@ -290,6 +291,19 @@
                                 </select>
                             </div>
                         }
+                        @if (_kind == "chart")
+                        {
+                            <div class="col-sm-2">
+                                <label class="form-label small mb-1" for="@Id("chart-window")">Over</label>
+                                <select id="@Id("chart-window")" class="form-select form-select-sm" @bind="_window">
+                                    <option value="1h">1 hour</option>
+                                    <option value="24h">24 hours</option>
+                                    <option value="7d">7 days</option>
+                                    <option value="30d">30 days</option>
+                                    <option value="90d">90 days</option>
+                                </select>
+                            </div>
+                        }
                         @if (_kind == "sparkline")
                         {
                             <div class="col-sm-2">
@@ -302,7 +316,7 @@
                                 </select>
                             </div>
                         }
-                        @if (_kind is "metric" or "gauge" or "forecast" or "sparkline")
+                        @if (_kind is "metric" or "gauge" or "forecast" or "sparkline" or "chart")
                         {
                             <div class="col-sm-4">
                                 <label class="form-label small mb-1" for="@Id("metric")">Metric</label>
@@ -405,6 +419,10 @@
             ? Shortcodes.Write("sparkline", [_connectionName, $"{_metric.Trim()} {_window}"])
             : Shortcodes.Write("sparkline", [_connectionName], [new("window", _window)]),
         "metric" => _metric.Trim().Length > 0 ? Shortcodes.Write("metric", [_connectionName, _metric.Trim()]) : null,
+        // The default window is left unwritten, as it is for {{changes}}. More lines, a fixed
+        // span, height= and min=/max= are typed by hand; the README lists them.
+        "chart" => ChartShortcode.Write([new ChartLine(_connectionName, _metric.Trim())],
+            [new("last", _window == "24h" ? "" : _window)]),
         "forecast" => Shortcodes.Write("forecast", [_connectionName, _metric.Trim()]),
         "if-down" => IfDown(_connectionName),
         "button" => _action.Length > 0 && ActionChoices.Any(a => a.Id == _action)
@@ -466,7 +484,7 @@
         var last = text[(text.LastIndexOf('\n') + 1)..].TrimStart();
         var structural = last.Length > 0
             && (last[0] is '#' or '-' or '*' or '+' or '>' or '|' || System.Text.RegularExpressions.Regex.IsMatch(last, @"^\d+[.)]\s"));
-        var block = _kind is "widget" or "gauge" or "down" or "if-down" or "alerts" or "containers" or "updates" or "renewals"
+        var block = _kind is "widget" or "gauge" or "chart" or "down" or "if-down" or "alerts" or "containers" or "updates" or "renewals"
             or "changes" or "incidents" or "backups" or "details" or "callout";
         var joined = text.Length == 0 ? code : text + (block || structural ? "\n\n" : " ") + code;
         Value = joined;

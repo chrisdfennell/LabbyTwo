@@ -333,6 +333,23 @@ SQL
   echo "INSERT INTO tabs (id, slug, name, kind, sort) VALUES ('perf-grid', 'perf', 'History', 'grid', 0);"
   echo "INSERT INTO tabs (id, slug, name, kind, sort) VALUES ('perf-status', 'status', 'Everything', 'status', 1);"
 
+  # A runbook of {{chart}}s: a month, three lines over a week, a day, the same month again
+  # (which must share the first one's read), last month as fixed dates, and a quarter.
+  last_month_start="$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m-%d)"
+  this_month_start="$(date -u +%Y-%m-01)"
+  echo "INSERT INTO tabs (id, slug, name, kind, sort) VALUES ('perf-notes', 'runbook', 'Runbook', 'notes', 2);"
+  echo "INSERT INTO notes (id, tab_id, title, content, sort, updated_at) VALUES ('perf-note', 'perf-notes', 'Charts', '{{chart: Server 1 / cpu_percent last=30d}}
+
+{{chart: Server 2 / cpu_percent, Server 3 / cpu_percent, Server 4 / cpu_percent last=7d}}
+
+{{chart: Server 5 / latency_ms last=24h}}
+
+{{chart: Server 1 / cpu_percent last=30d title=\"Again\"}}
+
+{{chart: Server 6 / mem_percent from=$last_month_start to=$this_month_start}}
+
+{{chart: Server 7 / temp_c last=90d}}', 0, $now);"
+
   # Every card here reads history, most of them a month of it: the tab someone builds
   # once they have had LabbyTwo long enough to have a big database.
   order=0
@@ -389,6 +406,15 @@ record "Start to /healthz" $(($(now_ms) - boot_started)) 30000
 timed_get "GET / (the first tab, server-rendered)" / "History" 5000
 timed_browser "Every card on the History tab drawn" /t/perf 10000
 timed_get "GET /t/status (uptime of everything)" /t/status "Everything" 5000
+
+# Every chart in the runbook drawn: eight lines, from a day to a quarter of history. A
+# chart of a metric the provider does not declare is a "?" for the moment the latest
+# readings take to load, so this waits for the lines rather than failing on the first "?".
+timed_browser "Every {{chart}} in a runbook drawn" /t/runbook 10000 \
+  --until "(() => {
+    const lines = document.querySelectorAll('figure.md-chart polyline').length;
+    return lines >= 8 ? lines + ' chart lines drawn' : '';
+  })()"
 
 # Prerendered, so this is the rule list and every connection's metric names, read on the
 # server before the first byte: the page that hung.
@@ -462,6 +488,12 @@ while IFS='|' read -r key took detail; do
     # 1,600 ms warm, and 80 MB of reads per series cold, when each row was a table lookup.
     chart30)      name="Query: a 30-day chart for every connection"; budget=1000 ;;
     uptime30)     name="Query: 30-day uptime for every connection"; budget=1000 ;;
+    # {{chart}} of a month that has ended, bounded at both ends: the same reads as chart30.
+    chart-span)   name="Query: last month's chart for every connection"; budget=1000 ;;
+    # The same month's chart on three pages, through SharedSeries: one read per series.
+    chart-shared) name="Charts: every connection's month on 3 pages"; budget=1000 ;;
+    # What the monthly report reads per service: its transitions and average response time.
+    month-report) name="Query: a month's report, every connection"; budget=2000 ;;
     restore)      name="Query: what restore reads at startup"; budget=1000 ;;
     rollup)       name="Rollup: a day behind, folded"; budget=120000 ;;
     rollup-batch) name="Rollup: longest hold on the write lock"; budget=2000 ;;

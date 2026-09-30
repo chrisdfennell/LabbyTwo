@@ -183,6 +183,11 @@ builder.Services.AddSingleton<MediaStack>();
 // discovered; this is the part it and the Settings preview share.
 builder.Services.AddSingleton<PowerCosts>();
 builder.Services.AddSingleton<WeeklySummaryGatherer>();
+// The monthly report: a month's uptime, incidents, alerts, backups, power, updates and
+// self-healing written up as a note. The job that makes it on schedule is an
+// IBackgroundJob and is discovered; these are the parts it and the Settings page share.
+builder.Services.AddSingleton<MonthlyReportGatherer>();
+builder.Services.AddSingleton<MonthlyReports>();
 
 // Web Push: the devices that asked for notifications, this install's signing key, and the
 // sender the Browser push channel and the devices page share.

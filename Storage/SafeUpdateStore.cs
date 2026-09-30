@@ -51,6 +51,27 @@ public sealed class SafeUpdateStore(Db db)
             ORDER BY id DESC LIMIT 1 OFFSET $keep)
         """;
 
+    /// <summary>
+    /// Updates asked for in a window, oldest first — for the monthly report. The one read of
+    /// this table that is not by host or by the active index, and it does not need either:
+    /// the table holds <see cref="Keep"/> updates per container at most, a few hundred rows
+    /// on the busiest install, and this runs once a month.
+    /// </summary>
+    public const string BetweenSql = $"""
+        SELECT {Columns} FROM safe_updates
+        WHERE requested_ts >= $from AND requested_ts < $to ORDER BY id
+        """;
+
+    public async Task<IReadOnlyList<SafeUpdate>> BetweenAsync(DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = BetweenSql;
+        cmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+        return await ReadAsync(cmd, ct);
+    }
+
     public async Task<IReadOnlyList<SafeUpdate>> ActiveAsync(CancellationToken ct = default)
     {
         await using var connection = await db.OpenAsync(ct);
