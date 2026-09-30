@@ -764,6 +764,53 @@ The feed is kept for 90 days and incidents for a year (`Labby__ChangeRetentionDa
 `Labby__IncidentRetentionDays`). A plugin that notices something changing can record it
 too: ask for `ChangeStore` and call `RecordAsync`.
 
+### Searching every container's logs
+
+**Logs** in the nav searches the recent logs of every container at once — "error in the
+last hour, everywhere". Type text, or tick **Regular expression**; add **Match case** if it
+matters; and pick any of the quick filters — **error**, **warn**, **exception**, **fatal**,
+**"failed"** — which a line must match as well as whatever is typed (on their own they mean
+"any of these"). Choose how far back (15 minutes, an hour, 6 hours, 24 hours, or between two
+times), which Docker connections, which containers — all, the running ones, ones you tick, or
+one Compose project — and stdout, stderr or both.
+
+Results arrive as each container's log is read, grouped by container with a count, each line
+with its time and the match marked. **context** opens the three lines either side of a
+match; **full log** opens that container's logs panel at that moment — five minutes either
+side of the line. The Containers tab has a box that runs the same search across its host,
+and every incident has **Search logs**, which fills in the incident's timeline window (half
+an hour before it started to just after it ended), picks the containers its services are
+reached through — tied the same way the incident's "Probably" is, by the host name in a
+connection's address, so `http://sonarr:8989` is the container called `sonarr` — ticks the
+trouble filters, and searches.
+
+What it costs, and what it does not do:
+
+- **Nothing runs until you press Search**, and nothing outlives the page: leaving it, or
+  starting another search, cancels whatever is still reading. There is no background indexing
+  and nothing is written to the database; results live in the page's memory and are gone
+  when it closes.
+- The time window is sent to Docker as `since` and `until`, so Docker does the filtering. At
+  most **5,000 lines or 4 MB are read from each container** — the newest, when the window
+  ends now; the earliest, when it ends in the past (Docker applies `tail` before `since`, so
+  "the newest lines of last Tuesday" cannot be asked for). A container that hit the cap says
+  so beside its name.
+- Logs are read **four containers at a time**, and one search keeps at most **20,000 lines**
+  of results — matches and their context. Past that, matches are still counted but not kept,
+  and the page says the search was capped.
+- A regular expression runs on .NET's non-backtracking engine, which takes time in
+  proportion to the line whatever the pattern. A pattern that needs the other engine
+  (back-references, look-arounds) is allowed with a 200 ms limit per line, and after three
+  lines run over that the search stops and says why.
+- **Secret-looking values are hidden before searching** — `PASSWORD=…`, `"api_key": "…"`,
+  `?token=…`, `Bearer …`, and the password in `postgres://user:password@host` — using the same
+  list of names the [config history](#config-history) treats as secrets. Hidden before
+  matching, so searching for a password finds nothing. It is best effort: a secret written in
+  some other shape can still show.
+- Container logs need `CONTAINERS=1` on a socket proxy, and `ALLOW_LOGS=1` on
+  linuxserver/socket-proxy (see [the table](#through-a-socket-proxy-instead)). Only log
+  drivers that keep logs Docker can hand back (`json-file`, `local`, `journald`) can be searched.
+
 ### What the electricity costs
 
 **Power** in the nav adds up what the lab's electricity costs, from anything that reports
@@ -1892,6 +1939,7 @@ What each feature asks Docker for, and what the proxy has to allow:
 | **Update now**, one-shot Watchtower | `POST /images/create`, `POST /containers/create`, `POST /containers/{id}/start`, and then everything Watchtower does to recreate LabbyTwo | `CONTAINERS=1`, `IMAGES=1`, `POST=1` at least — the same power as the raw socket, so don't |
 | Containers tab: list, inspect, live stats | `GET /containers/json?all=1`, `GET /containers/{id}/json`, `GET /containers/{id}/stats?stream=false` | `CONTAINERS=1` |
 | Containers tab: logs | `GET /containers/{id}/logs` (with `follow=1` while following) | `CONTAINERS=1` and, on linuxserver, `ALLOW_LOGS=1` |
+| Logs page: searching every container's logs | `GET /containers/json?all=1`, then `GET /containers/{id}/logs?since=…&until=…` for each container searched, four at a time | `CONTAINERS=1` and, on linuxserver, `ALLOW_LOGS=1` — the same as the logs panel. A refusal is shown once per host, with the flag, and the other containers there are not asked |
 | Containers tab: restart / stop | `POST /containers/{id}/restart`, `/stop` | `ALLOW_RESTARTS=1` (or `ALLOW_STOP=1` for stop) — on tecnativa also `POST=1` |
 | Containers tab: start | `POST /containers/{id}/start` | `ALLOW_START=1` — on tecnativa also `POST=1` |
 | Containers tab: pause / unpause | `POST /containers/{id}/pause`, `/unpause` | linuxserver: `ALLOW_PAUSE=1`, `ALLOW_UNPAUSE=1`; tecnativa: `CONTAINERS=1`, `POST=1` |

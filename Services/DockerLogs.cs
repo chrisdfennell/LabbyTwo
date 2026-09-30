@@ -141,6 +141,68 @@ public sealed class DockerLogReader(bool tty, bool timestamps = true)
 }
 
 /// <summary>
+/// A <see cref="DockerLogReader"/> that works out for itself whether the stream is framed,
+/// so a search over forty containers does not need forty inspects first just to learn which
+/// ones have a TTY.
+///
+/// It can tell because every request here asks for <c>timestamps=1</c>. A framed stream then
+/// starts with a stream byte of 0, 1 or 2 and three zeros; a TTY stream starts with the
+/// first digit of a year. Nothing a container prints can make the one look like the other,
+/// since Docker writes the timestamp in front of it. Until eight bytes have arrived the
+/// bytes are held; a log shorter than that is decided at <see cref="Flush"/>.
+/// </summary>
+public sealed class SniffingLogReader
+{
+    private readonly byte[] _start = new byte[8];
+    private int _startFilled;
+    private DockerLogReader? _reader;
+
+    /// <summary>What was decided, or null while fewer than eight bytes have arrived.</summary>
+    public bool? Tty { get; private set; }
+
+    /// <summary>Whether the first bytes of a <c>timestamps=1</c> log are a frame header.</summary>
+    public static bool LooksFramed(ReadOnlySpan<byte> start) =>
+        start.Length >= 4 && start[0] <= 2 && start[1] == 0 && start[2] == 0 && start[3] == 0;
+
+    public IReadOnlyList<LogLine> Feed(ReadOnlySpan<byte> data)
+    {
+        if (_reader is not null)
+            return _reader.Feed(data);
+
+        var take = Math.Min(8 - _startFilled, data.Length);
+        data[..take].CopyTo(_start.AsSpan(_startFilled));
+        _startFilled += take;
+        if (_startFilled < 8)
+            return [];
+
+        Decide();
+        var lines = new List<LogLine>(_reader!.Feed(_start));
+        lines.AddRange(_reader.Feed(data[take..]));
+        return lines;
+    }
+
+    public IReadOnlyList<LogLine> Flush()
+    {
+        if (_reader is not null)
+            return _reader.Flush();
+        if (_startFilled == 0)
+            return [];
+
+        Decide();
+        var lines = new List<LogLine>(_reader!.Feed(_start.AsSpan(0, _startFilled)));
+        lines.AddRange(_reader.Flush());
+        return lines;
+    }
+
+    private void Decide()
+    {
+        var tty = !LooksFramed(_start.AsSpan(0, _startFilled));
+        Tty = tty;
+        _reader = new DockerLogReader(tty);
+    }
+}
+
+/// <summary>
 /// The lines a logs panel holds, capped. Following a chatty container for an afternoon
 /// would otherwise grow without end, on the server, per open panel.
 /// </summary>
@@ -199,6 +261,56 @@ public static class DockerLogs
     public static string Path(string id, int tail, bool follow) =>
         $"/containers/{Uri.EscapeDataString(id)}/logs?stdout=1&stderr=1&timestamps=1&tail={Math.Max(0, tail)}" +
         (follow ? "&follow=1" : "");
+
+    /// <summary>
+    /// The logs between two times, for a search or for "the log around this line". Docker
+    /// takes <c>since</c> and <c>until</c> as Unix seconds with a fraction, and applies
+    /// <c>tail</c> <em>before</em> them — it takes the last N lines of the whole log and then
+    /// drops those outside the window — so a tail is only passed when the window ends now.
+    /// For a window in the past the caller reads forward from <c>since</c> and stops itself.
+    /// </summary>
+    /// <param name="tail">The newest this many lines, or null to read the whole window.</param>
+    public static string WindowPath(
+        string id, DateTimeOffset since, DateTimeOffset? until, int? tail, bool stdout = true, bool stderr = true) =>
+        $"/containers/{Uri.EscapeDataString(id)}/logs?stdout={(stdout ? 1 : 0)}&stderr={(stderr ? 1 : 0)}&timestamps=1" +
+        $"&since={UnixTime(since)}" +
+        (until is { } end ? $"&until={UnixTime(end)}" : "") +
+        (tail is { } lines ? $"&tail={Math.Max(0, lines)}" : "");
+
+    /// <summary>Seconds and nanoseconds, the way Docker's own client writes a time.</summary>
+    public static string UnixTime(DateTimeOffset at)
+    {
+        var ticks = at.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks;
+        var seconds = Math.DivRem(ticks, TimeSpan.TicksPerSecond, out var rest);
+        if (rest < 0)
+        {
+            seconds--;
+            rest += TimeSpan.TicksPerSecond;
+        }
+        return FormattableString.Invariant($"{seconds}.{rest * 100:D9}");
+    }
+
+    /// <summary>
+    /// The lines between two times, oldest first, at most <paramref name="maxLines"/> of
+    /// them. The panel's "the log at that time" view: a few minutes either side of a line a
+    /// search found.
+    /// </summary>
+    public static async Task<IReadOnlyList<LogLine>> WindowAsync(
+        string endpoint, TimeSpan timeout, string id, DateTimeOffset since, DateTimeOffset until, int maxLines,
+        CancellationToken ct)
+    {
+        await using var stream = await DockerSocket.OpenStreamAsync(
+            endpoint, timeout, WindowPath(id, since, until, tail: null), ct);
+        var reader = new SniffingLogReader();
+        var lines = new List<LogLine>();
+        var buffer = new byte[16 * 1024];
+        int read;
+        while (lines.Count < maxLines && (read = await stream.ReadAsync(buffer, ct)) > 0)
+            lines.AddRange(reader.Feed(buffer.AsSpan(0, read)));
+        if (lines.Count < maxLines)
+            lines.AddRange(reader.Flush());
+        return lines.Count > maxLines ? lines.GetRange(0, maxLines) : lines;
+    }
 
     /// <summary>The last <paramref name="tail"/> lines.</summary>
     public static async Task<IReadOnlyList<LogLine>> TailAsync(
