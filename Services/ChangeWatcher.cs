@@ -25,6 +25,8 @@ namespace LabbyTwo.Services;
 /// <item><b>Container settings</b> — handed the same list, <see cref="ContainerConfigHistory"/>
 /// inspects only the containers with a new id and records a "config changed" entry when
 /// their settings differ from the last version.</item>
+/// <item><b>Service discovery</b> — handed the same list again, <see cref="ServiceDiscovery"/>
+/// keeps it so suggested connections are current without asking Docker a second time.</item>
 /// </list>
 ///
 /// DNS answers are recorded by <see cref="DnsCheck"/> when somebody runs it, since it only
@@ -40,7 +42,8 @@ public sealed class ChangeWatcher(
     HealthMonitor monitor,
     MetricAlertService alerts,
     ContainerConfigHistory configs,
-    ILogger<ChangeWatcher> log) : IHostedService
+    ILogger<ChangeWatcher> log,
+    ServiceDiscovery? discovery = null) : IHostedService
 {
     /// <summary>The baseline key holding the version that last started.</summary>
     public const string VersionKey = "self:version";
@@ -265,6 +268,10 @@ public sealed class ChangeWatcher(
             }
 
             await NoteContainersAsync(connection, rows, state.At, ct);
+
+            // The same list again, for "add a connection for this". It only keeps a reference
+            // and compares ids with the last one — the matching waits until somebody looks.
+            discovery?.Observe(connection, rows, state.At);
 
             // The same list, so the same moment: only containers with a new id are inspected.
             try
