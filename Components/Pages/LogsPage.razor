@@ -1,0 +1,749 @@
+@page "/logs"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject ConfigStore Config
+@inject IncidentStore Incidents
+@inject ILogger<LogsPage> Log
+@using System.Globalization
+@using LabbyTwo.Components.Pages.Kinds
+
+<PageTitle>Logs · LabbyTwo</PageTitle>
+
+@* One search over every container's recent logs: "error in the last hour, everywhere".
+
+   Nothing runs until Search is pressed, and nothing outlives the page: leaving it, or
+   starting another search, cancels whatever is still reading. Results are held in memory for
+   this page only — never written to the database — and capped (see LogSearch). They stream
+   in as each container's log is read; the page is redrawn a few times a second while that
+   goes on, not once per line.
+
+   Every line is masked for secret-looking values before it is matched or shown, best effort,
+   and the page says so. *@
+
+<div class="page-head">
+    <div>
+        <h1>📜 Logs</h1>
+        <p class="subtitle">Search the recent logs of every container at once. Nothing is read until you press Search.</p>
+    </div>
+</div>
+
+@if (_dockers.Count == 0 && _ready)
+{
+    <div class="panel p-3">
+        <p class="mb-2">Searching logs needs a Docker connection — the local socket, a named pipe, or a socket proxy.</p>
+        <a class="btn btn-primary btn-sm" href="settings/connections">Add one</a>
+    </div>
+}
+else
+{
+    <form class="panel p-3 mb-3 logs-form" @onsubmit="SearchAsync" @onsubmit:preventDefault>
+        <div class="logs-search-row">
+            <input type="search" class="form-control" placeholder="@(_regex ? "A regular expression" : "Text to find")"
+                   aria-label="What to find" @bind="_text" @bind:event="oninput" name="q" />
+            @if (Running)
+            {
+                <button type="button" class="btn btn-outline-secondary" data-action="stop" @onclick="Stop">Stop</button>
+            }
+            <button type="submit" class="btn btn-primary" data-action="search">@(Running ? "Search again" : "Search")</button>
+        </div>
+
+        <div class="logs-quick mt-2" role="group" aria-label="Quick filters">
+            <span class="tile-meta">Lines with</span>
+            @foreach (var (key, label, _) in LogSearch.QuickFilters)
+            {
+                var on = _quick.Contains(key);
+                <button type="button" class="btn btn-sm @(on ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@on"
+                        data-quick="@key" @onclick="() => ToggleQuick(key)">@label</button>
+            }
+            <label class="form-check form-check-inline mb-0 ms-2 tile-meta">
+                <input type="checkbox" class="form-check-input" @bind="_regex" /> Regular expression
+            </label>
+            <label class="form-check form-check-inline mb-0 tile-meta">
+                <input type="checkbox" class="form-check-input" @bind="_case" /> Match case
+            </label>
+        </div>
+
+        <div class="row g-2 align-items-end mt-1">
+            <div class="col-sm-6 col-lg-3">
+                <label class="form-label small mb-1" for="logs-range">When</label>
+                <select id="logs-range" class="form-select form-select-sm" @bind="_range">
+                    @foreach (var (key, label, _) in LogSearch.Ranges)
+                    {
+                        <option value="@key">@label</option>
+                    }
+                    <option value="custom">Between two times…</option>
+                </select>
+            </div>
+            @if (_range == "custom")
+            {
+                <div class="col-sm-6 col-lg-3">
+                    <label class="form-label small mb-1" for="logs-from">From</label>
+                    <input id="logs-from" type="datetime-local" class="form-control form-control-sm" @bind="_from" />
+                </div>
+                <div class="col-sm-6 col-lg-3">
+                    <label class="form-label small mb-1" for="logs-to">Until</label>
+                    <input id="logs-to" type="datetime-local" class="form-control form-control-sm" @bind="_to" disabled="@_toNow" />
+                    <label class="form-check mb-0 tile-meta">
+                        <input type="checkbox" class="form-check-input" @bind="_toNow" /> now
+                    </label>
+                </div>
+            }
+            <div class="col-sm-6 col-lg-3">
+                <label class="form-label small mb-1" for="logs-scope">Which containers</label>
+                <select id="logs-scope" class="form-select form-select-sm" @bind="_scope" @bind:after="ScopeChangedAsync">
+                    <option value="@LogScope.All">All</option>
+                    <option value="@LogScope.Running">Running</option>
+                    <option value="@LogScope.Chosen">Chosen…</option>
+                    <option value="@LogScope.Project">One Compose project…</option>
+                </select>
+            </div>
+        </div>
+
+        @if (_dockers.Count > 1)
+        {
+            <div class="mt-2 logs-hosts" role="group" aria-label="Docker connections">
+                <span class="tile-meta">On</span>
+                @foreach (var docker in _dockers)
+                {
+                    var on = _selected.Contains(docker.Id);
+                    <label class="form-check form-check-inline mb-0">
+                        <input type="checkbox" class="form-check-input" checked="@on"
+                               @onchange="e => ToggleDocker(docker.Id, e.Value is true)" />
+                        @docker.Name
+                    </label>
+                }
+            </div>
+        }
+
+        @if (_scope is LogScope.Chosen or LogScope.Project)
+        {
+            <div class="mt-2">
+                @if (_listing)
+                {
+                    <span class="tile-meta">Reading the container lists…</span>
+                }
+                @foreach (var problem in _listErrors.Where(p => _selected.Contains(p.Key)))
+                {
+                    <div class="text-danger small">@DockerName(problem.Key): @problem.Value</div>
+                }
+                @if (_scope == LogScope.Project)
+                {
+                    var projects = Projects();
+                    <select class="form-select form-select-sm w-auto" aria-label="Compose project" @bind="_project">
+                        <option value="">Pick a project</option>
+                        @foreach (var project in projects)
+                        {
+                            <option value="@project">@project</option>
+                        }
+                    </select>
+                }
+                else
+                {
+                    <div class="logs-chosen">
+                        @foreach (var docker in _dockers.Where(d => _selected.Contains(d.Id)))
+                        {
+                            @foreach (var row in _rows.GetValueOrDefault(docker.Id) ?? [])
+                            {
+                                var key = ChosenKey(docker.Id, row.Name);
+                                <label class="form-check form-check-inline mb-0" @key="key">
+                                    <input type="checkbox" class="form-check-input" checked="@_chosen.Contains(key)"
+                                           @onchange="e => ToggleChosen(key, e.Value is true)" />
+                                    @row.Name@(_selected.Count > 1 ? $" ({docker.Name})" : "")
+                                </label>
+                            }
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        <div class="mt-2 d-flex flex-wrap gap-3 align-items-center">
+            <label class="form-check form-check-inline mb-0 tile-meta">
+                <input type="checkbox" class="form-check-input" @bind="_stdout" /> stdout
+            </label>
+            <label class="form-check form-check-inline mb-0 tile-meta">
+                <input type="checkbox" class="form-check-input" @bind="_stderr" /> stderr
+            </label>
+        </div>
+
+        <p class="tile-meta mb-0 mt-2">
+            Reads at most @LogSearch.DefaultMaxLines.ToString("N0", CultureInfo.CurrentCulture) lines or
+            @LogSearch.Size(LogSearch.DefaultMaxBytes) from each container — the newest when the window ends now,
+            the earliest otherwise — @LogSearch.Concurrency containers at a time, and keeps at most
+            @LogSearch.DefaultMaxHeld.ToString("N0", CultureInfo.CurrentCulture) lines of results. Values that look
+            like passwords, tokens and keys (<code>PASSWORD=…</code>, <code>"api_key": "…"</code>, <code>Bearer …</code>,
+            <code>user:password@@</code> in a URL) are hidden before searching — best effort, so a secret written
+            some other way can still show. Nothing is saved.
+        </p>
+
+        @if (_formError is { Length: > 0 })
+        {
+            <div class="text-danger small mt-2" role="alert">@_formError</div>
+        }
+        @if (_note is { Length: > 0 })
+        {
+            <div class="tile-meta mt-2" role="status">@_note</div>
+        }
+    </form>
+}
+
+@if (_run is { } run)
+{
+    var groups = run.Groups;
+    var done = groups.Count(g => g.State is LogGroupState.Done or LogGroupState.Failed);
+    var matched = groups.Where(g => g.Matches > 0).OrderByDescending(g => g.Matches).ThenBy(g => g.Target.Container.Name).ToList();
+    var quiet = groups.Where(g => g.State == LogGroupState.Done && g.Matches == 0).ToList();
+    var failed = groups.Where(g => g.State == LogGroupState.Failed && g.Matches == 0).ToList();
+    <div class="panel p-3 logs-results" aria-live="polite">
+        <div class="logs-summary">
+            <strong>@run.TotalMatches.ToString("N0", CultureInfo.CurrentCulture) @(run.TotalMatches == 1 ? "match" : "matches")</strong>
+            <span class="tile-meta">
+                in @matched.Count of @groups.Count @(groups.Count == 1 ? "container" : "containers")
+                · @(run.Finished ? "done" : $"read {done} of {groups.Count}…")
+                · @WindowText(run.Query)
+            </span>
+        </div>
+        @if (run.Stopped is { } stopped)
+        {
+            <div class="alert alert-warning py-2 mt-2 mb-0">@stopped</div>
+        }
+        @if (run.Capped)
+        {
+            <div class="alert alert-warning py-2 mt-2 mb-0">
+                More matched than one search keeps (@LogSearch.DefaultMaxHeld.ToString("N0", CultureInfo.CurrentCulture) lines
+                with their context). The counts are complete; the lines shown are the first found. Narrow the search to see the rest.
+            </div>
+        }
+        @if (!run.NonBacktracking)
+        {
+            <div class="tile-meta mt-1">
+                This pattern needs the slower regular-expression engine, so each line gets
+                @LogSearch.DefaultRegexTimeout.TotalMilliseconds ms before it is skipped.
+            </div>
+        }
+
+        @foreach (var group in matched)
+        {
+            var key = group.Target.Key;
+            var open = !_collapsed.Contains(key);
+            var limit = _drawn.GetValueOrDefault(key, GroupDrawLimit);
+            var hits = open ? group.Hits(limit) : [];
+            <section class="logs-group" @key="key">
+                <button type="button" class="logs-group-head" aria-expanded="@(open ? "true" : "false")" @onclick="() => ToggleGroup(key)">
+                    <span class="logs-caret" aria-hidden="true">@(open ? "▾" : "▸")</span>
+                    <strong>@group.Target.Container.Name</strong>
+                    @if (_dockers.Count > 1)
+                    {
+                        <span class="tile-meta">on @group.Target.ConnectionName</span>
+                    }
+                    <span class="badge text-bg-secondary">@group.Matches.ToString("N0", CultureInfo.CurrentCulture)</span>
+                    @if (group.State == LogGroupState.Reading)
+                    {
+                        <span class="tile-meta">reading…</span>
+                    }
+                    @if (group.Cut is { } cut)
+                    {
+                        <span class="tile-meta" title="The per-container cap was reached, so part of the window was not read.">@cut</span>
+                    }
+                </button>
+                @if (group.Error is { } error)
+                {
+                    <div class="text-danger small">@error</div>
+                }
+                @if (open)
+                {
+                    <div class="logs-lines">
+                        @foreach (var hit in hits)
+                        {
+                            var expanded = _expanded.Contains(hit);
+                            @if (expanded)
+                            {
+                                @foreach (var line in hit.Before)
+                                {
+                                    @ContextLine(line)
+                                }
+                            }
+                            <div class="logs-line logs-hit @(hit.Line.Stream == LogStream.Stderr ? "logs-err" : "")">
+                                <span class="logs-time">@Time(hit.Line.Time)</span>
+                                <span class="logs-text">@Highlight(hit)</span>
+                                <span class="logs-actions">
+                                    @if (hit.Before.Count + hit.After.Count > 0)
+                                    {
+                                        <button type="button" class="btn btn-link btn-sm p-0" aria-expanded="@(expanded ? "true" : "false")"
+                                                @onclick="() => ToggleHit(hit)">@(expanded ? "less" : "context")</button>
+                                    }
+                                    <button type="button" class="btn btn-link btn-sm p-0" data-action="full-log"
+                                            title="Open this container's log around this line"
+                                            @onclick="() => OpenFullLog(group.Target, hit.Line.Time)">full log</button>
+                                </span>
+                            </div>
+                            @if (expanded)
+                            {
+                                @foreach (var line in hit.After)
+                                {
+                                    @ContextLine(line)
+                                }
+                            }
+                        }
+                        @if (group.Held > hits.Count)
+                        {
+                            <button type="button" class="btn btn-sm btn-link" @onclick="() => DrawMore(key)">
+                                Show @Math.Min(GroupDrawStep, group.Held - hits.Count) more of @group.Held.ToString("N0", CultureInfo.CurrentCulture)
+                            </button>
+                        }
+                    </div>
+                }
+            </section>
+        }
+
+        @if (quiet.Count > 0)
+        {
+            <p class="tile-meta mb-1 mt-2">
+                Nothing matched in @quiet.Count @(quiet.Count == 1 ? "container" : "containers"):
+                @string.Join(", ", quiet.Select(g => g.Target.Container.Name + (g.Cut is { } c ? $" ({c})" : "")))
+            </p>
+        }
+        @if (failed.Count > 0)
+        {
+            <ul class="small mb-0 mt-2 text-danger">
+                @foreach (var group in failed)
+                {
+                    <li><strong>@group.Target.Container.Name</strong> — @group.Error</li>
+                }
+            </ul>
+        }
+    </div>
+}
+
+@if (_fullLog is { } full)
+{
+    <Modal Title="@($"📜 {full.Target.Container.Name}")" Size="xl" OnClose="() => _fullLog = null">
+        <ContainerLogs Endpoint="@full.Target.Endpoint" Timeout="full.Target.Timeout" Container="full.Target.Container"
+                       Tail="1000" Around="full.At" InitialSearch="@(_run is { Query.IsRegex: false } r ? r.Query.Text : null)"
+                       @key="@($"{full.Target.Key}@{full.At}")" />
+    </Modal>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")] public string? TextQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "regex")] public string? RegexQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "case")] public string? CaseQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "quick")] public string? QuickQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "last")] public string? LastQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "connection")] public string? ConnectionQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "container")] public string? ContainerQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "project")] public string? ProjectQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "incident")] public long? IncidentQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "run")] public string? RunQuery { get; set; }
+
+    /// <summary>Matches drawn per container before "show more"; the rest are held, not drawn.</summary>
+    private const int GroupDrawLimit = 50;
+    private const int GroupDrawStep = 200;
+
+    /// <summary>How often the page is redrawn while a search is reading.</summary>
+    private static readonly TimeSpan RedrawEvery = TimeSpan.FromMilliseconds(300);
+
+    private IReadOnlyList<Connection> _connections = [];
+    private IReadOnlyList<Connection> _dockers = [];
+    private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<ContainerRow>> _rows = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _listErrors = new(StringComparer.Ordinal);
+    private bool _listing;
+    private bool _ready;
+
+    private string _text = "";
+    private bool _regex;
+    private bool _case;
+    private readonly HashSet<string> _quick = new(StringComparer.Ordinal);
+    private string _range = "1h";
+    private DateTime _from = DateTime.Now.AddHours(-1);
+    private DateTime _to = DateTime.Now;
+    private bool _toNow;
+    private LogScope _scope = LogScope.All;
+    private string _project = "";
+    private readonly HashSet<string> _chosen = new(StringComparer.OrdinalIgnoreCase);
+    private bool _stdout = true;
+    private bool _stderr = true;
+
+    private string? _formError;
+    private string? _note;
+
+    private LogSearchRun? _run;
+    private CancellationTokenSource? _cancel;
+    private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _drawn = new(StringComparer.Ordinal);
+    private readonly HashSet<LogHit> _expanded = new(ReferenceEqualityComparer.Instance);
+    private (LogTarget Target, DateTimeOffset? At)? _fullLog;
+    private bool _disposed;
+
+    private bool Running => _run is { Finished: false };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connections = await Config.ConnectionsAsync();
+        _dockers = [.. _connections.Where(c => c.Provider == "docker" && c.Enabled)];
+
+        var asked = Split(ConnectionQuery);
+        foreach (var docker in _dockers.Where(d => asked.Count == 0 || asked.Contains(d.Id)))
+            _selected.Add(docker.Id);
+
+        _text = TextQuery ?? "";
+        _regex = RegexQuery == "1";
+        _case = CaseQuery == "1";
+        foreach (var key in Split(QuickQuery))
+            _quick.Add(key);
+        if (LastQuery is { } last && LogSearch.Ranges.Any(r => r.Key == last))
+            _range = last;
+        if (Split(ContainerQuery) is { Count: > 0 } names)
+        {
+            _scope = LogScope.Chosen;
+            foreach (var docker in _dockers.Where(d => _selected.Contains(d.Id)))
+                foreach (var name in names)
+                    _chosen.Add(ChosenKey(docker.Id, name));
+        }
+        else if (ProjectQuery is { Length: > 0 } project)
+        {
+            _scope = LogScope.Project;
+            _project = project;
+        }
+        _ready = true;
+
+        // Only a live page searches: the prerender has no circuit to stream into.
+        if (!RendererInfo.IsInteractive || _dockers.Count == 0)
+            return;
+
+        if (IncidentQuery is { } incident)
+            await PrefillFromIncidentAsync(incident);
+        else if (RunQuery == "1")
+            await SearchAsync();
+    }
+
+    private static IReadOnlyList<string> Split(string? value) =>
+        (value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string ChosenKey(string dockerId, string name) => dockerId + "/" + name;
+
+    private static string Endpoint(Connection docker) => docker.Settings.Get("endpoint", DockerSocket.EnvironmentEndpoint);
+
+    private static TimeSpan TimeoutOf(Connection docker) => TimeSpan.FromSeconds(Math.Clamp(docker.Settings.GetInt("timeout", 10), 1, 120));
+
+    private string DockerName(string id) => _dockers.FirstOrDefault(d => d.Id == id)?.Name ?? id;
+
+    private void ToggleQuick(string key)
+    {
+        if (!_quick.Remove(key))
+            _quick.Add(key);
+    }
+
+    private async Task ToggleDocker(string id, bool on)
+    {
+        if (on)
+            _selected.Add(id);
+        else
+            _selected.Remove(id);
+        if (_scope is LogScope.Chosen or LogScope.Project)
+            await LoadListsAsync();
+    }
+
+    private void ToggleChosen(string key, bool on)
+    {
+        if (on)
+            _chosen.Add(key);
+        else
+            _chosen.Remove(key);
+    }
+
+    private Task ScopeChangedAsync() =>
+        _scope is LogScope.Chosen or LogScope.Project ? LoadListsAsync() : Task.CompletedTask;
+
+    private IReadOnlyList<string> Projects() =>
+    [
+        .. _selected.SelectMany(id => _rows.GetValueOrDefault(id) ?? []).Select(r => r.Project).OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase),
+    ];
+
+    /// <summary>
+    /// The container lists, read only when something needs them — the picker, or a search —
+    /// and through the shared list, so this page asking costs nothing if a Containers tab
+    /// asked a moment ago.
+    /// </summary>
+    private async Task LoadListsAsync()
+    {
+        _listing = true;
+        StateHasChanged();
+        try
+        {
+            foreach (var docker in _dockers.Where(d => _selected.Contains(d.Id)))
+                await LoadListAsync(docker, CancellationToken.None);
+        }
+        finally
+        {
+            _listing = false;
+        }
+    }
+
+    private async Task<IReadOnlyList<ContainerRow>> LoadListAsync(Connection docker, CancellationToken ct)
+    {
+        try
+        {
+            var rows = await DockerContainers.SharedListAsync(Endpoint(docker), TimeoutOf(docker), ct);
+            _rows[docker.Id] = rows;
+            _listErrors.Remove(docker.Id);
+            return rows;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _listErrors[docker.Id] = DockerContainers.Explain(ex, Endpoint(docker));
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// "Search logs around this incident": its timeline's window, the containers its services
+    /// are reached through, and the quick filters for trouble — then the search, since that
+    /// is what the link was pressed for.
+    /// </summary>
+    private async Task PrefillFromIncidentAsync(long id)
+    {
+        var incident = await Incidents.GetAsync(id);
+        if (incident is null)
+        {
+            _note = "That incident is no longer kept, so nothing was filled in.";
+            return;
+        }
+
+        foreach (var docker in _dockers)
+            await LoadListAsync(docker, CancellationToken.None);
+
+        var prefill = LogSearch.ForIncident(incident, _connections, _rows, DateTimeOffset.Now);
+        _range = "custom";
+        _from = prefill.Since.LocalDateTime;
+        _to = (prefill.Until ?? DateTimeOffset.Now).LocalDateTime;
+        _toNow = prefill.Until is null;
+        if (_quick.Count == 0 && _text.Length == 0)
+            foreach (var key in new[] { "error", "exception", "fatal", "failed" })
+                _quick.Add(key);
+
+        var window = $"{prefill.Since.ToLocalTime():MMM d HH:mm} to {(prefill.Until is { } until ? until.ToLocalTime().ToString("HH:mm", CultureInfo.CurrentCulture) : "now")}";
+        if (prefill.Containers.Count > 0)
+        {
+            _scope = LogScope.Chosen;
+            _chosen.Clear();
+            _selected.Clear();
+            foreach (var (dockerId, name) in prefill.Containers)
+            {
+                _chosen.Add(ChosenKey(dockerId, name));
+                _selected.Add(dockerId);
+            }
+            _note = $"Around the incident “{incident.Title}”: {window}, in the containers its services are reached through " +
+                    $"({string.Join(", ", prefill.Containers.Select(c => c.Container))}).";
+        }
+        else
+        {
+            _scope = LogScope.All;
+            _note = $"Around the incident “{incident.Title}”: {window}. None of its services is reached through a " +
+                    "container by name, so every container is searched.";
+        }
+
+        await SearchAsync();
+    }
+
+    private (DateTimeOffset Since, DateTimeOffset? Until) Window()
+    {
+        if (_range == "custom")
+        {
+            var from = new DateTimeOffset(DateTime.SpecifyKind(_from, DateTimeKind.Local));
+            DateTimeOffset? to = _toNow ? null : new DateTimeOffset(DateTime.SpecifyKind(_to, DateTimeKind.Local));
+            // An end in the future, or this minute, is "now" — which lets Docker give the newest lines.
+            if (to is { } end && end >= DateTimeOffset.Now.AddMinutes(-1))
+                to = null;
+            return (from, to);
+        }
+        var span = LogSearch.Ranges.FirstOrDefault(r => r.Key == _range).Span;
+        return (DateTimeOffset.Now - (span == default ? TimeSpan.FromHours(1) : span), null);
+    }
+
+    private static string WindowText(LogSearchQuery query) =>
+        $"{query.Since.ToLocalTime():MMM d HH:mm} to {(query.Until is { } until ? until.ToLocalTime().ToString("MMM d HH:mm", CultureInfo.CurrentCulture) : "now")}";
+
+    /// <summary>
+    /// Starts a search, cancelling any still running. The pattern is checked first, so a
+    /// typo in a regular expression is said at once rather than after reading forty logs.
+    /// </summary>
+    private async Task SearchAsync()
+    {
+        Stop();
+        _formError = null;
+
+        var (since, until) = Window();
+        if (until is { } end && end <= since)
+        {
+            _formError = "The end of the window is before its start.";
+            return;
+        }
+        if (!_stdout && !_stderr)
+        {
+            _formError = "Pick stdout, stderr or both.";
+            return;
+        }
+        if (_selected.Count == 0)
+        {
+            _formError = "Pick at least one Docker connection.";
+            return;
+        }
+
+        var query = new LogSearchQuery
+        {
+            Text = _text.Trim(),
+            IsRegex = _regex,
+            CaseSensitive = _case,
+            Quick = [.. _quick],
+            Since = since,
+            Until = until,
+            Stdout = _stdout,
+            Stderr = _stderr,
+        };
+        try
+        {
+            LogMatcher.Create(query);
+        }
+        catch (ArgumentException ex)
+        {
+            _formError = ex.Message;
+            return;
+        }
+
+        var cancel = _cancel = new CancellationTokenSource();
+        var targets = new List<LogTarget>();
+        foreach (var docker in _dockers.Where(d => _selected.Contains(d.Id)))
+        {
+            var rows = await LoadListAsync(docker, cancel.Token);
+            var chosen = _chosen.Where(k => k.StartsWith(docker.Id + "/", StringComparison.Ordinal))
+                .Select(k => k[(docker.Id.Length + 1)..]).ToList();
+            foreach (var row in LogSearch.Pick(rows, _scope, chosen, _project))
+                targets.Add(new LogTarget(docker.Id, docker.Name, Endpoint(docker), TimeoutOf(docker), row));
+        }
+        if (cancel.IsCancellationRequested || _disposed)
+            return;
+
+        if (targets.Count == 0)
+        {
+            _formError = _listErrors.Count > 0 && _listErrors.Keys.Any(_selected.Contains)
+                ? string.Join(" ", _listErrors.Where(p => _selected.Contains(p.Key)).Select(p => $"{DockerName(p.Key)}: {p.Value}"))
+                : _scope switch
+                {
+                    LogScope.Chosen => "Pick at least one container.",
+                    LogScope.Project => "Pick a Compose project.",
+                    _ => "No containers to search.",
+                };
+            return;
+        }
+
+        var run = new LogSearchRun(query, targets);
+        _run = run;
+        _collapsed.Clear();
+        _drawn.Clear();
+        _expanded.Clear();
+
+        var token = cancel.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await run.RunAsync(token);
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning(ex, "The log search failed");
+            }
+            await RedrawAsync();
+        });
+
+        // Redraws while it reads, a few times a second, and only when something changed.
+        _ = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(RedrawEvery);
+            var seen = -1;
+            try
+            {
+                while (!run.Finished && await timer.WaitForNextTickAsync(token))
+                {
+                    var version = run.Version;
+                    if (version == seen)
+                        continue;
+                    seen = version;
+                    await RedrawAsync();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        });
+    }
+
+    private async Task RedrawAsync()
+    {
+        if (_disposed)
+            return;
+        try
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            // The circuit went while the search was reading; nobody is left to show.
+            Log.LogDebug(ex, "Could not redraw the log search");
+        }
+    }
+
+    private void Stop()
+    {
+        _cancel?.Cancel();
+        _cancel?.Dispose();
+        _cancel = null;
+    }
+
+    private void ToggleGroup(string key)
+    {
+        if (!_collapsed.Remove(key))
+            _collapsed.Add(key);
+    }
+
+    private void DrawMore(string key) => _drawn[key] = _drawn.GetValueOrDefault(key, GroupDrawLimit) + GroupDrawStep;
+
+    private void ToggleHit(LogHit hit)
+    {
+        if (!_expanded.Remove(hit))
+            _expanded.Add(hit);
+    }
+
+    private void OpenFullLog(LogTarget target, DateTimeOffset? at) =>
+        _fullLog = (target, at ?? _run?.Query.Since);
+
+    private static string Time(DateTimeOffset? time) =>
+        time is { } at ? at.ToLocalTime().ToString("MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : "";
+
+    private static RenderFragment ContextLine(LogLine line) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "logs-line logs-context" + (line.Stream == LogStream.Stderr ? " logs-err" : ""));
+        builder.OpenElement(2, "span");
+        builder.AddAttribute(3, "class", "logs-time");
+        builder.AddContent(4, Time(line.Time));
+        builder.CloseElement();
+        builder.OpenElement(5, "span");
+        builder.AddAttribute(6, "class", "logs-text");
+        builder.AddContent(7, line.Text);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    /// <summary>The line with its matches in &lt;mark&gt;. Every piece is added as text, so nothing in a log becomes markup.</summary>
+    private static RenderFragment Highlight(LogHit hit) => builder => LogHighlight.Build(builder, hit.Line.Text, hit.Spans);
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Stop();
+    }
+}

@@ -144,6 +144,10 @@ else
                     <div class="d-flex flex-column gap-1 flex-none">
                         <button type="button" class="btn btn-sm btn-outline-secondary" aria-expanded="@(open ? "true" : "false")"
                                 @onclick="() => Toggle(incident)">@(open ? "Hide timeline" : "Timeline")</button>
+                        <a class="btn btn-sm btn-outline-secondary" href="@LogSearch.IncidentLink(incident.Id)"
+                           title="Search the logs of the containers involved, from half an hour before it started until just after it ended">
+                            Search logs
+                        </a>
                         @if (!_writeUps.ContainsKey(incident.Id))
                         {
                             <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_writing == incident.Id)"

@@ -1,0 +1,264 @@
+@implements IDisposable
+@inject ServiceDiscovery Discovery
+@inject Offload Offload
+
+@* The services LabbyTwo recognises on its Docker hosts, offered one at a time. "Add" opens
+   the ordinary editor pre-filled; nothing is saved from here. Drawn only when there is a
+   Docker connection to look through. *@
+
+@if (HasDocker)
+{
+    <div class="panel mb-3" data-discovered-services>
+        <div class="d-flex align-items-center gap-2 flex-wrap px-3 pt-2 pb-2">
+            <strong>🔎 Discovered on your Docker hosts</strong>
+            <span class="tile-meta" data-discovery-summary>@Summary</span>
+            <div class="form-check form-switch ms-auto mb-0 small">
+                <input class="form-check-input" type="checkbox" role="switch" id="discovery-auto"
+                       checked="@_auto" @onchange="ToggleAutoAsync" />
+                <label class="form-check-label" for="discovery-auto"
+                       title="Uses the list the Docker check already fetches every sweep — no extra requests">
+                    Keep looking as containers change
+                </label>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="look-for-services"
+                    disabled="@_looking" @onclick="LookAsync">
+                @(_looking ? "Looking…" : "Look for services")
+            </button>
+        </div>
+
+        @foreach (var look in Discovery.Looks.Where(l => l.Error is { Length: > 0 }))
+        {
+            <div class="alert alert-warning py-1 px-3 mx-3 small">Could not list the containers on @look.Docker.Name: @look.Error</div>
+        }
+
+        @if (Visible)
+        {
+            @if (Pending.Count > 0)
+            {
+                <table class="table align-middle mb-0">
+                    <tbody>
+                        @foreach (var found in Pending)
+                        {
+                            <tr data-discovered="@found.Key">
+                                <td style="width:2.5rem">@found.Provider.Icon</td>
+                                <td>
+                                    <div>
+                                        <strong>@found.Provider.DisplayName</strong>
+                                        <span class="tile-meta">in <code>@found.Container.Name</code></span>
+                                        @if (!found.Container.IsRunning)
+                                        {
+                                            <span class="badge text-bg-secondary ms-1">@found.Container.State</span>
+                                        }
+                                    </div>
+                                    <div class="small">
+                                        <code>@found.Address.Url</code>
+                                        <span class="badge @BadgeClass(found.Address.Kind) ms-1">@KindLabel(found.Address.Kind)</span>
+                                    </div>
+                                    <div class="tile-meta small">@found.Address.Why</div>
+                                    @if (found.KeyHint is { } hint)
+                                    {
+                                        <div class="tile-meta small">🔑 @hint</div>
+                                    }
+                                    @if (found.Others.Count > 0)
+                                    {
+                                        <div class="tile-meta small">
+                                            Already checked as @string.Join(", ", found.Others.Select(o => $"“{o.Name}”")) —
+                                            this adds the proper integration beside it.
+                                        </div>
+                                    }
+                                </td>
+                                <td class="text-end text-nowrap">
+                                    <button type="button" class="btn btn-sm btn-primary" data-action="add-discovered"
+                                            @onclick="() => OnAdd.InvokeAsync(found)">Add</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="ignore-discovered"
+                                            title="Stop suggesting this one. It can be brought back below."
+                                            @onclick="() => SetIgnoredAsync(found, true)">Ignore</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            @if (Added.Count > 0 || Ignored.Count > 0)
+            {
+                <div class="px-3 pb-2 pt-1 d-flex flex-column gap-1">
+                    @if (Added.Count > 0)
+                    {
+                        <details>
+                            <summary class="tile-meta small">@Added.Count already added</summary>
+                            <ul class="tile-meta small mb-0">
+                                @foreach (var found in Added)
+                                {
+                                    <li data-already-added="@found.Key">
+                                        @found.Provider.DisplayName in <code>@found.Container.Name</code> —
+                                        already added as @string.Join(", ", found.Existing.Select(e => $"“{e.Name}”"))
+                                    </li>
+                                }
+                            </ul>
+                        </details>
+                    }
+                    @if (Ignored.Count > 0)
+                    {
+                        <details>
+                            <summary class="tile-meta small">@Ignored.Count ignored</summary>
+                            <ul class="tile-meta small mb-0">
+                                @foreach (var found in Ignored)
+                                {
+                                    <li data-ignored="@found.Key">
+                                        @found.Provider.DisplayName in <code>@found.Container.Name</code>
+                                        <button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline"
+                                                @onclick="() => SetIgnoredAsync(found, false)">Suggest it again</button>
+                                    </li>
+                                }
+                            </ul>
+                        </details>
+                    }
+                </div>
+            }
+        }
+    </div>
+}
+
+@code {
+    /// <summary>Every connection there is — to find the Docker hosts, and what is already added.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<Connection> Connections { get; set; } = [];
+
+    /// <summary>Runs a look as soon as the panel opens: the Containers tab's hint links here with it.</summary>
+    [Parameter] public bool LookOnOpen { get; set; }
+
+    [Parameter] public EventCallback<DiscoveredService> OnAdd { get; set; }
+
+    /// <summary>Who LabbyTwo is, for skipping its own row. A parameter so a test can say.</summary>
+    [Parameter] public string? SelfHint { get; set; }
+
+    private IReadOnlyList<DiscoveredService> _found = [];
+    private IReadOnlySet<string> _ignored = new HashSet<string>();
+    private bool _auto = true;
+    private bool _looking;
+    private bool _looked;
+    private bool _loaded;
+
+    private bool HasDocker => Connections.Any(c => c.Provider == "docker" && c.Enabled);
+
+    /// <summary>
+    /// With "keep looking" off, nothing is listed until somebody asks — that is what the
+    /// switch means. The list the change watcher keeps is still there when they do.
+    /// </summary>
+    private bool Visible => _auto || _looked;
+
+    private IReadOnlyList<DiscoveredService> Pending => [.. _found.Where(f => f.Pending)];
+    private IReadOnlyList<DiscoveredService> Added => [.. _found.Where(f => f.AlreadyAdded)];
+    private IReadOnlyList<DiscoveredService> Ignored => [.. _found.Where(f => f.Ignored && !f.AlreadyAdded)];
+
+    private string Summary
+    {
+        get
+        {
+            if (!_loaded)
+                return "";
+            if (!Visible)
+                return "Press “Look for services” to see what LabbyTwo recognises.";
+            if (Discovery.Looks.Count == 0)
+                return _looking ? "" : "Nothing looked at yet — the first Docker check fills this in.";
+            return Pending.Count switch
+            {
+                0 when _found.Count == 0 => "Nothing LabbyTwo has an integration for.",
+                0 => "Nothing new — everything recognised is added or ignored.",
+                1 => "One service LabbyTwo can watch properly.",
+                var n => $"{n} services LabbyTwo can watch properly.",
+            };
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Discovery.Changed += OnChanged;
+        await LoadSettingsAsync();
+        _loaded = true;
+        Refresh();
+        if (LookOnOpen && HasDocker)
+            _ = InvokeAsync(LookAsync);
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (_loaded)
+            Refresh();
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        (_ignored, _auto) = await Offload.Run(async ct => (await Discovery.IgnoredAsync(ct), await Discovery.AutoAsync(ct)));
+    }
+
+    /// <summary>In memory only: the lists are held by the discovery service, the connections are the page's.</summary>
+    private void Refresh() => _found = Discovery.Found(Connections, _ignored, SelfHint);
+
+    private async Task LookAsync()
+    {
+        _looking = true;
+        StateHasChanged();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            await Task.Run(() => Discovery.LookAsync(cts.Token));
+            _looked = true;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            _looking = false;
+            Refresh();
+        }
+    }
+
+    private async Task SetIgnoredAsync(DiscoveredService found, bool ignore)
+    {
+        await Offload.Run(async ct =>
+        {
+            await Discovery.SetIgnoredAsync(found.Key, ignore, ct);
+            return true;
+        });
+        await LoadSettingsAsync();
+        Refresh();
+    }
+
+    private async Task ToggleAutoAsync(ChangeEventArgs args)
+    {
+        _auto = args.Value is true || (args.Value is string text && bool.TryParse(text, out var on) && on);
+        var auto = _auto;
+        await Offload.Run(async ct =>
+        {
+            await Discovery.SetAutoAsync(auto, ct);
+            return true;
+        });
+    }
+
+    private static string KindLabel(AddressKind kind) => kind switch
+    {
+        AddressKind.Label => "from its label",
+        AddressKind.SharedNetwork => "shared network",
+        AddressKind.HostNetwork => "host network",
+        AddressKind.PublishedPort => "published port",
+        _ => "not reachable yet",
+    };
+
+    private static string BadgeClass(AddressKind kind) => kind switch
+    {
+        AddressKind.SharedNetwork or AddressKind.Label => "text-bg-success",
+        AddressKind.HostNetwork or AddressKind.PublishedPort => "text-bg-secondary",
+        _ => "text-bg-warning",
+    };
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadSettingsAsync();
+        Refresh();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Discovery.Changed -= OnChanged;
+}

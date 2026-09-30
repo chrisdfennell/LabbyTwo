@@ -9,6 +9,13 @@
     <ChildContent>
     <p class="tile-meta">@Provider.Description</p>
 
+    @* Opened from a suggestion: say where it came from and why that address, so the person
+       reviewing it knows what they are agreeing to before they press Save. *@
+    @if (Intro is { Length: > 0 })
+    {
+        <div class="alert alert-info py-2 small" data-discovered>@Intro</div>
+    }
+
     <div class="row g-3 mb-3">
         <div class="col-8">
             <label class="form-label" for="conn-name">Name</label>
@@ -141,6 +148,16 @@
     [Parameter, EditorRequired] public IConnectionProvider Provider { get; set; } = default!;
     [Parameter] public EventCallback OnClose { get; set; }
 
+    /// <summary>A sentence shown above the form — where a suggested connection was found, and why that address.</summary>
+    [Parameter] public string? Intro { get; set; }
+
+    /// <summary>
+    /// Runs Test once the editor opens, when every required field already has a value. For a
+    /// suggestion that needs no key — Uptime Kuma, a Pi-hole summary — the first thing the
+    /// person sees is whether the proposed address works; one that needs a key waits for it.
+    /// </summary>
+    [Parameter] public bool TestOnOpen { get; set; }
+
     private string _name = "";
     private string _icon = "";
     private bool _enabled = true;
@@ -182,6 +199,16 @@
             _fix = await Offload.Run(ct => Remediations.GetAsync(Remediation.DownTrigger(Draft.Id), ct));
             _fixLoaded = true;
         }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || !TestOnOpen || IsAlertChannel)
+            return;
+        if (Provider.Fields.Any(f => f.Required && string.IsNullOrWhiteSpace(_settings.Get(f.Key, f.Default ?? ""))))
+            return;
+        await TestAsync();
+        StateHasChanged();
     }
 
     private Connection Current => Draft with

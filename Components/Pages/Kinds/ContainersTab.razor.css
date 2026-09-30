@@ -13,6 +13,16 @@
 .ct-toolbar input[type="search"] { flex: 1 1 14rem; min-width: 10rem; }
 .ct-toolbar select { flex: 0 0 auto; width: auto; }
 
+/* One box that hands its words to the Logs page, which searches every container. */
+.ct-logsearch {
+    display: flex;
+    gap: .5rem;
+    margin-bottom: .75rem;
+    max-width: 32rem;
+}
+
+.ct-logsearch input[type="search"] { flex: 1 1 auto; min-width: 0; }
+
 /* Check for updates, what the last check found, and the one button that acts on it. */
 .ct-updates {
     display: flex;
