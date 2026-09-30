@@ -296,6 +296,9 @@ public sealed class BlindnessTests : IDisposable
         services.AddSingleton<IncidentStore>();
         services.AddSingleton<IncidentTracker>();
         services.AddSingleton<BlindnessWatcher>();
+        services.AddSingleton<BackgroundJobRunner>();
+        services.AddSingleton<StorageManager>();
+        services.AddSingleton<SelfWatch>();
         _services = services.BuildServiceProvider();
         Get<Db>().EnsureSchemaAsync().GetAwaiter().GetResult();
         Get<AlertService>().Zone = TimeZoneInfo.Utc;
@@ -465,24 +468,43 @@ public sealed class BlindnessTests : IDisposable
         await tracker.StopAsync(CancellationToken.None);
     }
 
+    /// <summary>What LabbyTwo's watch on itself sees during a blind spell: a monitor that is otherwise sweeping on time.</summary>
+    private static SelfFacts Seeing(DateTimeOffset now, Blindness blindness) => new(
+        now, TimeSpan.FromHours(1),
+        new MonitorStatus(T0.AddHours(-1), TimeSpan.FromSeconds(30), RestoreOutcome.Completed, null, null, null, 100,
+            null, now.AddSeconds(-5), now, TimeSpan.FromSeconds(5), 4, null, [], []) { Blindness = blindness },
+        [], WriteHealthStatus.Unknown, null, null, null, new Dictionary<string, string>());
+
     [Fact]
-    public async Task A_long_blind_spell_is_told_once_and_recorded_at_both_ends()
+    public async Task A_long_blind_spell_is_told_once_when_it_starts_and_once_when_it_ends()
     {
+        // The notice moved from BlindnessWatcher to SelfWatch, beside LabbyTwo's other news
+        // about itself: same rule for the start, and now a notice when it ends too.
         await LabAsync();
-        var watcher = Get<BlindnessWatcher>();
+        var watch = Get<SelfWatch>();
+        watch.Zone = TimeZoneInfo.Utc;
         var spell = new Blindness(true, BlindCause.Dns, T0, 8, 10);
 
-        Assert.False(await watcher.NotifyIfLongAsync(spell, T0.AddMinutes(10), CancellationToken.None));
-        Assert.True(await watcher.NotifyIfLongAsync(spell, T0.AddMinutes(16), CancellationToken.None));
-        Assert.False(await watcher.NotifyIfLongAsync(spell with { Blind = 9 }, T0.AddHours(3), CancellationToken.None));
-        Assert.False(await watcher.NotifyIfLongAsync(Blindness.Clear, T0.AddHours(3), CancellationToken.None));
+        await watch.PassAsync(T0.AddMinutes(10), Seeing(T0.AddMinutes(10), spell), CancellationToken.None);
+        Assert.Empty(_channel.Sent);
 
+        await watch.PassAsync(T0.AddMinutes(16), Seeing(T0.AddMinutes(16), spell), CancellationToken.None);
+        await watch.PassAsync(T0.AddHours(3), Seeing(T0.AddHours(3), spell with { Blind = 9 }), CancellationToken.None);
         var sent = Assert.Single(_channel.Sent);
         Assert.Equal("LabbyTwo can't see the lab", sent.Title);
         Assert.Contains("DNS lookups are failing inside its container", sent.Body);
+        Assert.Equal("labbytwo:blind", sent.Tag);
+
+        await watch.PassAsync(T0.AddHours(3).AddMinutes(1), Seeing(T0.AddHours(3).AddMinutes(1), Blindness.Clear), CancellationToken.None);
+        await watch.PassAsync(T0.AddHours(3).AddMinutes(2), Seeing(T0.AddHours(3).AddMinutes(2), Blindness.Clear), CancellationToken.None);
+        Assert.Equal(2, _channel.Sent.Count);
+        Assert.Equal(AlertLevel.Up, _channel.Sent[1].Level);
+        Assert.Equal("LabbyTwo can see the lab again", _channel.Sent[1].Title);
 
         // A new spell later is a new notice.
-        Assert.True(await watcher.NotifyIfLongAsync(spell with { Since = T0.AddDays(1) }, T0.AddDays(1).AddMinutes(20), CancellationToken.None));
+        var next = spell with { Since = T0.AddDays(1) };
+        await watch.PassAsync(T0.AddDays(1).AddMinutes(20), Seeing(T0.AddDays(1).AddMinutes(20), next), CancellationToken.None);
+        Assert.Equal(3, _channel.Sent.Count);
 
         var start = BlindnessWatcher.Entry(Blindness.Clear, spell, T0);
         Assert.Equal(ChangeKinds.Monitor, start.Kind);

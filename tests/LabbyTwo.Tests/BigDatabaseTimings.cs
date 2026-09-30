@@ -68,13 +68,45 @@ public sealed class BigDatabaseTimings
                 await history.DailyUptimeAsync(id, 30);
             });
 
+            // The storage page: the file's facts on every visit, and the survey the job runs
+            // twice a day — against counting every series row by row, which is what it
+            // replaces and what it is measured against. Each on a fresh connection, so "read"
+            // is every page it needed, the index's upper levels included.
+            var factsClock = Stopwatch.StartNew();
+            var facts = await history.FactsAsync();
+            factsClock.Stop();
+            lines.Add(Line("storage-facts", factsClock.Elapsed, $"{facts.Pages} pages, {facts.FreePages} free"));
+
+            var estimate = await history.SurveyAsync(DateTimeOffset.Now, TimeSpan.Zero);
+            var exact = await history.SurveyAsync(DateTimeOffset.Now, TimeSpan.Zero, exact: true);
+            var worst = estimate.Series.Zip(exact.Series)
+                .Where(pair => pair.Second.RawRows > 0)
+                .Max(pair => Math.Abs(pair.First.RawRows - pair.Second.RawRows) / (double)pair.Second.RawRows);
+            var total = Math.Abs(estimate.RawRows - exact.RawRows) / (double)Math.Max(1, exact.RawRows);
+            lines.Add(Line("survey", estimate.Took,
+                string.Create(CultureInfo.InvariantCulture,
+                    $"{estimate.Series.Count} series, read {estimate.PagesRead * estimate.PageSize / 1048576.0:0.0} MB; " +
+                    $"raw rows off by {total * 100:0.00}% in all, {worst * 100:0.0}% at worst for one series; " +
+                    $"{(estimate.RawBytes + estimate.HourlyBytes) / 1048576.0:0} MB of history estimated, " +
+                    $"{facts.UsedBytes / 1048576.0:0} MB of data in the file")));
+            lines.Add(Line("survey-exact", exact.Took,
+                string.Create(CultureInfo.InvariantCulture,
+                    $"{exact.RawRows} raw rows counted one by one, read {exact.PagesRead * exact.PageSize / 1048576.0:0.0} MB")));
+
             // Once, and last: it changes the database the other timings read.
             var clock = Stopwatch.StartNew();
             var result = await history.RollupAsync();
             clock.Stop();
             lines.Add(Line("rollup", clock.Elapsed,
-                $"{result.RowsDeleted} raw rows into {result.HoursWritten} hourly rows in {result.Batches} batches"));
+                $"{result.RowsDeleted} raw rows into {result.HoursWritten} hourly rows in {result.Batches} batches, " +
+                $"freeing {StorageFormat.Bytes(result.FreedBytes)} inside the file"));
             lines.Add(Line("rollup-batch", result.LongestBatch, "the longest the write lock was held"));
+
+            // "Compact now" on what the rollup freed: the full VACUUM, switching the file to
+            // incremental so that the next one is the quick kind.
+            var compact = await history.CompactAsync(makeIncremental: true);
+            lines.Add(Line("compact", compact.Took,
+                $"VACUUM from {StorageFormat.Bytes(compact.BytesBefore)} to {StorageFormat.Bytes(compact.BytesAfter)}"));
         }
         finally
         {

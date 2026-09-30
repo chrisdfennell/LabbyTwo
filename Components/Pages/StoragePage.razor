@@ -1,0 +1,572 @@
+@page "/settings/storage"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject StorageManager Storage
+@inject HistoryStore History
+@inject ConfigStore Config
+@inject Offload Offload
+@inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
+
+<PageTitle>Storage · LabbyTwo</PageTitle>
+
+@* What LabbyTwo keeps on disk, what takes the space, and how to keep less.
+
+   Nothing on this page reads history while it draws. The file's size and free pages come
+   from the file system and the database header; what each connection and metric takes
+   comes from the last survey, which a background job makes twice a day from a handful of
+   index seeks per series (see StorageManager) and which is held in memory. Saving a
+   retention only writes the choice: the ordinary rollup applies it, a batch at a time,
+   within a quarter of an hour — or now, from "Tidy up now". Compacting is only ever on a
+   button, with a warning. *@
+
+<div class="page-head">
+    <div>
+        <h1>💾 Storage</h1>
+        <p class="subtitle">
+            What LabbyTwo keeps on disk, what takes the space, and how to keep less.
+            <a href="settings">Back to Settings</a> · <a href="settings/health">LabbyTwo health</a>
+        </p>
+    </div>
+</div>
+
+@{
+    var now = DateTimeOffset.Now;
+    var survey = Storage.Survey;
+}
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">The database</h2></div>
+            <div class="widget-body">
+                @if (_facts is not { } facts)
+                {
+                    <p class="tile-meta mb-0">@(_factsError ?? "Reading…")</p>
+                }
+                else
+                {
+                    var growth = Storage.Growth(now);
+                    <dl class="row mb-0 small">
+                        <dt class="col-5 tile-meta">On disk</dt>
+                        <dd class="col-7">
+                            @Bytes(facts.FileBytes + facts.WalBytes)
+                            <span class="tile-meta">(@Bytes(facts.FileBytes) file, @Bytes(facts.WalBytes) write-ahead log)</span>
+                        </dd>
+                        <dt class="col-5 tile-meta">Of which free</dt>
+                        <dd class="col-7">
+                            @Bytes(facts.FreeBytes)
+                            <div class="tile-meta">Space inside the file that old readings left. New readings reuse it before the file grows; compacting gives it back to the disk.</div>
+                        </dd>
+                        <dt class="col-5 tile-meta">Growth</dt>
+                        <dd class="col-7">
+                            @if (growth.LastDay is { } day)
+                            {
+                                @($"{(day >= 0 ? "+" : "")}{Bytes(day)} in the last day")
+                                @if (growth.UsualPerDay is { } usual)
+                                {
+                                    <span class="tile-meta"> · usually @($"{(usual >= 0 ? "+" : "")}{Bytes(usual)}") a day</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="tile-meta">Not known yet — the size is noted once an hour, and a day of it is needed.</span>
+                            }
+                        </dd>
+                        <dt class="col-5 tile-meta">Disk</dt>
+                        <dd class="col-7">
+                            @if (facts.DiskFree is { } free && facts.DiskTotal is { } total && total > 0)
+                            {
+                                <span class="@(free < total * 0.05 ? "text-danger" : null)">@Bytes(free) free of @Bytes(total)</span>
+                            }
+                            else
+                            {
+                                <span class="tile-meta">unknown</span>
+                            }
+                        </dd>
+                        <dt class="col-5 tile-meta">Kept by default</dt>
+                        <dd class="col-7">
+                            every reading for @RawDays(Options.Value.RawRetention) days, then hourly summaries for
+                            @RawDays(Options.Value.HourlyRetention) days
+                            <div class="tile-meta">LABBY_RETENTION_DAYS and LABBY_HOURLY_RETENTION_DAYS. A connection can keep fewer or more days of readings below.</div>
+                        </dd>
+                        <dt class="col-5 tile-meta">Last tidy-up</dt>
+                        <dd class="col-7">
+                            @if (History.LastRollup is { } last)
+                            {
+                                @($"{Ago.Since(last.At, now)}: {StorageFormat.Rows(last.Result.RowsDeleted)} readings summarised and removed, freeing {Bytes(last.Result.FreedBytes)}")
+                            }
+                            else
+                            {
+                                <span class="tile-meta">none since LabbyTwo started — it runs every 15 minutes, when anything is due</span>
+                            }
+                        </dd>
+                    </dl>
+                }
+                <div class="d-flex gap-2 flex-wrap mt-3 align-items-center">
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@(Storage.Tidy.Running || Storage.Compaction.Running)" @onclick="Tidy">
+                        @(Storage.Tidy.Running ? "Tidying…" : "Tidy up now")
+                    </button>
+                    <span class="tile-meta small">@TaskText(Storage.Tidy)</span>
+                </div>
+                <div class="form-text">
+                    Applies the retention below straight away rather than at the next quarter hour: old readings are folded
+                    into hourly summaries and removed, a few thousand rows at a time, so nothing else waits.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="widget h-100">
+            <div class="widget-head"><h2 class="widget-title">Compact</h2></div>
+            <div class="widget-body">
+                @if (_facts is { } f)
+                {
+                    <p class="small mb-2">
+                        @if (f.FreeBytes < 1 << 20)
+                        {
+                            <span>There is nothing to give back: the file has no free space inside it.</span>
+                        }
+                        else
+                        {
+                            <span>Compacting would give about <strong>@Bytes(f.FreeBytes)</strong> back to the disk.</span>
+                        }
+                    </p>
+                    <p class="tile-meta small">
+                        @if (f.Incremental)
+                        {
+                            <text>This database is set up to compact a little at a time, so it takes seconds and nothing has to wait.</text>
+                        }
+                        else
+                        {
+                            <text>
+                                Compacting rewrites the whole database. On NAS disks that is minutes, it needs about
+                                @Bytes(f.UsedBytes * 2) of free disk while it runs, and readings are not recorded until it has
+                                finished. It is never done automatically.
+                            </text>
+                        }
+                    </p>
+                }
+                <div class="d-flex gap-2 flex-wrap align-items-center">
+                    <button class="btn btn-sm btn-outline-warning" disabled="@(_facts is null || Storage.Compaction.Running || Storage.Tidy.Running)"
+                            @onclick="() => _confirmCompact = true">
+                        @(Storage.Compaction.Running ? "Compacting…" : "Compact now")
+                    </button>
+                    <span class="tile-meta small">@TaskText(Storage.Compaction)</span>
+                </div>
+                @if (_compactError is { } compactError)
+                {
+                    <div class="alert alert-warning py-2 mt-2 mb-0 small">@compactError</div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head d-flex align-items-center gap-2 flex-wrap">
+                <h2 class="widget-title me-auto">What takes the space</h2>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@Storage.Surveying" @onclick="SurveyAsync">
+                    @(Storage.Surveying ? "Surveying…" : survey is null ? "Survey now" : "Survey again")
+                </button>
+            </div>
+            <div class="widget-body">
+                @if (survey is null)
+                {
+                    <p class="tile-meta mb-0">
+                        Not surveyed yet. It runs by itself once an hour after LabbyTwo starts, then twice a day; or press
+                        <em>Survey now</em>. It measures each series from a few seeks into the index rather than reading it all,
+                        so it is quick even on a big database, and nothing else waits for it.
+                    </p>
+                }
+                else
+                {
+                    <p class="tile-meta small">
+                        Surveyed @Ago.Since(survey.At, now), in @Duration(survey.Took), reading @Bytes(survey.PagesRead * survey.PageSize).
+                        Figures are estimates from samples of each series — close, not exact. @StorageFormat.Rows(survey.RawRows) readings
+                        (@Bytes(survey.RawBytes)) and @StorageFormat.Rows(survey.HourlyRows) hourly summaries (@Bytes(survey.HourlyBytes)).
+                    </p>
+                    <div class="table-responsive">
+                        <table class="table table-sm small align-middle mb-0">
+                            <thead>
+                                <tr class="tile-meta">
+                                    <th>Connection</th>
+                                    <th class="text-end">Readings</th>
+                                    <th class="text-end">Hourly</th>
+                                    <th class="text-end" title="Readings written a day at the current rate. Past the retention as much is removed as is written.">Written a day</th>
+                                    <th>Keep readings for</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var group in Groups(survey))
+                                {
+                                    var id = group.Key;
+                                    var open = _open.Contains(id);
+                                    var days = _draft.RawDaysFor(id);
+                                    <tr @key="id">
+                                        <td>
+                                            <button type="button" class="btn btn-link btn-sm p-0 text-start" aria-expanded="@(open ? "true" : "false")"
+                                                    @onclick="() => Toggle(id)">
+                                                @(open ? "▾" : "▸") @Name(id)
+                                            </button>
+                                            <span class="tile-meta">· @group.Count() metric@(group.Count() == 1 ? "" : "s")</span>
+                                        </td>
+                                        <td class="text-end">@Bytes(group.Sum(s => s.RawBytes)) <div class="tile-meta">@StorageFormat.Rows(group.Sum(s => s.RawRows)) · since @Oldest(group.Min(s => s.RawFirst))</div></td>
+                                        <td class="text-end">@Bytes(group.Sum(s => s.HourlyBytes)) <div class="tile-meta">@StorageFormat.Rows(group.Sum(s => s.HourlyRows))</div></td>
+                                        <td class="text-end">@Bytes(group.Sum(s => s.RawBytesPerDay))</td>
+                                        <td style="min-width: 11rem">
+                                            <div class="input-group input-group-sm">
+                                                <input type="number" min="1" max="@HistoryPolicy.MaxRawDays" class="form-control"
+                                                       aria-label="@($"Days of readings to keep for {Name(id)}")"
+                                                       placeholder="@RawDays(Options.Value.RawRetention)" value="@days"
+                                                       @onchange="e => SetDays(id, e.Value as string)" />
+                                                <span class="input-group-text">days</span>
+                                            </div>
+                                            @if (days is null)
+                                            {
+                                                <div class="tile-meta">the default</div>
+                                            }
+                                        </td>
+                                    </tr>
+                                    @if (open)
+                                    {
+                                        @foreach (var series in group.OrderByDescending(s => s.Bytes))
+                                        {
+                                            var records = _draft.Records(series.ConnectionId, series.Metric);
+                                            <tr class="storage-metric" @key="(id, series.Metric)">
+                                                <td class="ps-4">
+                                                    <span class="font-monospace">@series.Metric</span>
+                                                    @if (!records)
+                                                    {
+                                                        <span class="badge text-bg-secondary ms-1">not recorded</span>
+                                                    }
+                                                </td>
+                                                <td class="text-end">@Bytes(series.RawBytes) <div class="tile-meta">@StorageFormat.Rows(series.RawRows)</div></td>
+                                                <td class="text-end">@Bytes(series.HourlyBytes) <div class="tile-meta">@StorageFormat.Rows(series.HourlyRows)</div></td>
+                                                <td class="text-end">@Bytes(series.RawBytesPerDay)</td>
+                                                <td>
+                                                    <div class="form-check form-switch mb-0">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="@($"rec-{id}-{series.Metric}")"
+                                                               checked="@records" @onchange="e => SetRecord(series.ConnectionId, series.Metric, e.Value is true)" />
+                                                        <label class="form-check-label" for="@($"rec-{id}-{series.Metric}")">Record history</label>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        }
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="form-text">
+                        Turning <em>Record history</em> off stops a metric's readings going into history; its live value still shows
+                        on every card. What it already recorded is kept as hourly summaries, so its charts still draw the past.
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_draft is { } draft && _saved is { } saved && !draft.SameAs(saved))
+{
+    var effect = Effect(saved, draft, now);
+    <div class="panel p-3 mt-3 storage-pending" role="status">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <div class="me-auto">
+                @if (survey is null)
+                {
+                    <span>Survey first to see what this would free.</span>
+                }
+                else
+                {
+                    @if (effect.Effect.BytesFreed > 0)
+                    {
+                        <strong>About @Bytes(effect.Effect.BytesFreed) would be freed</strong>
+                        <span class="tile-meta">
+                            — @StorageFormat.Rows(effect.Effect.RowsRemoved) readings folded into @StorageFormat.Rows(effect.Effect.HourlyRowsAdded)
+                            hourly summaries and removed, within 15 minutes of saving.
+                        </span>
+                    }
+                    @if (effect.StoppedPerDay > 0)
+                    {
+                        <div>@Bytes(effect.StoppedPerDay) a day fewer readings written.</div>
+                    }
+                    @if (effect.Effect.BytesGrowth > 0)
+                    {
+                        <div>About @Bytes(effect.Effect.BytesGrowth) more will be kept once the extra days have filled up.</div>
+                    }
+                    @if (effect.Effect.BytesFreed == 0 && effect.StoppedPerDay == 0 && effect.Effect.BytesGrowth == 0)
+                    {
+                        <span>This changes almost nothing on disk.</span>
+                    }
+                    <div class="tile-meta small">
+                        Freed space stays inside the file for new readings; <em>Compact now</em> gives it back to the disk.
+                    </div>
+                }
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="Discard">Discard</button>
+            <button class="btn btn-sm btn-primary" disabled="@_saving" @onclick="SaveAsync">@(_saving ? "Saving…" : "Save")</button>
+        </div>
+        @if (_saveError is { } saveError)
+        {
+            <div class="text-danger small mt-2">@saveError</div>
+        }
+    </div>
+}
+else if (_savedNote is { } note)
+{
+    <div class="panel p-3 mt-3 small" role="status">@note</div>
+}
+
+@if (_confirmCompact && _facts is { } compactFacts)
+{
+    <Modal Title="Compact the database?" Size="" OnClose="() => _confirmCompact = false">
+        <ChildContent>
+            @if (compactFacts.Incremental)
+            {
+                <p>
+                    This hands the database's free pages — about @Bytes(compactFacts.FreeBytes) — back to the disk, a few
+                    megabytes at a time. Each step takes its turn with the monitor's writes, so nothing is held up.
+                </p>
+            }
+            else
+            {
+                <p>
+                    This rewrites the whole database to give back about <strong>@Bytes(compactFacts.FreeBytes)</strong> of free
+                    space inside it.
+                </p>
+                <ul class="small">
+                    <li><strong>It takes time.</strong> About a minute per few hundred megabytes on an SSD; on NAS disks, several
+                        minutes for a database of @Bytes(compactFacts.UsedBytes).</li>
+                    <li><strong>It needs disk space.</strong> About @Bytes(compactFacts.UsedBytes * 2) free beside the database while it
+                        runs — there is @(compactFacts.DiskFree is { } df ? Bytes(df) : "an unknown amount") — and about
+                        @Bytes(compactFacts.UsedBytes) for a temporary copy.</li>
+                    <li><strong>Readings are not recorded while it runs,</strong> so charts have a gap for those minutes. Pages still
+                        work, and the monitor still checks everything and alerts as usual. Changing settings may fail until it has
+                        finished.</li>
+                </ul>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="compact-incremental" @bind="_makeIncremental" />
+                    <label class="form-check-label small" for="compact-incremental">
+                        Set the database up so that later compactions are quick, a little at a time, with nothing waiting
+                        (recommended — only a full compaction can switch it)
+                    </label>
+                </div>
+                @if (compactFacts.FullCompactionProblem() is { } problem)
+                {
+                    <div class="alert alert-danger py-2 mt-2 mb-0 small">Not enough room: @problem</div>
+                }
+            }
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _confirmCompact = false">Cancel</button>
+            <button class="btn btn-warning btn-sm" disabled="@(!compactFacts.Incremental && compactFacts.FullCompactionProblem() is not null)"
+                    @onclick="CompactAsync">Compact now</button>
+        </Footer>
+    </Modal>
+}
+
+@code {
+    private DatabaseFacts? _facts;
+    private string? _factsError;
+    private HistoryPolicy _draft = HistoryPolicy.Default;
+    private HistoryPolicy? _saved;
+    private IReadOnlyDictionary<string, string> _names = new Dictionary<string, string>();
+    private readonly HashSet<string> _open = [];
+    private bool _saving;
+    private string? _saveError;
+    private string? _savedNote;
+    private bool _confirmCompact;
+    private bool _makeIncremental = true;
+    private string? _compactError;
+    private bool _wasBusy;
+    private readonly CancellationTokenSource _gone = new();
+
+    protected override void OnInitialized()
+    {
+        Storage.Changed += OnStorageChanged;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // After the first render and never during prerender, as on the health page: the page
+        // is sent at once, and the file facts, names and policy follow — all of them either
+        // header reads or cached, but still not work for the thread drawing the page.
+        if (firstRender)
+            _ = LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            await Storage.LoadAsync(_gone.Token);
+            _names = await Offload.Run(async c => (IReadOnlyDictionary<string, string>)(await Config.ConnectionsAsync(c))
+                .ToDictionary(x => x.Id, x => x.Name), _gone.Token);
+            _saved = await Offload.Run(c => History.PolicyAsync(c), _gone.Token);
+            _draft = _saved;
+            await LoadFactsAsync();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task LoadFactsAsync()
+    {
+        try
+        {
+            _facts = await Offload.Run(c => History.FactsAsync(c), _gone.Token);
+            _factsError = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not ObjectDisposedException)
+        {
+            _factsError = $"Could not read the database: {ex.GetBaseException().Message}";
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnStorageChanged() => _ = InvokeAsync(async () =>
+    {
+        if (_gone.IsCancellationRequested)
+            return;
+        // When a tidy-up or compaction finishes, the file's figures are what changed.
+        var busy = Storage.Tidy.Running || Storage.Compaction.Running;
+        if (_wasBusy && !busy)
+            await LoadFactsAsync();
+        _wasBusy = busy;
+        StateHasChanged();
+    });
+
+    private IEnumerable<IGrouping<string, SeriesSize>> Groups(StorageSurvey survey) =>
+        survey.Series.GroupBy(s => s.ConnectionId).OrderByDescending(g => g.Sum(s => s.Bytes));
+
+    private string Name(string id) => _names.TryGetValue(id, out var name) ? name : $"{id} (removed)";
+
+    private void Toggle(string id)
+    {
+        if (!_open.Remove(id))
+            _open.Add(id);
+    }
+
+    private void SetDays(string id, string? text)
+    {
+        _savedNote = null;
+        _draft = int.TryParse(text, out var days) && days > 0
+            ? _draft.WithRawDays(id, Math.Min(days, HistoryPolicy.MaxRawDays))
+            : _draft.WithRawDays(id, null);
+    }
+
+    private void SetRecord(string connectionId, string metric, bool record)
+    {
+        _savedNote = null;
+        _draft = _draft.WithRecord(connectionId, metric, record);
+    }
+
+    private void Discard()
+    {
+        if (_saved is { } saved)
+            _draft = saved;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _saveError = null;
+        try
+        {
+            var draft = _draft;
+            await Offload.Run(async c => { await History.SavePolicyAsync(draft, c); return true; }, _gone.Token);
+            _saved = _draft = await Offload.Run(c => History.PolicyAsync(c), _gone.Token);
+            _savedNote = "Saved. The next tidy-up — within 15 minutes — applies it, a few thousand rows at a time; " +
+                         "or press Tidy up now.";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _saveError = $"Could not save: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    /// <summary>
+    /// What going from the saved choices to the draft would do, series by series, from the
+    /// survey's figures: space freed as soon as the tidy-up has run, what a longer retention
+    /// will take, and what stops being written at all.
+    /// </summary>
+    private (StorageEffect Effect, double StoppedPerDay) Effect(HistoryPolicy saved, HistoryPolicy draft, DateTimeOffset now)
+    {
+        if (Storage.Survey is not { } survey)
+            return (StorageEffect.None, 0);
+        var global = Options.Value.RawRetention;
+        var hourlyHorizon = History.HourlyHorizon(now);
+        var total = StorageEffect.None;
+        double stopped = 0;
+        foreach (var series in survey.Series)
+        {
+            var before = saved.RawHorizon(series.ConnectionId, series.Metric, now, global);
+            var after = draft.RawHorizon(series.ConnectionId, series.Metric, now, global);
+            total = total.Plus(StorageMath.Effect(series, before, after, hourlyHorizon));
+            if (saved.Records(series.ConnectionId, series.Metric) && !draft.Records(series.ConnectionId, series.Metric))
+                stopped += series.RawBytesPerDay;
+        }
+        return (total, stopped);
+    }
+
+    private async Task SurveyAsync()
+    {
+        try
+        {
+            await Storage.SurveyNowAsync(_gone.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _factsError = $"The survey failed: {ex.GetBaseException().Message}";
+        }
+    }
+
+    private void Tidy() => Storage.StartTidy();
+
+    private async Task CompactAsync()
+    {
+        _confirmCompact = false;
+        _compactError = null;
+        // Measured again at the moment of starting: the dialog may have been open a while.
+        await LoadFactsAsync();
+        if (_facts is { } facts)
+            _compactError = Storage.StartCompaction(facts, _makeIncremental);
+    }
+
+    private static string TaskText(StorageTask task) =>
+        task.Running ? $"{task.Stage}… (started {task.StartedAt:HH:mm})"
+        : task.Error is { } error ? $"Failed: {error}"
+        : task.Outcome ?? "";
+
+    private static string Oldest(long? unix) =>
+        unix is { } at ? DateTimeOffset.FromUnixTimeSeconds(at).ToLocalTime().ToString("d MMM") : "—";
+
+    private static int RawDays(TimeSpan span) => (int)Math.Round(span.TotalDays);
+
+    private static string Bytes(double value) => StorageFormat.Bytes(value);
+
+    private static string Duration(TimeSpan span) => SelfWatchRules.Words(span);
+
+    public void Dispose()
+    {
+        _gone.Cancel();
+        Storage.Changed -= OnStorageChanged;
+        _gone.Dispose();
+    }
+}

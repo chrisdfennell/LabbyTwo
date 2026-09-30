@@ -8,7 +8,7 @@ namespace LabbyTwo.Storage;
 /// Nothing here knows what a metric means, which is why any provider that reports one
 /// gets charts and uptime for free.
 /// </summary>
-public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
+public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
 {
     /// <summary>
     /// One point in a series. A raw reading has <see cref="Min"/>, <see cref="Max"/> and
@@ -27,7 +27,15 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// <summary>What one pass of <see cref="RollupAsync"/> did, for the log and the benchmark.</summary>
     /// <param name="LongestBatch">The longest any one transaction held the write lock.</param>
     /// <param name="Finished">False if it stopped at its time budget with hours still to do.</param>
-    public sealed record RollupResult(int Batches, long HoursWritten, long RowsDeleted, TimeSpan LongestBatch, bool Finished);
+    public sealed record RollupResult(int Batches, long HoursWritten, long RowsDeleted, TimeSpan LongestBatch, bool Finished)
+    {
+        /// <summary>
+        /// Space the run freed inside the database file: how many more pages were free
+        /// afterwards than before. The file itself stays the size it was — SQLite reuses free
+        /// pages for new rows rather than handing them back — until it is compacted.
+        /// </summary>
+        public long FreedBytes { get; init; }
+    }
     public sealed record StatusEvent(string ConnectionId, DateTimeOffset At, bool IsUp, string Message);
     /// <summary>
     /// <see cref="Since"/> is when monitoring actually began if that is later than the
@@ -51,20 +59,64 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// </summary>
     public event Action<string, IReadOnlyDictionary<string, double>, DateTimeOffset>? Recorded;
 
+    /// <summary>
+    /// Writes one probe's readings, and says so to <see cref="Recorded"/> — all of them,
+    /// including any the history policy says not to keep, because their live value is still
+    /// what the cards show. Only the database is spared them.
+    ///
+    /// While the database is being compacted from scratch (<see cref="WriteHealth.Compacting"/>)
+    /// the readings are not written at all: VACUUM holds the database for minutes, and a
+    /// sweep that queued behind it would freeze every status on the dashboard with it. A gap
+    /// in the charts for those minutes is the price, and the compaction dialog says so.
+    /// </summary>
     public async Task RecordAsync(string connectionId, IReadOnlyDictionary<string, double> metrics, CancellationToken ct)
     {
         if (metrics.Count == 0)
             return;
+
+        var policy = await PolicyAsync(ct);
+        var kept = policy.HasUnrecorded(connectionId)
+            ? metrics.Where(pair => policy.Records(connectionId, pair.Key)).ToDictionary()
+            : metrics;
+        if (kept.Count == 0 || Writes.Compacting)
+        {
+            Skip(connectionId, kept.Count, metrics);
+            return;
+        }
+
         await _writes.WaitAsync(ct);
         try
         {
-            await WriteSamplesAsync(connectionId, metrics, ct);
+            // Again, now that it is this writer's turn: a compaction may have started while it queued.
+            if (Writes.Compacting)
+            {
+                Skip(connectionId, kept.Count, metrics);
+                return;
+            }
+            await WriteSamplesAsync(connectionId, kept, metrics, ct);
+            Writes.Succeeded(DateTimeOffset.Now);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Writes.Failed(DateTimeOffset.Now, ex);
+            throw;
         }
         finally
         {
             _writes.Release();
         }
     }
+
+    /// <summary>Nothing to write, or no writing allowed: the live values still go to whoever listens.</summary>
+    private void Skip(string connectionId, int wanted, IReadOnlyDictionary<string, double> reported)
+    {
+        if (Writes.Compacting)
+            Writes.Dropped(wanted);
+        Recorded?.Invoke(connectionId, reported, DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+    }
+
+    /// <summary>Whether the writes above are getting through. In memory, for LabbyTwo watching itself.</summary>
+    public WriteHealth Writes { get; } = new();
 
     /// <summary>
     /// History's writers take turns here rather than at SQLite's lock. Every probe in a sweep
@@ -77,7 +129,10 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// </summary>
     private readonly SemaphoreSlim _writes = new(1, 1);
 
-    private async Task WriteSamplesAsync(string connectionId, IReadOnlyDictionary<string, double> metrics, CancellationToken ct)
+    /// <param name="metrics">What is written.</param>
+    /// <param name="reported">What the probe reported, which is what listeners are told.</param>
+    private async Task WriteSamplesAsync(
+        string connectionId, IReadOnlyDictionary<string, double> metrics, IReadOnlyDictionary<string, double> reported, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(ct);
@@ -97,7 +152,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         await tx.CommitAsync(ct);
 
         // After the commit, so nothing in memory claims a value the database rolled back.
-        Recorded?.Invoke(connectionId, metrics, stamp);
+        Recorded?.Invoke(connectionId, reported, stamp);
     }
 
     /// <summary>
@@ -235,8 +290,12 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         var since = DateTimeOffset.UtcNow.Subtract(window).ToUnixTimeSeconds();
         await using var connection = await db.OpenAsync(ct);
 
+        // The connection's own raw retention where it has one — from memory, the policy is
+        // read once — so a weather station that keeps a week of raw readings draws a
+        // fortnight's chart by the hour, all the way across.
+        var raw = (await PolicyAsync(ct)).RawRetentionFor(connectionId, options.Value.RawRetention);
         var summaries = await SummariesAsync(connection, connectionId, metric, since, ct);
-        if (summaries.Count == 0 && window <= options.Value.RawRetention)
+        if (summaries.Count == 0 && window <= raw)
             return await RawSamplesAsync(connection, connectionId, metric, since, ct);
 
         return await HourlySamplesAsync(connection, connectionId, metric, since, summaries, ct);
@@ -990,12 +1049,8 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
 
     private static long FloorHour(long unixSeconds) => unixSeconds - (unixSeconds % Hour + Hour) % Hour;
 
-    /// <summary>Raw samples before this are summarised and deleted. Always the start of an hour.</summary>
-    private long RawHorizon(DateTimeOffset now) =>
-        FloorHour(now.ToUnixTimeSeconds() - (long)options.Value.RawRetention.TotalSeconds);
-
     /// <summary>Summaries before this are deleted; raw rows before it are deleted without one.</summary>
-    private long HourlyHorizon(DateTimeOffset now) =>
+    public long HourlyHorizon(DateTimeOffset now) =>
         FloorHour(now.ToUnixTimeSeconds() - (long)options.Value.HourlyRetention.TotalSeconds);
 
     /// <summary>
@@ -1030,7 +1085,35 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// <summary><see cref="RollupAsync(TimeSpan?, CancellationToken)"/> as if it were <paramref name="now"/>, for tests.</summary>
     public async Task<RollupResult> RollupAsync(DateTimeOffset now, TimeSpan? budget, CancellationToken ct)
     {
-        var rawHorizon = RawHorizon(now);
+        // One at a time: the job every quarter hour and "Tidy up now" on the storage page
+        // would otherwise both fold the same hours. Harmless — the second finds the rows
+        // gone — but twice the reading for nothing.
+        await _rollup.WaitAsync(ct);
+        try
+        {
+            var before = await FreePagesAsync(ct);
+            var result = await RollupOnceAsync(now, budget, ct);
+            var after = await FreePagesAsync(ct);
+            result = result with { FreedBytes = Math.Max(0, (after.Free - before.Free) * after.PageSize) };
+            if (result.Batches > 0)
+                LastRollup = (now, result);
+            return result;
+        }
+        finally
+        {
+            _rollup.Release();
+        }
+    }
+
+    private readonly SemaphoreSlim _rollup = new(1, 1);
+
+    /// <summary>The last rollup that did anything, and when — for the storage page's "last tidy-up".</summary>
+    public (DateTimeOffset At, RollupResult Result)? LastRollup { get; private set; }
+
+    private async Task<RollupResult> RollupOnceAsync(DateTimeOffset now, TimeSpan? budget, CancellationToken ct)
+    {
+        var policy = await PolicyAsync(ct);
+        var global = options.Value.RawRetention;
         var hourlyHorizon = HourlyHorizon(now);
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var longest = TimeSpan.Zero;
@@ -1040,12 +1123,15 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         await using var connection = await db.OpenAsync(ct);
 
         // Each series with something to fold, and the oldest raw row it has — found by a
-        // seek apiece, since "the oldest row in the table" has no index of its own.
+        // seek apiece, since "the oldest row in the table" has no index of its own. Each has
+        // its own horizon: a connection may keep more or fewer days than the global setting,
+        // and a metric that is no longer recorded is folded up to the current hour.
         var pending = new List<Series>();
         foreach (var (connectionId, metric) in await SeriesAsync(connection, ct))
         {
-            if (await OldestAsync(connection, connectionId, metric, 0, ct) is { } oldest && oldest < rawHorizon)
-                pending.Add(new Series(connectionId, metric, oldest));
+            var horizon = policy.RawHorizon(connectionId, metric, now, global);
+            if (await OldestAsync(connection, connectionId, metric, 0, ct) is { } oldest && oldest < horizon)
+                pending.Add(new Series(connectionId, metric, oldest, horizon));
         }
 
         var fold = connection.CreateCommand();
@@ -1065,13 +1151,16 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
 
         while (pending.Count > 0)
         {
-            if (budget is { } limit && clock.Elapsed > limit)
+            // Stopped by a compaction starting as well as by the budget: VACUUM holds the
+            // database, and a batch waiting on it would only time out.
+            if ((budget is { } limit && clock.Elapsed > limit) || Writes.Compacting)
                 return new RollupResult(batches, hours, deleted, longest, Finished: false);
 
             // The oldest slice anybody has, so a gap in the history (a week the NAS was
-            // off) is stepped over rather than walked an hour at a time.
+            // off) is stepped over rather than walked an hour at a time. Each series stops
+            // at its own horizon inside it.
             var from = FloorHour(pending.Min(series => series.Oldest));
-            var to = Math.Min(from + SliceSpan, rawHorizon);
+            var to = from + SliceSpan;
             var due = pending.Where(series => series.Oldest < to).Take(MaxSeriesPerBatch).ToList();
 
             await _writes.WaitAsync(ct);
@@ -1082,16 +1171,18 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
                 fold.Transaction = delete.Transaction = tx;
                 foreach (var series in due)
                 {
+                    var end = Math.Min(to, series.Horizon);
+
                     // Past both retentions there is nothing to keep, so those rows are only
                     // deleted — this is what expires raw samples older than a summary of
                     // them would be kept for.
-                    if (to > hourlyHorizon)
+                    if (end > hourlyHorizon)
                     {
-                        Bind(fold, series, Math.Max(from, hourlyHorizon), to);
+                        Bind(fold, series, Math.Max(from, hourlyHorizon), end);
                         hours += await fold.ExecuteNonQueryAsync(ct);
                     }
 
-                    Bind(delete, series, from, to);
+                    Bind(delete, series, from, end);
                     deleted += await delete.ExecuteNonQueryAsync(ct);
                 }
                 await tx.CommitAsync(ct);
@@ -1110,7 +1201,8 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
             foreach (var series in due)
             {
                 pending.Remove(series);
-                if (await OldestAsync(connection, series.ConnectionId, series.Metric, to, ct) is { } next && next < rawHorizon)
+                var end = Math.Min(to, series.Horizon);
+                if (await OldestAsync(connection, series.ConnectionId, series.Metric, end, ct) is { } next && next < series.Horizon)
                     pending.Add(series with { Oldest = next });
             }
         }
@@ -1118,7 +1210,8 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         return new RollupResult(batches, hours, deleted, longest, Finished: true);
     }
 
-    private sealed record Series(string ConnectionId, string Metric, long Oldest);
+    /// <param name="Horizon">Raw rows before this are due; the start of an hour. See <see cref="HistoryPolicy.RawHorizon"/>.</param>
+    private sealed record Series(string ConnectionId, string Metric, long Oldest, long Horizon);
 
     private static void Bind(SqliteCommand cmd, Series series, long from, long to)
     {
@@ -1166,25 +1259,31 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// from one connection to the next, then through each one's metric names — so listing
     /// a few hundred series is a few hundred seeks rather than a pass over every row.
     /// </summary>
-    private static async Task<List<(string ConnectionId, string Metric)>> SeriesAsync(
-        SqliteConnection connection, CancellationToken ct)
+    private static Task<List<(string ConnectionId, string Metric)>> SeriesAsync(SqliteConnection connection, CancellationToken ct) =>
+        ListSeriesAsync(connection, SeriesSql, ct);
+
+    /// <summary>What <see cref="SeriesAsync"/> runs: every raw series, a seek apiece.</summary>
+    public const string SeriesSql = """
+        WITH RECURSIVE
+        connections(c) AS (
+            SELECT MIN(connection_id) FROM samples
+            UNION ALL
+            SELECT (SELECT MIN(connection_id) FROM samples WHERE connection_id > connections.c)
+            FROM connections WHERE connections.c IS NOT NULL),
+        series(c, m) AS (
+            SELECT c, (SELECT MIN(metric) FROM samples WHERE connection_id = connections.c)
+            FROM connections WHERE c IS NOT NULL
+            UNION ALL
+            SELECT c, (SELECT MIN(metric) FROM samples WHERE connection_id = series.c AND metric > series.m)
+            FROM series WHERE m IS NOT NULL)
+        SELECT c, m FROM series WHERE m IS NOT NULL
+        """;
+
+    private static async Task<List<(string ConnectionId, string Metric)>> ListSeriesAsync(
+        SqliteConnection connection, string sql, CancellationToken ct)
     {
         var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            WITH RECURSIVE
-            connections(c) AS (
-                SELECT MIN(connection_id) FROM samples
-                UNION ALL
-                SELECT (SELECT MIN(connection_id) FROM samples WHERE connection_id > connections.c)
-                FROM connections WHERE connections.c IS NOT NULL),
-            series(c, m) AS (
-                SELECT c, (SELECT MIN(metric) FROM samples WHERE connection_id = connections.c)
-                FROM connections WHERE c IS NOT NULL
-                UNION ALL
-                SELECT c, (SELECT MIN(metric) FROM samples WHERE connection_id = series.c AND metric > series.m)
-                FROM series WHERE m IS NOT NULL)
-            SELECT c, m FROM series WHERE m IS NOT NULL
-            """;
+        cmd.CommandText = sql;
         var list = new List<(string, string)>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))

@@ -118,6 +118,7 @@ public sealed partial class QueryLog
         {
             _log.LogWarning("Slow query: {Milliseconds} ms, {Read} read, from {Caller}: {Sql}",
                 (long)took.TotalMilliseconds, Size((long)pages * _pageSize), caller, text);
+            NoteSlow(DateTimeOffset.UtcNow, took);
         }
 
         if (_summaryEvery > TimeSpan.Zero && _sinceSummary.Elapsed >= _summaryEvery && Interlocked.Exchange(ref _summarising, 1) == 0)
@@ -130,6 +131,50 @@ public sealed partial class QueryLog
             {
                 Volatile.Write(ref _summarising, 0);
             }
+        }
+    }
+
+    /// <summary>
+    /// The slow statements of the last <see cref="SlowWindow"/>, oldest first, for the
+    /// slow-query budget LabbyTwo watches itself against. Bounded: past
+    /// <see cref="MaxSlowKept"/> the oldest are dropped, which only ever understates a
+    /// budget that is already blown.
+    /// </summary>
+    private readonly Queue<(DateTimeOffset At, TimeSpan Took)> _slow = new();
+
+    /// <summary>How far back <see cref="SlowSince"/> can look.</summary>
+    public static readonly TimeSpan SlowWindow = TimeSpan.FromMinutes(15);
+
+    private const int MaxSlowKept = 10_000;
+
+    /// <summary>What counts as slow: <see cref="LabbyOptions.SlowQueryMs"/>.</summary>
+    public TimeSpan Threshold => _threshold;
+
+    private void NoteSlow(DateTimeOffset at, TimeSpan took)
+    {
+        lock (_slow)
+        {
+            _slow.Enqueue((at, took));
+            while (_slow.Count > MaxSlowKept || (_slow.Count > 0 && at - _slow.Peek().At > SlowWindow))
+                _slow.Dequeue();
+        }
+    }
+
+    /// <summary>How many statements were slow since <paramref name="since"/>, and how long they took between them.</summary>
+    public (int Count, TimeSpan Total) SlowSince(DateTimeOffset since)
+    {
+        lock (_slow)
+        {
+            int count = 0;
+            var total = TimeSpan.Zero;
+            foreach (var (at, took) in _slow)
+            {
+                if (at < since)
+                    continue;
+                count++;
+                total += took;
+            }
+            return (count, total);
         }
     }
 

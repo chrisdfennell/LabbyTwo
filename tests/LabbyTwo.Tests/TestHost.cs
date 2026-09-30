@@ -18,7 +18,8 @@ namespace LabbyTwo.Tests;
 /// </summary>
 public static class TestHost
 {
-    public static ServiceProvider Build(string directory)
+    /// <param name="extra">More registrations, for a test that needs a service or two beyond these.</param>
+    public static ServiceProvider Build(string directory, Action<IServiceCollection>? extra = null)
     {
         Directory.CreateDirectory(directory);
 
@@ -41,6 +42,7 @@ public static class TestHost
         services.AddSingleton<TemplateStore>();
         services.AddSingleton<ChangeStore>();
         services.AddSingleton<IncidentStore>();
+        extra?.Invoke(services);
 
         return services.BuildServiceProvider();
     }
