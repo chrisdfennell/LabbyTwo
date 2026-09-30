@@ -1,5 +1,7 @@
 using LabbyTwo.Services;
+using LabbyTwo.Storage;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LabbyTwo.Tests;
 
@@ -8,19 +10,23 @@ namespace LabbyTwo.Tests;
 /// their timing. On a fast SSD a full scan of half a gigabyte is quick enough to pass any
 /// timing budget; on NAS disks the same scan made the health page time out behind
 /// Cloudflare. The plan says "SCAN samples" on every machine.
+///
+/// The history reads are held to more than "no scan": they must be answered from the
+/// covering index alone. A plan that searches ix_samples_series without the word COVERING
+/// goes back to the table for every row, and because rows are written a sweep at a time,
+/// one series' rows are spread across the whole table — a week of one series was 80 MB of
+/// reads for 20,000 numbers, on every chart, every sweep. That is not a scan, so only this
+/// catches it.
 /// </summary>
 public sealed class QueryPlanTests
 {
-    private static List<string> Plan(string sql)
+    /// <summary>
+    /// The plan of <paramref name="sql"/> against the schema the app really makes — built by
+    /// <see cref="Db"/> itself, every migration run — so a test can never pass against an
+    /// index the app no longer has. Parameters are left unbound, which EXPLAIN allows.
+    /// </summary>
+    public static List<string> Plan(string sql) => WithSchema(connection =>
     {
-        using var connection = new SqliteConnection("Data Source=:memory:");
-        connection.Open();
-        var create = connection.CreateCommand();
-        create.CommandText =
-            "CREATE TABLE samples (connection_id TEXT NOT NULL, metric TEXT NOT NULL, ts INTEGER NOT NULL, value REAL NOT NULL);" +
-            "CREATE INDEX ix_samples_lookup ON samples (connection_id, metric, ts);";
-        create.ExecuteNonQuery();
-
         var explain = connection.CreateCommand();
         explain.CommandText = "EXPLAIN QUERY PLAN " + sql;
         var steps = new List<string>();
@@ -28,6 +34,46 @@ public sealed class QueryPlanTests
         while (reader.Read())
             steps.Add(reader.GetString(3));
         return steps;
+    });
+
+    private static T WithSchema<T>(Func<SqliteConnection, T> use)
+    {
+        var directory = TestHost.TempDirectory();
+        using var services = new ServiceCollection().AddTestStorage(directory).BuildServiceProvider();
+        try
+        {
+            services.GetRequiredService<Db>().EnsureSchemaAsync().GetAwaiter().GetResult();
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(directory, "test.db"),
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            return use(connection);
+        }
+        finally
+        {
+            using (var pooled = new SqliteConnection(services.GetRequiredService<Db>().ConnectionString))
+                SqliteConnection.ClearPool(pooled);
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A leftover temp directory should not fail a passing test.
+            }
+        }
+    }
+
+    /// <summary>Every step that reads samples reads the covering index and nothing else.</summary>
+    private static void AssertIndexOnly(List<string> plan)
+    {
+        var reads = plan.Where(step => step.Contains(" samples ", StringComparison.Ordinal)
+                                       || step.EndsWith(" samples", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(reads);
+        Assert.All(reads, step => Assert.Contains("USING COVERING INDEX ix_samples_series", step, StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN samples", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -44,10 +90,11 @@ public sealed class QueryPlanTests
     {
         // The GROUP BY it replaced read every sample in the table, and held up monitoring
         // for sixteen minutes after each restart on a 580 MB install.
-        var plan = Plan(Storage.HistoryStore.LastSampleSql.Replace("$id", "'nas'"));
+        var plan = Plan(HistoryStore.LastSampleSql);
 
         Assert.DoesNotContain(plan, step => step.StartsWith("SCAN samples", StringComparison.Ordinal));
         Assert.Contains(plan, step => step.StartsWith("SEARCH samples", StringComparison.Ordinal));
+        AssertIndexOnly(plan);
     }
 
     [Fact]
@@ -57,5 +104,81 @@ public sealed class QueryPlanTests
         // SampleEstimateSql can go, but until then nobody should "simplify" it back.
         Assert.Contains(Plan("SELECT MAX(rowid) - MIN(rowid) + 1 FROM samples"),
             step => step.StartsWith("SCAN samples", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_samples_index_carries_the_value_and_the_old_one_is_gone()
+    {
+        // Pinned from the schema side too: if the value ever left the index, every test
+        // below would fail with a plan that looks almost right.
+        var plan = Plan("SELECT value FROM samples WHERE connection_id = 'a' AND metric = 'b' AND ts > 0");
+        Assert.Contains(plan, step => step.Contains("COVERING INDEX ix_samples_series", StringComparison.Ordinal));
+        var indexes = WithSchema(connection =>
+        {
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'samples'";
+            var names = new List<string>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                names.Add(reader.GetString(0));
+            return names;
+        });
+        // One index: a second on the same columns would cost every insert for nothing.
+        Assert.Equal(["ix_samples_series"], indexes);
+    }
+
+    [Fact]
+    public void A_chart_inside_the_raw_window_reads_only_the_index_and_in_order()
+    {
+        var plan = Plan(HistoryStore.RawSamplesSql);
+        AssertIndexOnly(plan);
+        // Already in time order from the index — no sort of a week of rows.
+        Assert.DoesNotContain(plan, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_long_chart_forecast_or_baseline_reads_its_raw_hours_from_the_index_alone()
+    {
+        // Capacity forecasts (14 days) and unusual-value baselines (28 days) both come
+        // through here for every series they look at: a week of raw rows each, summarised.
+        AssertIndexOnly(Plan(HistoryStore.HourlyRawSql));
+    }
+
+    [Fact]
+    public void The_latest_readings_never_go_back_to_the_table()
+    {
+        // It used to fetch each metric's newest row from the table by rowid — a random read
+        // per metric, thirty of them for a weather station, on a disk busy with everything else.
+        var plan = Plan(HistoryStore.LatestRawSql);
+        AssertIndexOnly(plan);
+        Assert.DoesNotContain(plan, step => step.Contains("SEARCH samples USING INTEGER PRIMARY KEY", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_metric_list_aggregates_and_energy_reads_stay_in_the_index()
+    {
+        AssertIndexOnly(Plan(HistoryStore.MetricsSql));
+        AssertIndexOnly(Plan(HistoryStore.AggregateSql));
+        AssertIndexOnly(Plan(HistoryStore.EnergyRawSql));
+    }
+
+    [Fact]
+    public void The_newest_status_events_are_read_backwards_from_an_index_not_sorted()
+    {
+        // Asked every sweep by the changes card and the status tab, of a table kept for ever.
+        var plan = Plan(HistoryStore.RecentEventsSql);
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN status_events", StringComparison.Ordinal)
+                                            && !step.Contains("INDEX", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+
+        var one = Plan(HistoryStore.RecentEventsForSql);
+        Assert.Contains(one, step => step.Contains("ix_status_lookup", StringComparison.Ordinal));
+        Assert.DoesNotContain(one, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_rollup_folds_an_hour_from_the_index_alone()
+    {
+        AssertIndexOnly(Plan(HistoryStore.FoldSql));
     }
 }

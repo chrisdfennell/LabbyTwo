@@ -4,7 +4,6 @@
 @inject NavigationManager Nav
 @inject AppSettingsStore AppSettings
 @inject FamilyReportStore FamilyReports
-@inject Offload Offload
 
 <nav class="app-nav">
     <a class="nav-brand" href="/">
@@ -99,7 +98,36 @@
         _tabs = [.. (await Config.TabsAsync()).Where(t => t.Enabled)];
         _downCount = Health.Snapshot.Count(s => s.IsUp == false);
         _brand = (await AppSettings.AllAsync()).Get(Appearance.BrandKey, Appearance.Default.BrandName);
-        _familyReports = await Offload.Run(ct => FamilyReports.CountAsync(ct));
+
+        // Never awaited while the page is drawn. This menu is on every page, and awaiting the
+        // count through Offload put every page load in the same four-at-a-time queue as the
+        // chart reads of every open dashboard — on a NAS, seconds to a minute of a page that
+        // did not appear while the menu waited to count a table that is usually empty. The
+        // store keeps the count in memory once read; until then the badge is simply absent,
+        // and appears when the count lands.
+        if (FamilyReports.KnownCount is { } known)
+            _familyReports = known;
+        else
+            _ = CountReportsAsync();
+    }
+
+    private async Task CountReportsAsync()
+    {
+        try
+        {
+            var count = await Task.Run(() => FamilyReports.CountAsync());
+            await InvokeAsync(() =>
+            {
+                if (count == _familyReports)
+                    return;
+                _familyReports = count;
+                StateHasChanged();
+            });
+        }
+        catch (Exception)
+        {
+            // The badge is a courtesy; a count that could not be read leaves it off.
+        }
     }
 
     private void OnChanged() => _ = InvokeAsync(async () =>

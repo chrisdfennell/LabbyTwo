@@ -470,7 +470,9 @@
         else if (_timing is { } timing && timing.Slowest > TimeSpan.FromSeconds(1))
             findings.Add(new(SystemHealth.Level.Warn, "Database",
                 $"Reading the latest values for {Name(timing.SlowestConnectionId ?? "")} took {Duration(timing.Slowest)}. " +
-                "Cards wait on that while a dashboard draws."));
+                "Cards keep the latest values in memory, so this only holds them up straight after a restart — " +
+                "but a query this small taking that long usually means the disk is busy with something else. " +
+                "Setting Labby__SlowQueryMs=200 makes the log say what."));
         return findings;
     }
 
