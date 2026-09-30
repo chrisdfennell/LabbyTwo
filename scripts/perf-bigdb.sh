@@ -211,8 +211,8 @@ raw_start=$(( (now - (raw_days + 1) * 86400) / hour * hour ))
 hourly_start=$(( (now - hourly_days * 86400) / hour * hour ))
 per_hour=$(( hour / interval ))
 
-index_sql="$(sql_value "SELECT sql FROM sqlite_master WHERE name = 'ix_samples_lookup'")"
-[ -n "$index_sql" ] || fail "the first start did not create ix_samples_lookup, so the schema is not what this expects."
+index_sql="$(sql_value "SELECT sql FROM sqlite_master WHERE name = 'ix_samples_series'")"
+[ -n "$index_sql" ] || fail "the first start did not create ix_samples_series, so the schema is not what this expects."
 
 has_kind="$(sql_value "SELECT COUNT(*) FROM pragma_table_info('alert_rules') WHERE name = 'kind'")"
 
@@ -248,7 +248,7 @@ INSERT INTO connections (id, provider, name, sort, settings)
 INSERT INTO connections (id, provider, name, sort, settings)
   VALUES ('perf-speed', 'speedtest-tracker', 'Internet', 100, '{"url":"http://127.0.0.1:9"}');
 
-DROP INDEX ix_samples_lookup;
+DROP INDEX ix_samples_series;
 
 INSERT INTO samples (connection_id, metric, ts, value)
   WITH RECURSIVE t(ts) AS (SELECT $raw_start UNION ALL SELECT ts + $interval FROM t WHERE ts + $interval < $now)
@@ -458,7 +458,9 @@ while IFS='|' read -r key took detail; do
   case "$key" in
     metrics)      name="Query: every connection's metric names"; budget=100 ;;
     latest)       name="Query: every connection's latest readings"; budget=100 ;;
-    chart30)      name="Query: a 30-day chart for every connection"; budget=10000 ;;
+    # A week of raw rows per series, grouped by hour. About 130 ms from the covering index;
+    # 1,600 ms warm, and 80 MB of reads per series cold, when each row was a table lookup.
+    chart30)      name="Query: a 30-day chart for every connection"; budget=1000 ;;
     uptime30)     name="Query: 30-day uptime for every connection"; budget=1000 ;;
     restore)      name="Query: what restore reads at startup"; budget=1000 ;;
     rollup)       name="Rollup: a day behind, folded"; budget=120000 ;;

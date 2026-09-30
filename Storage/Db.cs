@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using LabbyTwo.Core;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
@@ -55,6 +56,18 @@ public sealed class LabbyOptions
     /// Never shorter than <see cref="ChangeRetentionDays"/>.
     /// </summary>
     public int IncidentRetentionDays { get; set; } = 365;
+
+    /// <summary>
+    /// Logs every database statement that takes at least this many milliseconds, with what
+    /// called it and how much it read, and every <see cref="SlowQuerySummaryMinutes"/> the
+    /// statements that read the most. Zero, the default, turns it off. For finding out why
+    /// one install is slow when nobody else's is: set <c>Labby__SlowQueryMs=200</c>, leave it
+    /// an hour, and the log says which query and who asked. See <see cref="QueryLog"/>.
+    /// </summary>
+    public int SlowQueryMs { get; set; }
+
+    /// <summary>How often the query log summarises what read the most, while it is on.</summary>
+    public double SlowQuerySummaryMinutes { get; set; } = 5;
 
     /// <summary><see cref="ChangeRetentionDays"/>, clamped to at least a week.</summary>
     public TimeSpan ChangeRetention => TimeSpan.FromDays(Math.Max(7, ChangeRetentionDays));
@@ -123,11 +136,21 @@ public sealed class Db
 {
     private readonly string _path;
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly QueryLog? _queries;
+    private readonly ILogger? _log;
+    private readonly ConditionalWeakTable<SQLitePCL.sqlite3, object> _prepared = [];
     private bool _ready;
 
-    public Db(IOptions<LabbyOptions> options, IHostEnvironment env)
+    public Db(IOptions<LabbyOptions> options, IHostEnvironment env, ILogger<Db>? log = null)
     {
         _path = Path.GetFullPath(options.Value.DatabasePath, env.ContentRootPath);
+        _log = log;
+        if (options.Value.SlowQueryMs > 0 && log is not null)
+        {
+            _queries = new QueryLog(TimeSpan.FromMilliseconds(options.Value.SlowQueryMs),
+                TimeSpan.FromMinutes(Math.Max(0, options.Value.SlowQuerySummaryMinutes)), log);
+            log.LogInformation("Logging database statements slower than {Milliseconds} ms", options.Value.SlowQueryMs);
+        }
     }
 
     public string ConnectionString => new SqliteConnectionStringBuilder
@@ -144,7 +167,45 @@ public sealed class Db
         await EnsureSchemaAsync(ct);
         var connection = new SqliteConnection(ConnectionString);
         await connection.OpenAsync(ct);
+        Prepare(connection);
+        _queries?.Attach(connection);
         return connection;
+    }
+
+    /// <summary>
+    /// What every connection needs and SQLite does not remember between them: both settings
+    /// below belong to the connection, not the file, so setting them once when the schema is
+    /// made (as busy_timeout used to be) covered that one connection and nothing else. Done
+    /// once per native handle — a pooled connection comes back with the same one.
+    ///
+    /// <c>synchronous = NORMAL</c>. The default, FULL, flushes the WAL to disk on every
+    /// commit, and there are dozens of commits a sweep — one per connection that reported a
+    /// number, one per status change, the alert ledger. Each flush is made while holding the
+    /// only write lock, so on a NAS whose disk is busy every writer queued behind the flushes
+    /// of the others, and past ten seconds of queue the monitor's insert gave up with
+    /// "database is locked". In WAL mode NORMAL is SQLite's own recommendation: the database
+    /// can never be corrupted by a crash or power cut, and what it gives up is the last
+    /// commits before a power cut — a sweep or two of readings — which are flushed at the
+    /// next checkpoint instead.
+    ///
+    /// <c>busy_timeout</c>. Without it a writer that finds the lock taken gets SQLITE_BUSY at
+    /// once and Microsoft.Data.Sqlite retries on a fixed 150 ms sleep; SQLite's own handler
+    /// retries within milliseconds, so a short commit ahead in the queue is not a sixth of a
+    /// second lost every time. Still ten seconds in all, as before.
+    /// </summary>
+    private void Prepare(SqliteConnection connection)
+    {
+        if (connection.Handle is not { } handle)
+            return;
+        lock (_prepared)
+        {
+            if (_prepared.TryGetValue(handle, out _))
+                return;
+            _prepared.Add(handle, this);
+        }
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 10000;";
+        cmd.ExecuteNonQuery();
     }
 
     public async Task EnsureSchemaAsync(CancellationToken ct = default)
@@ -159,6 +220,7 @@ public sealed class Db
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             await using var connection = new SqliteConnection(ConnectionString);
             await connection.OpenAsync(ct);
+            await NoteIndexRebuildAsync(connection, ct);
             var cmd = connection.CreateCommand();
             cmd.CommandText = """
                 PRAGMA journal_mode = WAL;
@@ -201,7 +263,10 @@ public sealed class Db
                     metric        TEXT NOT NULL,
                     ts            INTEGER NOT NULL,
                     value         REAL NOT NULL);
-                CREATE INDEX IF NOT EXISTS ix_samples_lookup ON samples (connection_id, metric, ts);
+                -- value is in the index so that reading a series never touches the table:
+                -- see migration 30, which is also what replaces the old index on an
+                -- existing database.
+                CREATE INDEX IF NOT EXISTS ix_samples_series ON samples (connection_id, metric, ts, value);
 
                 CREATE TABLE IF NOT EXISTS status_events (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -599,7 +664,54 @@ public sealed class Db
         CREATE INDEX IF NOT EXISTS ix_safe_updates_active ON safe_updates (id)
             WHERE state IN ('waiting', 'watching', 'rolling-back');
         """,
+
+        // 30 — the value joins the samples index, and the old index goes. Every history read
+        // is one series over a time range, and the old index, (connection_id, metric, ts),
+        // found the rows but not their values: each one was then a lookup into the table by
+        // rowid. Rows are written a sweep at a time, every series side by side, so one
+        // series' readings are spread one or two to a page across the whole table — and a
+        // week of one series touched 20,000 pages, 80 MB, to return 20,000 numbers. Every
+        // chart did that on every sweep, as did each capacity forecast and each "unusual"
+        // baseline, which on a NAS whose page cache is shared with everything else was the
+        // disk reading flat out all day. With the value in the index a series is a range of
+        // consecutive index entries: the same week is about 220 pages, under a megabyte.
+        // The base schema above makes the new index first (IF NOT EXISTS), so by here it
+        // already exists; this names it again for the reader and drops the old one, which
+        // would otherwise cost every insert a second index for nothing.
+        """
+        CREATE INDEX IF NOT EXISTS ix_samples_series ON samples (connection_id, metric, ts, value);
+        DROP INDEX IF EXISTS ix_samples_lookup;
+        """,
+
+        // 31 — status events by time alone, for "the newest few across everything", which the
+        // changes card and the status tab ask on every sweep. Status events are kept for
+        // ever, and without this each of those asks sorted all of them — months of history —
+        // to keep a few dozen. The rowid rides along in the index, so the ORDER BY ts, rowid
+        // it is read with is the index's own order and the read stops at the limit.
+        "CREATE INDEX IF NOT EXISTS ix_status_ts ON status_events (ts)",
     ];
+
+    /// <summary>
+    /// Says so before the samples index is rebuilt (migration 30), which on a big database
+    /// on NAS disks can take a minute or two — a pause in the log that would otherwise look
+    /// like a hang, on the first start after an upgrade.
+    /// </summary>
+    private async Task NoteIndexRebuildAsync(SqliteConnection connection, CancellationToken ct)
+    {
+        if (_log is null)
+            return;
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'samples')
+               AND NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_samples_series')
+            """;
+        if (Convert.ToInt64(await cmd.ExecuteScalarAsync(ct)) == 1)
+        {
+            _log.LogInformation(
+                "Rebuilding the history index so charts read a fraction of what they did. This happens once, " +
+                "and on a big database it can take a minute or two");
+        }
+    }
 
     private static async Task MigrateAsync(SqliteConnection connection, CancellationToken ct)
     {

@@ -554,36 +554,15 @@ public sealed class PowerCostTests
 
     // ---------- the queries ----------
 
-    private static List<string> Plan(string sql)
-    {
-        using var connection = new SqliteConnection("Data Source=:memory:");
-        connection.Open();
-        var create = connection.CreateCommand();
-        create.CommandText =
-            "CREATE TABLE samples (connection_id TEXT NOT NULL, metric TEXT NOT NULL, ts INTEGER NOT NULL, value REAL NOT NULL);" +
-            "CREATE INDEX ix_samples_lookup ON samples (connection_id, metric, ts);" +
-            "CREATE TABLE samples_hourly (connection_id TEXT NOT NULL, metric TEXT NOT NULL, hour_ts INTEGER NOT NULL, " +
-            "min REAL NOT NULL, max REAL NOT NULL, avg REAL NOT NULL, count INTEGER NOT NULL, last_ts INTEGER NOT NULL, " +
-            "last_value REAL NOT NULL, PRIMARY KEY (connection_id, metric, hour_ts)) WITHOUT ROWID;" +
-            "CREATE INDEX ix_samples_hourly_age ON samples_hourly (hour_ts);";
-        create.ExecuteNonQuery();
-
-        var explain = connection.CreateCommand();
-        explain.CommandText = "EXPLAIN QUERY PLAN " + sql
-            .Replace("$c", "'plug'").Replace("$m", "'watts'").Replace("$from", "0").Replace("$to", "1");
-        var steps = new List<string>();
-        using var reader = explain.ExecuteReader();
-        while (reader.Read())
-            steps.Add(reader.GetString(3));
-        return steps;
-    }
+    /// <summary>Against the app's own schema; see <see cref="QueryPlanTests.Plan"/>.</summary>
+    private static List<string> Plan(string sql) => QueryPlanTests.Plan(sql);
 
     [Fact]
     public void The_energy_reads_seek_their_series_rather_than_scanning()
     {
         var raw = Plan(Storage.HistoryStore.EnergyRawSql);
         Assert.DoesNotContain(raw, step => step.StartsWith("SCAN", StringComparison.Ordinal));
-        Assert.Contains(raw, step => step.Contains("ix_samples_lookup", StringComparison.Ordinal));
+        Assert.Contains(raw, step => step.Contains("COVERING INDEX ix_samples_series", StringComparison.Ordinal));
         // Already in time order from the index — no sort of a week of rows.
         Assert.DoesNotContain(raw, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
 

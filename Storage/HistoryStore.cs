@@ -55,6 +55,30 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     {
         if (metrics.Count == 0)
             return;
+        await _writes.WaitAsync(ct);
+        try
+        {
+            await WriteSamplesAsync(connectionId, metrics, ct);
+        }
+        finally
+        {
+            _writes.Release();
+        }
+    }
+
+    /// <summary>
+    /// History's writers take turns here rather than at SQLite's lock. Every probe in a sweep
+    /// finishes within a moment of the others and records at once — two dozen writers asking
+    /// for the one write lock together. SQLite does not queue them: each that finds the lock
+    /// taken sleeps and tries again, and on a big database that was 500 failed attempts a
+    /// minute, each a 150 ms sleep, before a single row went in. Waiting on a semaphore
+    /// instead, each goes the moment the one before it commits. The rollup's batches wait
+    /// here too, so a sweep's inserts slot in between them rather than polling past them.
+    /// </summary>
+    private readonly SemaphoreSlim _writes = new(1, 1);
+
+    private async Task WriteSamplesAsync(string connectionId, IReadOnlyDictionary<string, double> metrics, CancellationToken ct)
+    {
         await using var connection = await db.OpenAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(ct);
         var cmd = connection.CreateCommand();
@@ -219,22 +243,37 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     }
 
     /// <summary>
+    /// One series' raw rows since $since, summarised per hour. Grouped in SQL, so a long
+    /// window never brings a week of raw rows into memory — one aggregate per hour, a
+    /// hundred and sixty-eight of them for a week. The covering index delivers the range
+    /// with the values beside the times, so it never touches the table: 30-day charts,
+    /// capacity forecasts and "unusual" baselines all ask this of a week of raw rows per
+    /// series, and through the old index that was 20,000 scattered table pages — 80 MB —
+    /// each time. Now it is about 220 pages of index.
+    /// </summary>
+    public const string HourlyRawSql = """
+        SELECT ts / 3600 * 3600 AS hour, MIN(ts), MAX(ts), MIN(value), MAX(value), AVG(value), COUNT(*)
+        FROM samples
+        WHERE connection_id = $c AND metric = $m AND ts >= $since
+        GROUP BY hour
+        """;
+
+    /// <summary>One series' raw rows since $since, oldest first — a chart inside the raw window. Index only.</summary>
+    public const string RawSamplesSql = """
+        SELECT ts, value FROM samples
+        WHERE connection_id = $c AND metric = $m AND ts >= $since
+        ORDER BY ts
+        """;
+
+    /// <summary>
     /// The hourly half of <see cref="SamplesAsync"/>: stored summaries merged with the raw
     /// rows summarised here, one point per hour.
     /// </summary>
     private static async Task<IReadOnlyList<Sample>> HourlySamplesAsync(
         SqliteConnection connection, string connectionId, string metric, long since, List<Bucket> summaries, CancellationToken ct)
     {
-        // Grouped per hour in SQL, so a long window never brings a week of raw rows into
-        // memory — one aggregate per hour. The (connection_id, metric, ts) index delivers
-        // the range already in ts order, so the grouping streams rather than sorts.
         var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT ts / 3600 * 3600 AS hour, MIN(ts), MAX(ts), MIN(value), MAX(value), AVG(value), COUNT(*)
-            FROM samples
-            WHERE connection_id = $c AND metric = $m AND ts >= $since
-            GROUP BY hour
-            """;
+        cmd.CommandText = HourlyRawSql;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$m", metric);
         cmd.Parameters.AddWithValue("$since", since);
@@ -315,11 +354,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         SqliteConnection connection, string connectionId, string metric, long since, CancellationToken ct)
     {
         var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT ts, value FROM samples
-            WHERE connection_id = $c AND metric = $m AND ts >= $since
-            ORDER BY ts
-            """;
+        cmd.CommandText = RawSamplesSql;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$m", metric);
         cmd.Parameters.AddWithValue("$since", since);
@@ -345,6 +380,45 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     }
 
     /// <summary>
+    /// The raw half of <see cref="LatestReadingsAsync"/>: each metric's newest reading at or
+    /// after $since, answered from the index alone.
+    ///
+    /// Walked one metric at a time rather than ranked in one pass: the recursive part hops
+    /// from one metric name to the next through the index, and each metric's newest time is
+    /// then a single seek to the end of its range — a handful of lookups however big the
+    /// table has grown, where ranking read every sample the connection had kept.
+    ///
+    /// Timestamps are whole seconds, so two probes in the same second tie, and "newest"
+    /// means the most recently inserted of them: the one with the higher rowid. The value is
+    /// then read with an equality on the whole (connection, metric, ts) prefix, which is
+    /// the tied rows and nothing else, so sorting them by rowid costs nothing.
+    ///
+    /// It used to fetch the row by rowid from the table; the value is in ix_samples_series
+    /// now, so the index page the seek lands on already holds it. That saves less than it
+    /// sounds — about two pages a metric either way, the first and last leaf of its range —
+    /// and it was never why a thirty-metric weather station took two and a half seconds
+    /// here on a NAS: that was sixty-odd random reads queued behind a disk that the chart
+    /// queries were keeping busy. A test checks the plan never leaves the covering index.
+    /// </summary>
+    public const string LatestRawSql = """
+        WITH RECURSIVE metrics(metric) AS (
+            SELECT MIN(metric) FROM samples WHERE connection_id = $id
+            UNION ALL
+            SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $id AND metric > metrics.metric)
+            FROM metrics WHERE metrics.metric IS NOT NULL),
+        newest(metric, ts) AS MATERIALIZED (
+            SELECT metric, (SELECT MAX(ts) FROM samples WHERE connection_id = $id AND metric = metrics.metric)
+            FROM metrics WHERE metric IS NOT NULL)
+        SELECT newest.metric,
+               (SELECT value FROM samples
+                WHERE connection_id = $id AND metric = newest.metric AND ts = newest.ts
+                ORDER BY rowid DESC LIMIT 1),
+               newest.ts
+        FROM newest
+        WHERE newest.ts >= $since
+        """;
+
+    /// <summary>
     /// <see cref="LatestAsync"/> with the time each value was recorded, which is what the
     /// in-memory cache needs to answer a narrower window later without asking again.
     /// </summary>
@@ -353,34 +427,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
-        // Timestamps are whole seconds, so two probes in the same second tie — and with
-        // GROUP BY plus MAX(ts) SQLite may then return either row. Ordering by rowid as
-        // well makes "newest" mean the most recently inserted, deterministically.
-        //
-        // Walked one metric at a time rather than ranked in one pass. The index is
-        // (connection_id, metric, ts), so ranking had to read every sample the connection
-        // had ever kept — a month of them, filtered to the window afterwards — and ten
-        // cards do this while the page is being drawn. The recursive part hops from one
-        // metric name to the next through the index, and each metric's newest value is
-        // then a single seek from the end of its range: a handful of lookups, however
-        // big the table has grown. The seek finds the row's rowid, and the join fetches
-        // value and timestamp from that one row, so the two can never come from different
-        // samples. Cards no longer run this while drawing — they read LatestReadings,
-        // which runs it in the background — but it is still what warms that cache.
-        cmd.CommandText = """
-            WITH RECURSIVE metrics(metric) AS (
-                SELECT MIN(metric) FROM samples WHERE connection_id = $id
-                UNION ALL
-                SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $id AND metric > metrics.metric)
-                FROM metrics WHERE metrics.metric IS NOT NULL)
-            SELECT samples.metric, samples.value, samples.ts
-            FROM metrics
-            JOIN samples ON samples.rowid =
-                (SELECT rowid FROM samples
-                 WHERE connection_id = $id AND metric = metrics.metric AND ts >= $since
-                 ORDER BY ts DESC, rowid DESC LIMIT 1)
-            WHERE metrics.metric IS NOT NULL
-            """;
+        cmd.CommandText = LatestRawSql;
         cmd.Parameters.AddWithValue("$id", connectionId);
         cmd.Parameters.AddWithValue("$since", DateTimeOffset.UtcNow.Subtract(window).ToUnixTimeSeconds());
 
@@ -431,6 +478,25 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         return latest;
     }
 
+    /// <summary>What <see cref="MetricsAsync"/> runs: a hop through each table's key per metric name.</summary>
+    public const string MetricsSql = """
+        WITH RECURSIVE
+        raw(metric) AS (
+            SELECT MIN(metric) FROM samples WHERE connection_id = $c
+            UNION ALL
+            SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $c AND metric > raw.metric)
+            FROM raw WHERE raw.metric IS NOT NULL),
+        hourly(metric) AS (
+            SELECT MIN(metric) FROM samples_hourly WHERE connection_id = $c
+            UNION ALL
+            SELECT (SELECT MIN(metric) FROM samples_hourly WHERE connection_id = $c AND metric > hourly.metric)
+            FROM hourly WHERE hourly.metric IS NOT NULL)
+        SELECT metric FROM raw WHERE metric IS NOT NULL
+        UNION
+        SELECT metric FROM hourly WHERE metric IS NOT NULL
+        ORDER BY metric
+        """;
+
     /// <summary>Which metrics a connection has actually reported — drives the chart widget's picker.</summary>
     public async Task<IReadOnlyList<string>> MetricsAsync(string connectionId, CancellationToken ct = default)
     {
@@ -444,23 +510,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         //
         // Both tables, hopped the same way: a metric that stopped reporting before the raw
         // window still has a year of history to chart, so it must still be offered.
-        cmd.CommandText = """
-            WITH RECURSIVE
-            raw(metric) AS (
-                SELECT MIN(metric) FROM samples WHERE connection_id = $c
-                UNION ALL
-                SELECT (SELECT MIN(metric) FROM samples WHERE connection_id = $c AND metric > raw.metric)
-                FROM raw WHERE raw.metric IS NOT NULL),
-            hourly(metric) AS (
-                SELECT MIN(metric) FROM samples_hourly WHERE connection_id = $c
-                UNION ALL
-                SELECT (SELECT MIN(metric) FROM samples_hourly WHERE connection_id = $c AND metric > hourly.metric)
-                FROM hourly WHERE hourly.metric IS NOT NULL)
-            SELECT metric FROM raw WHERE metric IS NOT NULL
-            UNION
-            SELECT metric FROM hourly WHERE metric IS NOT NULL
-            ORDER BY metric
-            """;
+        cmd.CommandText = MetricsSql;
         cmd.Parameters.AddWithValue("$c", connectionId);
         var list = new List<string>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -665,6 +715,19 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         return result;
     }
 
+    /// <summary>
+    /// The newest transitions across everything, for the changes card and the status tab —
+    /// both of which ask on every sweep. A walk backwards down ix_status_ts that stops at the
+    /// limit; before that index (migration 31) it sorted every event ever recorded, since
+    /// status events are kept for ever, to return the newest few dozen.
+    /// </summary>
+    public const string RecentEventsSql =
+        "SELECT connection_id, ts, is_up, message FROM status_events ORDER BY ts DESC, rowid DESC LIMIT $limit";
+
+    /// <summary>One connection's newest transitions: a walk backwards down ix_status_lookup.</summary>
+    public const string RecentEventsForSql =
+        "SELECT connection_id, ts, is_up, message FROM status_events WHERE connection_id = $c ORDER BY ts DESC, rowid DESC LIMIT $limit";
+
     public async Task<IReadOnlyList<StatusEvent>> RecentEventsAsync(string? connectionId, int limit, CancellationToken ct = default)
     {
         await using var connection = await db.OpenAsync(ct);
@@ -673,9 +736,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         // comes back inside one second gives SQLite two rows it may return in either
         // order — and "recovered, then went down" is the wrong way round to read on a
         // status page. Newest means most recently inserted, as it does in LatestAsync.
-        cmd.CommandText = connectionId is null
-            ? "SELECT connection_id, ts, is_up, message FROM status_events ORDER BY ts DESC, rowid DESC LIMIT $limit"
-            : "SELECT connection_id, ts, is_up, message FROM status_events WHERE connection_id = $c ORDER BY ts DESC, rowid DESC LIMIT $limit";
+        cmd.CommandText = connectionId is null ? RecentEventsSql : RecentEventsForSql;
         if (connectionId is not null)
             cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$limit", limit);
@@ -763,6 +824,18 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// <summary>The average, extremes and number of readings of one series over a window.</summary>
     public sealed record Aggregate(double Average, double Min, double Max, long Count);
 
+    /// <summary>What <see cref="AggregateAsync"/> runs: a range on each table's (connection, metric, time) key, index only.</summary>
+    public const string AggregateSql = """
+        SELECT SUM(total), MIN(low), MAX(high), SUM(n) FROM (
+            SELECT SUM(value) AS total, MIN(value) AS low, MAX(value) AS high, COUNT(*) AS n
+            FROM samples
+            WHERE connection_id = $c AND metric = $m AND ts >= $from AND ts < $to
+            UNION ALL
+            SELECT SUM(avg * count), MIN(min), MAX(max), SUM(count)
+            FROM samples_hourly
+            WHERE connection_id = $c AND metric = $m AND hour_ts >= $from AND hour_ts < $to)
+        """;
+
     /// <summary>
     /// One series summarised over [<paramref name="from"/>, <paramref name="to"/>), or null
     /// when nothing was recorded in it.
@@ -782,16 +855,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     {
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT SUM(total), MIN(low), MAX(high), SUM(n) FROM (
-                SELECT SUM(value) AS total, MIN(value) AS low, MAX(value) AS high, COUNT(*) AS n
-                FROM samples
-                WHERE connection_id = $c AND metric = $m AND ts >= $from AND ts < $to
-                UNION ALL
-                SELECT SUM(avg * count), MIN(min), MAX(max), SUM(count)
-                FROM samples_hourly
-                WHERE connection_id = $c AND metric = $m AND hour_ts >= $from AND hour_ts < $to)
-            """;
+        cmd.CommandText = AggregateSql;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$m", metric);
         cmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
@@ -812,7 +876,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
         ORDER BY hour_ts
         """;
 
-    /// <summary>The raw half of <see cref="EnergyInputAsync"/>: a range on ix_samples_lookup, already in time order.</summary>
+    /// <summary>The raw half of <see cref="EnergyInputAsync"/>: a range on ix_samples_series, already in time order, index only.</summary>
     public const string EnergyRawSql = """
         SELECT ts, value FROM samples
         WHERE connection_id = $c AND metric = $m AND ts >= $from AND ts < $to
@@ -1010,9 +1074,11 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
             var to = Math.Min(from + SliceSpan, rawHorizon);
             var due = pending.Where(series => series.Oldest < to).Take(MaxSeriesPerBatch).ToList();
 
+            await _writes.WaitAsync(ct);
             var started = clock.Elapsed;
-            await using (var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct))
+            try
             {
+                await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct);
                 fold.Transaction = delete.Transaction = tx;
                 foreach (var series in due)
                 {
@@ -1029,6 +1095,10 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
                     deleted += await delete.ExecuteNonQueryAsync(ct);
                 }
                 await tx.CommitAsync(ct);
+            }
+            finally
+            {
+                _writes.Release();
             }
             batches++;
 
@@ -1067,7 +1137,7 @@ public sealed class HistoryStore(Db db, IOptions<LabbyOptions> options)
     /// rather than a bare column beside MAX(ts), which SQLite only resolves reliably when
     /// the query has a single min() or max().
     /// </summary>
-    private const string FoldSql = """
+    public const string FoldSql = """
         WITH hours AS (
             SELECT ts / 3600 * 3600 AS hour_ts, MIN(value) AS lo, MAX(value) AS hi, AVG(value) AS mean,
                    COUNT(*) AS n, MAX(ts) AS last_ts

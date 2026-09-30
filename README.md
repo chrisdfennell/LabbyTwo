@@ -1628,7 +1628,16 @@ There is very little, on purpose. Everything specific to *your* lab lives in the
 | Docker endpoint, when there is no Docker connection | `DOCKER_HOST` | `/var/run/docker.sock` |
 | Watchtower HTTP API for **Update now** | `Labby__Watchtower__Url` | empty — start a one-shot Watchtower instead |
 | Its token | `Labby__Watchtower__Token` | empty |
+| Log database statements slower than this, ms | `Labby__SlowQueryMs` | `0` — off |
 | Timezone | `TZ` | UTC |
+
+**When it is slow on your machine and nobody else's.** Set `Labby__SlowQueryMs=200` in the
+`environment:` section of your compose file, restart, and leave it for an hour. The log then
+names every database statement that took longer than that, with how much it had to read and
+what asked for it, and every five minutes lists the statements that read the most in total
+(`Labby__SlowQuerySummaryMinutes` changes how often) — which is the one that finds a query
+that is quick each time but runs every sweep, and keeps a NAS disk busy all day. Paste those
+lines into an issue. Turn it off again afterwards; it costs a little on every statement.
 
 **How history is kept.** Every probe records one reading per metric — every 30 seconds by
 default, which on a busy lab is millions of rows a week. Readings are kept as they are for

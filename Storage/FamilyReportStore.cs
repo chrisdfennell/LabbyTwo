@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace LabbyTwo.Storage;
 
 /// <summary>
@@ -59,7 +61,7 @@ public sealed class FamilyReportStore(Db db)
             await trim.ExecuteNonQueryAsync(ct);
         }
 
-        Changed?.Invoke();
+        Raise();
         return report with { Id = id };
     }
 
@@ -89,12 +91,34 @@ public sealed class FamilyReportStore(Db db)
         return list;
     }
 
+    private readonly VersionedCache<StrongBox<int>> _count = new();
+
+    /// <summary>
+    /// How many are waiting, if it has been read since the last change: what the nav badge
+    /// shows while a page is drawn, so drawing never waits for the database. Null until
+    /// <see cref="CountAsync"/> has run once, and again after every add or dismissal.
+    /// </summary>
+    public int? KnownCount => _count.Value?.Value;
+
+    /// <summary>
+    /// How many are waiting. Read once and then kept until something is added or dismissed,
+    /// because the nav asks on every page and the answer changes a few times a week.
+    /// </summary>
     public async Task<int> CountAsync(CancellationToken ct = default)
     {
+        if (_count.Value is { } known)
+            return known.Value;
+        var version = _count.Version;
         await using var connection = await db.OpenAsync(ct);
         var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM family_reports";
-        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+        return _count.Store(new StrongBox<int>(Convert.ToInt32(await cmd.ExecuteScalarAsync(ct))), version).Value;
+    }
+
+    private void Raise()
+    {
+        _count.Invalidate();
+        Changed?.Invoke();
     }
 
     public async Task DismissAsync(long id, CancellationToken ct = default)
@@ -106,7 +130,7 @@ public sealed class FamilyReportStore(Db db)
             cmd.Parameters.AddWithValue("$id", id);
             await cmd.ExecuteNonQueryAsync(ct);
         }
-        Changed?.Invoke();
+        Raise();
     }
 
     public async Task DismissAllAsync(CancellationToken ct = default)
@@ -117,6 +141,6 @@ public sealed class FamilyReportStore(Db db)
             cmd.CommandText = "DELETE FROM family_reports";
             await cmd.ExecuteNonQueryAsync(ct);
         }
-        Changed?.Invoke();
+        Raise();
     }
 }
