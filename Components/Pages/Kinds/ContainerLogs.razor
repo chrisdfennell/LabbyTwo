@@ -84,6 +84,19 @@
     [Parameter] public int Tail { get; set; } = 200;
 
     /// <summary>
+    /// A moment to show the log around instead of its end — the time of a line the log
+    /// search found. The panel then reads <see cref="AroundSpan"/> either side of it, at most
+    /// <see cref="Tail"/> lines; Follow still follows from now.
+    /// </summary>
+    [Parameter] public DateTimeOffset? Around { get; set; }
+
+    /// <summary>Text to start the panel's own search box with, so the line that was found is marked.</summary>
+    [Parameter] public string? InitialSearch { get; set; }
+
+    /// <summary>How far either side of <see cref="Around"/> is read.</summary>
+    public static readonly TimeSpan AroundSpan = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// How many lines are drawn at most. The buffer holds more — the download has all of it
     /// — but redrawing thousands of rows several times a second over a phone's connection
     /// is how a logs panel makes the whole page stutter.
@@ -118,6 +131,9 @@
                 parts.Add($"{_buffer.Dropped} older dropped to stay under {LogBuffer.DefaultCapacity}");
             if (_follow)
                 parts.Add(_paused ? "paused — still receiving" : "following");
+            else if (_ended && Around is { } around)
+                parts.Add($"{AroundSpan.TotalMinutes:0} minutes either side of {around.ToLocalTime():HH:mm:ss}" +
+                          (_shown.Count >= Tail ? $", first {Tail} lines" : ""));
             else if (_ended)
                 parts.Add($"last {Tail} lines");
             return string.Join(" · ", parts);
@@ -126,6 +142,8 @@
 
     protected override async Task OnInitializedAsync()
     {
+        if (InitialSearch is { Length: > 0 } initial)
+            _search = initial;
         if (!RendererInfo.IsInteractive)
             return;
         await ReloadAsync();
@@ -183,10 +201,15 @@
         var id = Container.Id;
         var tail = Tail;
         var timeout = Timeout;
+        var around = Around;
         try
         {
             var lines = await Task.Run(async () =>
             {
+                // A window works out framing from the bytes themselves; no inspect needed.
+                if (around is { } at)
+                    return await DockerLogs.WindowAsync(endpoint, timeout, id, at - AroundSpan, at + AroundSpan, tail,
+                        CancellationToken.None);
                 var tty = await TtyAsync(CancellationToken.None);
                 return await DockerLogs.TailAsync(endpoint, timeout, id, tty, tail, CancellationToken.None);
             });

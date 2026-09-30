@@ -55,6 +55,21 @@ public sealed record ContainerRow(
     public const string ProjectLabel = "com.docker.compose.project";
     public const string ServiceLabel = "com.docker.compose.service";
 
+    /// <summary>
+    /// The networks it is attached to, as the list already reports them. Init-only rather
+    /// than positional so every <c>new ContainerRow(…)</c> written before this keeps compiling;
+    /// service discovery is what reads it, to tell whether LabbyTwo can reach a container by
+    /// name — which needs no inspect per container, since the list carries it already.
+    /// </summary>
+    public IReadOnlyList<DockerNetworkRef> Networks { get; init; } = [];
+
+    /// <summary>
+    /// <c>HostConfig.NetworkMode</c>: a network name, "host", "none", or
+    /// <c>container:&lt;id&gt;</c> for one sharing another's network namespace — Compose's
+    /// <c>network_mode: service:gluetun</c> arrives as the latter. Empty when not reported.
+    /// </summary>
+    public string NetworkMode { get; init; } = "";
+
     public string ShortId => Id.Length > 12 ? Id[..12] : Id;
     public string? Project => Labels.TryGetValue(ProjectLabel, out var project) && project.Length > 0 ? project : null;
     public string? Service => Labels.TryGetValue(ServiceLabel, out var service) && service.Length > 0 ? service : null;
@@ -91,6 +106,9 @@ public sealed record ContainerRow(
     public bool ImageIsId => Image.StartsWith("sha256:", StringComparison.Ordinal) ||
                              Regex.IsMatch(Image, "^[0-9a-f]{12,64}$", RegexOptions.CultureInvariant);
 }
+
+/// <summary>One network a container is attached to, and that network's gateway — the Docker host's address on it.</summary>
+public sealed record DockerNetworkRef(string Name, string Gateway = "");
 
 /// <summary>Containers in one Compose project, or the ones in none.</summary>
 public sealed record ContainerGroup(string? Project, IReadOnlyList<ContainerRow> Containers)
@@ -319,8 +337,22 @@ public static class DockerContainers
                 ? DateTimeOffset.FromUnixTimeSeconds(seconds)
                 : DateTimeOffset.MinValue;
 
+            var networks = new List<DockerNetworkRef>();
+            if (entry.TryGetProperty("NetworkSettings", out var settings) && settings.ValueKind == JsonValueKind.Object &&
+                settings.TryGetProperty("Networks", out var networkMap) && networkMap.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var network in networkMap.EnumerateObject())
+                    networks.Add(new DockerNetworkRef(network.Name, Str(network.Value, "Gateway")));
+            }
+
+            var networkMode = entry.TryGetProperty("HostConfig", out var hostConfig) ? Str(hostConfig, "NetworkMode") : "";
+
             rows.Add(new ContainerRow(id, name, Str(entry, "Image"), Str(entry, "ImageID"), Str(entry, "State"),
-                Str(entry, "Status"), created, distinct, labels));
+                Str(entry, "Status"), created, distinct, labels)
+            {
+                Networks = networks,
+                NetworkMode = networkMode,
+            });
         }
         return rows;
     }
