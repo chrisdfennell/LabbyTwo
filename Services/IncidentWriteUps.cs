@@ -48,6 +48,19 @@ public sealed class IncidentWriteUps(
             return link;
 
         var tab = await TabAsync(ct);
+        var note = await DraftAsync(incident, ct);
+        var id = await notes.SaveAsync(null, tab.Id, note.Title, note.Markdown, ct);
+        await incidents.SetWriteUpAsync(incident.Id, id, ct);
+        return new WriteUpLink(incident.Id, id, note.Title, tab.Slug);
+    }
+
+    /// <summary>
+    /// The write-up for an incident, written but not saved anywhere — what
+    /// <see cref="CreateAsync"/> saves, and what "New note from template…" opens in the
+    /// editor for somebody to put wherever they like.
+    /// </summary>
+    public async Task<WriteUpNote> DraftAsync(Incident incident, CancellationToken ct = default)
+    {
         var now = DateTimeOffset.Now;
         var timeline = await changes.QueryAsync(new ChangeQuery(
             IncidentRules.TimelineFrom(incident), IncidentRules.TimelineTo(incident, now), Limit: 300), ct);
@@ -61,10 +74,7 @@ public sealed class IncidentWriteUps(
             connections[connection.Id] = new WriteUpConnection(connection.Name, RestartAction(actions.ActionsFor(connection)));
         }
 
-        var note = IncidentWriteUp.Build(incident, explained, timeline, connections, now);
-        var id = await notes.SaveAsync(null, tab.Id, note.Title, note.Markdown, ct);
-        await incidents.SetWriteUpAsync(incident.Id, id, ct);
-        return new WriteUpLink(incident.Id, id, note.Title, tab.Slug);
+        return IncidentWriteUp.Build(incident, explained, timeline, connections, now);
     }
 
     /// <summary>

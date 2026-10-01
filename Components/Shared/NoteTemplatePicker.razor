@@ -1,0 +1,322 @@
+@using Microsoft.Extensions.Logging
+@inject ConfigStore Config
+@inject Registry Registry
+@inject ActionRunner Actions
+@inject IncidentStore Incidents
+@inject IncidentWriteUps WriteUps
+@inject NoteTemplateStore Templates
+@inject Offload Offload
+@inject ILogger<NoteTemplatePicker> Log
+
+@* "New note from template…": the built-in templates (NoteTemplates), each filled in from the
+   connections or incident chosen here, and the user's own saved ones — used, edited or
+   deleted from the same list. Choosing one hands a draft back to the notes page, which
+   opens it in the editor; nothing is saved until somebody presses Save there. *@
+
+<Modal Title="@(_editing is null ? "New note from a template" : "Edit template")" Size="lg" OnClose="OnClose">
+    <ChildContent>
+        @if (_editing is not null)
+        {
+            <div class="mb-2">
+                <label class="form-label" for="template-name">Name in this list</label>
+                <input id="template-name" class="form-control" @bind="_editing.Name" @bind:event="oninput" />
+            </div>
+            <div class="mb-2">
+                <label class="form-label" for="template-title">Title of a note made from it</label>
+                <input id="template-title" class="form-control" @bind="_editing.Title" @bind:event="oninput" />
+            </div>
+            <div>
+                <label class="form-label" for="template-content">Markdown</label>
+                <textarea id="template-content" class="form-control font-monospace" rows="14"
+                          @bind="_editing.Content" @bind:event="oninput"></textarea>
+                <div class="tile-meta mt-1">Used exactly as written: a note made from it starts with this text.</div>
+            </div>
+        }
+        else if (_connections is null)
+        {
+            <div class="tile-meta">Loading…</div>
+        }
+        else
+        {
+            <div class="list-group mb-3">
+                @foreach (var template in NoteTemplates.All)
+                {
+                    <button type="button" class="list-group-item list-group-item-action @(_chosen == template.Key ? "active" : "")"
+                            aria-pressed="@(_chosen == template.Key ? "true" : "false")"
+                            @onclick="() => ChooseAsync(template.Key)">
+                        <div class="fw-semibold">@template.Name</div>
+                        <div class="small @(_chosen == template.Key ? "" : "text-body-secondary")">@template.Description</div>
+                    </button>
+                }
+            </div>
+
+            @if (Chosen is { } builtIn)
+            {
+                <div class="panel p-3 mb-3">
+                    @switch (builtIn.Needs)
+                    {
+                        case NoteTemplates.Needs.OneConnection:
+                            <label class="form-label" for="template-connection">Which connection</label>
+                            <select id="template-connection" class="form-select" @bind="_connectionId">
+                                <option value="">Choose…</option>
+                                @foreach (var connection in _connections)
+                                {
+                                    <option value="@connection.Id">@connection.Name</option>
+                                }
+                            </select>
+                            break;
+
+                        case NoteTemplates.Needs.SomeConnections:
+                            if (builtIn.Key == NoteTemplates.Maintenance)
+                            {
+                                <label class="form-label" for="template-when">When</label>
+                                <input id="template-when" type="date" class="form-control mb-2" style="max-width: 14rem" @bind="_when" />
+                            }
+                            <div class="form-label">
+                                @(builtIn.Key == NoteTemplates.Maintenance ? "What it touches (optional)" : "Which connections")
+                            </div>
+                            <div class="note-template-checks">
+                                @foreach (var connection in _connections)
+                                {
+                                    var id = $"template-pick-{connection.Id}";
+                                    <div class="form-check">
+                                        <input id="@id" class="form-check-input" type="checkbox" checked="@_picked.Contains(connection.Id)"
+                                               @onchange="e => Toggle(connection.Id, e.Value is true)" />
+                                        <label class="form-check-label" for="@id">@connection.Name</label>
+                                    </div>
+                                }
+                                @if (_connections.Count == 0)
+                                {
+                                    <div class="tile-meta">There are no connections yet.</div>
+                                }
+                            </div>
+                            break;
+
+                        case NoteTemplates.Needs.AnIncident:
+                            if (_incidents is null)
+                            {
+                                <div class="tile-meta">Loading…</div>
+                            }
+                            else if (_incidents.Count == 0)
+                            {
+                                <div class="tile-meta">No incidents in the last @IncidentDays days.</div>
+                            }
+                            else
+                            {
+                                <label class="form-label" for="template-incident">Which incident</label>
+                                <select id="template-incident" class="form-select" @bind="_incidentId">
+                                    <option value="0">Choose…</option>
+                                    @foreach (var incident in _incidents)
+                                    {
+                                        <option value="@incident.Id">@incident.Title — @incident.StartedAt.ToLocalTime().ToString("d MMM HH:mm")</option>
+                                    }
+                                </select>
+                            }
+                            break;
+                    }
+                </div>
+            }
+
+            <h3 class="h6 mt-3">Your templates</h3>
+            @if (_own is not { Count: > 0 })
+            {
+                <div class="tile-meta">
+                    None yet. Open any note's editor and press <strong>Save as template</strong> to add it here.
+                </div>
+            }
+            else
+            {
+                <ul class="list-unstyled mb-0">
+                    @foreach (var template in _own)
+                    {
+                        <li class="d-flex align-items-center gap-2 py-1">
+                            <span class="flex-grow-1 text-truncate">@template.Name</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => Use(template)">Use</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(template)">Edit</button>
+                            @if (_confirmDelete == template.Id)
+                            {
+                                <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(template)">Delete it</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-danger" aria-label="@($"Delete {template.Name}")"
+                                        @onclick="() => _confirmDelete = template.Id">✕</button>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        }
+        @if (_problem is not null)
+        {
+            <div class="alert alert-warning mt-3 mb-0">@_problem</div>
+        }
+    </ChildContent>
+    <Footer>
+        @if (_editing is not null)
+        {
+            <button class="btn btn-secondary btn-sm" @onclick="() => _editing = null">Cancel</button>
+            <button class="btn btn-primary btn-sm" @onclick="SaveTemplateAsync">Save template</button>
+        }
+        else
+        {
+            <button class="btn btn-secondary btn-sm" @onclick="OnClose">Cancel</button>
+            <button class="btn btn-primary btn-sm" disabled="@(!Ready || _working)" @onclick="StartAsync">
+                @(_working ? "Writing…" : "Start the note")
+            </button>
+        }
+    </Footer>
+</Modal>
+
+@code {
+    /// <summary>The note to open in the editor.</summary>
+    [Parameter] public EventCallback<NoteDraft> OnChosen { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    /// <summary>How far back the incident list goes.</summary>
+    private const int IncidentDays = 90;
+
+    private IReadOnlyList<Connection>? _connections;
+    private IReadOnlyList<NoteTemplate>? _own;
+    private IReadOnlyList<Incident>? _incidents;
+    private string? _chosen;
+    private string _connectionId = "";
+    private readonly HashSet<string> _picked = new(StringComparer.Ordinal);
+    private DateTime? _when = DateTime.Today.AddDays(1);
+    private long _incidentId;
+    private string? _confirmDelete;
+    private string? _problem;
+    private bool _working;
+    private TemplateForm? _editing;
+
+    private sealed class TemplateForm
+    {
+        public string Id { get; init; } = "";
+        public string Name { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Content { get; set; } = "";
+    }
+
+    private NoteTemplates.BuiltIn? Chosen => NoteTemplates.All.FirstOrDefault(t => t.Key == _chosen);
+
+    private bool Ready => Chosen?.Needs switch
+    {
+        NoteTemplates.Needs.OneConnection => _connectionId.Length > 0,
+        NoteTemplates.Needs.SomeConnections => _chosen == NoteTemplates.Maintenance ? _when is not null : _picked.Count > 0,
+        NoteTemplates.Needs.AnIncident => _incidentId > 0,
+        NoteTemplates.Needs.Nothing => true,
+        _ => false,
+    };
+
+    /// <summary>The connections and the saved templates, read off the render thread.</summary>
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var (connections, own) = await Offload.Run(async ct =>
+                (await Config.ConnectionsAsync(ct), await Templates.AllAsync(ct)));
+            _connections = [.. connections.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)];
+            _own = own;
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not read the connections and templates for the template picker");
+            _connections = [];
+            _problem = "Could not read the connections and templates. Try again in a moment.";
+        }
+    }
+
+    private async Task ChooseAsync(string key)
+    {
+        _chosen = key;
+        _problem = null;
+        if (key == NoteTemplates.Incident && _incidents is null)
+        {
+            try
+            {
+                _incidents = await Offload.Run(ct => Incidents.RecentAsync(DateTimeOffset.UtcNow.AddDays(-IncidentDays), 30, ct: ct));
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning(ex, "Could not read recent incidents for the template picker");
+                _incidents = [];
+            }
+        }
+    }
+
+    private void Toggle(string id, bool on)
+    {
+        if (on)
+            _picked.Add(id);
+        else
+            _picked.Remove(id);
+    }
+
+    private TemplateConnection Facts(Connection connection) => NoteTemplateFacts.For(connection, Registry, Actions);
+
+    /// <summary>Writes the chosen built-in template out and hands it to the editor.</summary>
+    private async Task StartAsync()
+    {
+        if (Chosen is not { } template || !Ready || _connections is null)
+            return;
+        _working = true;
+        _problem = null;
+        try
+        {
+            var picked = _connections.Where(c => _picked.Contains(c.Id)).Select(Facts).ToList();
+            NoteDraft? draft = template.Key switch
+            {
+                NoteTemplates.Runbook when _connections.FirstOrDefault(c => c.Id == _connectionId) is { } one
+                    => NoteTemplates.RunbookFor(Facts(one)),
+                NoteTemplates.Maintenance => NoteTemplates.MaintenancePlan(picked, DateOnly.FromDateTime(_when ?? DateTime.Today)),
+                NoteTemplates.Overview => NoteTemplates.ServiceOverview(picked),
+                NoteTemplates.Incident when _incidents?.FirstOrDefault(i => i.Id == _incidentId) is { } incident
+                    => await Offload.Run(async ct => await WriteUps.DraftAsync(incident, ct) is { } note ? new NoteDraft(note.Title, note.Markdown) : null),
+                _ => null,
+            };
+            if (draft is null)
+            {
+                _problem = "That is no longer there — choose again.";
+                return;
+            }
+            await OnChosen.InvokeAsync(draft);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not write a note from the {Template} template", template.Key);
+            _problem = $"Could not write it: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            _working = false;
+        }
+    }
+
+    private Task Use(NoteTemplate template) => OnChosen.InvokeAsync(new NoteDraft(template.Title, template.Content));
+
+    private void Edit(NoteTemplate template) =>
+        _editing = new TemplateForm { Id = template.Id, Name = template.Name, Title = template.Title, Content = template.Content };
+
+    private async Task SaveTemplateAsync()
+    {
+        if (_editing is not { } form)
+            return;
+        _own = await Offload.Run(async ct =>
+        {
+            await Templates.SaveAsync(form.Id, form.Name, form.Title, form.Content, ct);
+            return await Templates.AllAsync(ct);
+        });
+        _editing = null;
+    }
+
+    private async Task DeleteAsync(NoteTemplate template)
+    {
+        _confirmDelete = null;
+        _own = await Offload.Run(async ct =>
+        {
+            await Templates.DeleteAsync(template.Id, ct);
+            return await Templates.AllAsync(ct);
+        });
+    }
+}

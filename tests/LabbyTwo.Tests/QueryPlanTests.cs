@@ -291,4 +291,33 @@ public sealed class QueryPlanTests
             Assert.Contains(plan, step => step.StartsWith("SEARCH samples_hourly USING PRIMARY KEY", StringComparison.Ordinal));
         }
     }
+
+    [Fact]
+    public void The_note_link_index_is_read_and_written_by_its_key()
+    {
+        // A save replaces one note's rows, and the directory writes back one row at a time:
+        // each a seek on the primary key, never a scan of every link in every note.
+        foreach (var sql in new[] { NotesStore.LinksFromSql, NotesStore.DeleteLinksSql, NotesStore.DeleteLinkSql, NotesStore.RememberSql })
+        {
+            var plan = Plan(sql);
+            Assert.Contains(plan, step => step.StartsWith("SEARCH note_links USING PRIMARY KEY", StringComparison.Ordinal));
+            Assert.DoesNotContain(plan, step => step.StartsWith("SCAN note_links", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void Finding_notes_to_index_reads_only_the_partial_index()
+    {
+        // Checked on every read of the link directory, and empty on every install that has
+        // been running a day: a walk of an empty index, not of every note's content.
+        var plan = Plan(NotesStore.UnindexedSql);
+        Assert.Contains(plan, step => step.Contains("USING INDEX ix_notes_unindexed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Note_templates_are_one_small_table_read_whole()
+    {
+        var plan = Plan(NoteTemplateStore.AllSql);
+        Assert.Contains(plan, step => step.StartsWith("SCAN note_templates", StringComparison.Ordinal));
+    }
 }

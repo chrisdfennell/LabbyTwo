@@ -435,6 +435,16 @@
             builder.AddComponentParameter(102, "Scope", _scope);
             builder.CloseComponent();
         }
+        else if (code.Kind == NoteLinks.Kind)
+        {
+            // [[Note title]]: told whose link it is, so two notes of the same title resolve
+            // to the one on this page and a missing one is offered here.
+            builder.OpenComponent<LiveNoteLink>(110);
+            builder.SetKey(index);
+            builder.AddComponentParameter(111, nameof(LiveNoteLink.Code), code);
+            builder.AddComponentParameter(112, nameof(LiveNoteLink.OwnerId), OwnerId);
+            builder.CloseComponent();
+        }
         else if (code.Kind == "button")
         {
             // A button reads the same in a sentence or on a line of its own.

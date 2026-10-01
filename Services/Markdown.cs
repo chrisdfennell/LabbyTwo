@@ -56,7 +56,7 @@ public sealed partial class Markdown
         if (string.IsNullOrWhiteSpace(markdown))
             return LiveDocument.Empty;
 
-        var found = Shortcodes.Find(markdown);
+        var found = WithNoteLinks(Shortcodes.Find(markdown), markdown);
         var diagrams = DiagramBlocks(markdown);
         if (found.Count == 0 && diagrams.Count == 0)
             return new LiveDocument(ToHtml(markdown), []);
@@ -143,6 +143,22 @@ public sealed partial class Markdown
             }
             return converted;
         }
+    }
+
+    /// <summary>
+    /// The shortcodes, with every <c>[[note link]]</c> added among them in order (see
+    /// <see cref="NoteLinks"/>). A link travels as a shortcode of a kind nobody can type, so
+    /// it gets everything a shortcode does for free — a placeholder word the renderer leaves
+    /// alone, left as text inside code, its words never becoming HTML. A note without
+    /// <c>[[</c> in it costs one search for two characters.
+    /// </summary>
+    private static IReadOnlyList<Shortcodes.Found> WithNoteLinks(IReadOnlyList<Shortcodes.Found> found, string markdown)
+    {
+        // Find leaves out any link that overlaps a shortcode: the shortcode wins, and stays live.
+        var links = NoteLinks.Find(markdown);
+        if (links.Count == 0)
+            return found;
+        return [.. found.Concat(links.Select(l => new Shortcodes.Found(l.Index, l.Length, l.ToShortcode()))).OrderBy(f => f.Index)];
     }
 
     private static LiveSection Section(LiveDocument document, int ordinal) =>

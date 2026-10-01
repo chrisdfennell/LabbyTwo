@@ -771,6 +771,39 @@ public sealed class Db
             record        INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (connection_id, metric)) WITHOUT ROWID
         """,
+
+        // 34 — whether a note's [[links]] are in the link index yet. Every note written
+        // before links existed starts at 0 and is indexed the first time the index is read
+        // (NotesStore.IndexMissingAsync); every save from now on writes its links and a 1 in
+        // the same transaction. A database restored from an older backup comes back with
+        // 0s, and so is indexed again by itself. Must run before the next migration, whose
+        // partial index names this column.
+        "ALTER TABLE notes ADD COLUMN links_indexed INTEGER NOT NULL DEFAULT 0",
+
+        // 35 — links between notes, and note templates.
+        //
+        // note_links is the "what links here" index: one row per note per distinct [[target]]
+        // in it, the target lower-cased as written. to_id is the note it last resolved to,
+        // kept so a link still finds its note after that note is renamed. Keyed by the note
+        // the link is in, which is how a save replaces them; read whole otherwise, since it
+        // is a row per link in a few hundred notes. The partial index holds only the notes
+        // still waiting to be indexed, so the check on every read is empty and instant.
+        //
+        // note_templates are the user's own "New note from template…" entries, read whole.
+        """
+        CREATE TABLE IF NOT EXISTS note_links (
+            from_id TEXT NOT NULL,
+            target  TEXT NOT NULL,
+            to_id   TEXT,
+            PRIMARY KEY (from_id, target)) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS ix_notes_unindexed ON notes (id) WHERE links_indexed = 0;
+        CREATE TABLE IF NOT EXISTS note_templates (
+            id         TEXT    PRIMARY KEY,
+            name       TEXT    NOT NULL,
+            title      TEXT    NOT NULL DEFAULT '',
+            content    TEXT    NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL);
+        """,
     ];
 
     /// <summary>

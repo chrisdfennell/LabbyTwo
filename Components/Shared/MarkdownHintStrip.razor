@@ -1,6 +1,7 @@
 @inject ConfigStore Config
 @inject Registry Registry
 @inject ActionRunner Runner
+@inject NoteDirectory NoteDirectory
 
 @* Sits under a Markdown box and points at lines that will not render the way they look.
    Shown wherever Markdown is edited, so the notes page and a Markdown widget behave the
@@ -110,6 +111,7 @@
                             <option value="power">What electricity costs</option>
                             <option value="details">A fold that opens (details)</option>
                             <option value="callout">A callout box</option>
+                            <option value="note-link">A link to another note</option>
                         </select>
                     </div>
 
@@ -257,6 +259,27 @@
                             </select>
                         </div>
                     }
+                    else if (_kind == "note-link")
+                    {
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("note")">Note</label>
+                            <select id="@Id("note")" class="form-select form-select-sm" @bind="_noteId">
+                                <option value="">@(_noteGraph is null ? "Loading…" : _noteGraph.Notes.Count == 0 ? "There are no notes yet" : "Choose…")</option>
+                                @foreach (var note in (_noteGraph?.Notes ?? []).Where(n => NoteLinks.CanLink(n.Title)))
+                                {
+                                    <option value="@note.Id">@note.Shown — @note.Place.Describe()</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small mb-1" for="@Id("note-heading")">Heading</label>
+                            <input id="@Id("note-heading")" class="form-control form-control-sm" placeholder="optional" @bind="_noteHeading" />
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small mb-1" for="@Id("note-text")">Words</label>
+                            <input id="@Id("note-text")" class="form-control form-control-sm" placeholder="its title" @bind="_noteText" />
+                        </div>
+                    }
                     else if (_kind == "widget")
                     {
                         <div class="col-sm-8">
@@ -374,6 +397,10 @@
     private string _powerPeriod = "month";
     private string _powerShow = "cost";
     private string _backupShow = "";
+    private NoteGraph? _noteGraph;
+    private string _noteId = "";
+    private string _noteHeading = "";
+    private string _noteText = "";
 
     // Recomputed when the text changes rather than in the markup, so a long note is not
     // re-scanned on every unrelated render of the form around it.
@@ -420,6 +447,7 @@
         "callout" => $"> [!{_callout.ToUpperInvariant()}]\n> Write it here.",
         // A starting sketch to edit: the connection, if one is chosen, behind a router.
         "diagram" => $"```diagram\nInternet -> Router -> \"{(_connectionName.Length > 0 ? _connectionName.Replace("\"", "") : "NAS")}\"\n```",
+        "note-link" => NoteLinkPreview(),
         _ when _connectionName.Length == 0 => null,
         "sparkline" => _metric.Trim().Length > 0
             ? Shortcodes.Write("sparkline", [_connectionName, $"{_metric.Trim()} {_window}"])
@@ -466,6 +494,18 @@
         Shortcodes.Write("details", [title]) + "\n1. First step…\n2. Second step…\n{{end}}";
 
     /// <summary>
+    /// <c>[[Title]]</c> for the chosen note, with the page in front only when another note
+    /// has the same title — so the link reads as plainly as it can and still finds this one.
+    /// </summary>
+    private string? NoteLinkPreview()
+    {
+        if (_noteGraph?.Note(_noteId) is not { } note)
+            return null;
+        var shared = _noteGraph.Notes.Count(n => string.Equals(NoteLinks.Tidy(n.Title), NoteLinks.Tidy(note.Title), StringComparison.OrdinalIgnoreCase)) > 1;
+        return NoteLinks.Write(note.Title, _noteHeading.Trim(), _noteText.Trim(), shared ? note.Place.Section ?? note.Place.Page : null);
+    }
+
+    /// <summary>
     /// The lists are read when the helper is opened, not when the editor is, so a form with
     /// three Markdown fields that nobody inserts into costs nothing. Awaited, never waited on.
     /// </summary>
@@ -480,6 +520,8 @@
             _widgets = [.. widgets.Select(w => w.Title.Trim()).Where(t => t.Length > 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)];
         }
+        if (_open && _noteGraph is null)
+            _noteGraph = await NoteDirectory.GetAsync();
     }
 
     /// <summary>
