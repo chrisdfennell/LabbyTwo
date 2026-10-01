@@ -57,19 +57,34 @@ public sealed partial class Markdown
             return LiveDocument.Empty;
 
         var found = Shortcodes.Find(markdown);
-        if (found.Count == 0)
+        var diagrams = DiagramBlocks(markdown);
+        if (found.Count == 0 && diagrams.Count == 0)
             return new LiveDocument(ToHtml(markdown), []);
 
         var code = CodeRanges(markdown);
         var codes = new List<Shortcode>();
         var text = new StringBuilder(markdown.Length);
         var at = 0;
-        foreach (var shortcode in found)
+        // A diagram block is code to Markdown, so it is added after the shortcodes inside
+        // code have been dropped — and the shortcodes inside it are dropped with the rest.
+        var live = found
+            .Where(f => !code.Any(r => f.Index < r.End && r.Start < f.Index + f.Length))
+            .Select(f => (f.Index, f.Length, f.Code, Fence: false))
+            .Concat(diagrams.Select(d => (d.Index, d.Length, d.Code, Fence: true)))
+            .OrderBy(f => f.Index);
+        foreach (var shortcode in live)
         {
-            if (code.Any(r => shortcode.Index < r.End && r.Start < shortcode.Index + shortcode.Length))
-                continue;
             text.Append(markdown, at, shortcode.Index - at);
+            // A block at the left margin gets blank lines round its placeholder, so it is a
+            // paragraph of its own even with text right above or below it — a fence may
+            // interrupt a paragraph; a plain word would be swallowed by it. Inside a list
+            // or a quote the blank lines would end the list, so there it is left as it is.
+            var topLevel = shortcode.Fence && (shortcode.Index == 0 || markdown[shortcode.Index - 1] == '\n');
+            if (topLevel)
+                text.Append('\n');
             text.Append(Placeholder(codes.Count));
+            if (topLevel)
+                text.Append('\n');
             codes.Add(shortcode.Code);
             at = shortcode.Index + shortcode.Length;
         }
@@ -154,6 +169,48 @@ public sealed partial class Markdown
 
     /// <summary>Finds placeholder words in rendered HTML.</summary>
     public static Regex Placeholders => PlaceholderPattern;
+
+    /// <summary>
+    /// The fenced blocks that are a diagram rather than code: <c>```diagram</c> always, and
+    /// <c>```mermaid</c> only when it starts with a <c>graph</c> or <c>flowchart</c> header —
+    /// the subset drawn here — so a Mermaid sequence diagram pasted into a note stays the
+    /// code block it always was. Each comes back as a <c>diagram</c> shortcode carrying the
+    /// block's text in an option no one can type (option names start with a letter), so a
+    /// one-line <c>{{diagram: …}}</c> cannot pretend to be a block.
+    /// </summary>
+    private List<Shortcodes.Found> DiagramBlocks(string markdown)
+    {
+        if (markdown.IndexOf("diagram", StringComparison.OrdinalIgnoreCase) < 0
+            && markdown.IndexOf("mermaid", StringComparison.OrdinalIgnoreCase) < 0)
+            return [];
+
+        var blocks = new List<Shortcodes.Found>();
+        foreach (var fence in Markdig.Markdown.Parse(markdown, _positions).Descendants<FencedCodeBlock>())
+        {
+            var language = (fence.Info ?? "").Trim().ToLowerInvariant();
+            if (language is not ("diagram" or "mermaid") || fence.Span.IsEmpty)
+                continue;
+            var body = string.Join('\n', fence.Lines.Lines.Take(fence.Lines.Count).Select(l => l.Slice.ToString()));
+            if (language == "mermaid" && !DiagramParser.IsMermaid(body))
+                continue;
+
+            var end = Math.Min(markdown.Length, fence.Span.End + 1);
+            var options = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [DiagramBody] = body,
+                [DiagramFence] = language,
+            };
+            blocks.Add(new Shortcodes.Found(fence.Span.Start, end - fence.Span.Start,
+                new Shortcode("diagram", [], options, markdown[fence.Span.Start..end])));
+        }
+        return blocks;
+    }
+
+    /// <summary>The option a diagram block's text travels in. Not a name the shortcode grammar can produce.</summary>
+    public const string DiagramBody = "#body";
+
+    /// <summary>The block's language, "diagram" or "mermaid".</summary>
+    public const string DiagramFence = "#fence";
 
     /// <summary>Where the code spans and code blocks are, as [start, end) offsets into the source.</summary>
     private List<(int Start, int End)> CodeRanges(string markdown)

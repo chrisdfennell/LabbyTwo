@@ -1316,6 +1316,116 @@ on a wall all day never becomes a stream of calls to Docker Hub.
 | `all up` | everything monitored is up, and nothing is still being checked |
 | `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
 
+#### Tables, gauges and diagrams
+
+**`{{table}}`** — on a line of its own. Connections down the side, readings across the top,
+every cell live:
+
+```markdown
+{{table: "QNAP NAS", Pi, PC / status, cpu_percent, ram_percent, temp_c}}
+{{table: "QNAP NAS", Pi / disk_percent, temp_c sparkline=24h title="Storage and heat"}}
+{{table: tab "Media" / status, uptime}}
+```
+
+- Before the slash, the rows: connections by name or id, separated by commas (a name with a
+  comma in it goes in quotes, `"Home, office"`). Or `tab "Media"` (also `tab="Media"`) for
+  every connection a card on that tab is bound to, in the cards' order — plus a Containers
+  or Git tab's own connection. Up to 40 rows.
+- After it, the columns: metrics by key or label (`temp_c`, `Temperature`), headed by the
+  metric's label. Three words are not metrics: `status` (as `{{status}}`), `uptime` (the
+  30-day availability, as `{{uptime}}` — write `uptime_days` for the metric of that name) and
+  `since` (as `{{since}}`). Up to 12.
+- Readings are the metric tile's, in the units chosen in **Settings → Appearance**. A
+  connection that does not report a column shows **—**, not a **?**: a Pi with no
+  temperature sensor is not a mistake in the note.
+- Each reading is coloured amber or red against the connection's **alert rules** for that
+  metric — its own rules if it has any, otherwise rules for every connection. One rule is the
+  red line; two or more above (or below) make the nearest the amber line and the furthest
+  the red one, so "disk above 85" and "disk above 95" are exactly a warning and an emergency.
+  A reading is past a rule's line the way the rule counts it — strictly above or below. With
+  no rule, a percentage that fills up (disk and volume use) is amber at 80% and red at 95%,
+  as on the gauge card; anything else is left uncoloured. A disabled or "unusual for the
+  time" rule has no fixed line and is ignored. The tooltip says the level and where the
+  lines came from, and a screen reader hears "warning" or "critical" after the number.
+- `sparkline=24h` draws a trend line under each reading (`1h` to `30d`; `sparkline=true` is
+  24h). `title="…"` is the table's caption.
+
+**`{{gauge}}`** — inside a sentence or a table cell, the size of a word:
+
+```markdown
+Storage is {{gauge: "QNAP NAS" / disk_percent}} full.
+| Pi | {{gauge: Pi / temp_c max=90 warn=60 crit=75 style=bar size=medium label="CPU heat"}} |
+```
+
+| Option | Does |
+|---|---|
+| `style=ring` / `style=bar` | a ring (the default) or a short bar with the warning and critical lines marked on it |
+| `size=small` / `size=medium` | the size of the text around it (the default) or twice that |
+| `min=0 max=100` | the ends of the scale. A percentage is 0–100; anything else is 0–100 too, unless a line is past 100, when the scale reaches a quarter beyond it |
+| `warn=80 crit=95` | the amber and red lines, instead of the alert rules'. Written the other way round (`warn=50 crit=20`) they mean lower is worse, for a battery |
+| `label="NAS disk"` | words after the reading, and what a screen reader calls it |
+
+Every number is in the metric's **stored** unit — `°C` for a temperature, like an alert rule
+and the gauge card — so the gauge's proportions and colour do not change when somebody
+reads the dashboard in Fahrenheit; the reading and its tooltip are in the reader's units.
+The gauge is a `role="meter"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and a
+value text that says the level in words, and it can be tabbed to for its tooltip.
+
+**Diagrams** — a fenced block whose language is `diagram`:
+
+````markdown
+```diagram
+Internet -> Router -> "QNAP NAS" -> Plex
+"QNAP NAS" -> Sonarr, Radarr
+Router -> "Domain controller"
+Router ->|over VPN| "Home, office"
+```
+````
+
+- One line per chain: names joined by `->` (`-->` and `=>` work too). Commas fan out and in
+  — `NAS -> Sonarr, Radarr`, `Sonarr, Radarr -> Downloads`. `->|label|` writes words on that
+  arrow. A name on its own on a line is a box with no arrows. `#` starts a comment.
+- Quotes are optional, needed only round a name with a comma, an arrow or a quote in it.
+  Names compare ignoring case, so `Router` and `router` are one box.
+- `direction TD` as the first line draws it top-down; left to right is the default.
+- A box whose name is a connection's name (any case) or id is coloured by its live status
+  — green up, red down, amber checking, a dashed accent outline while the connection is
+  silenced for maintenance, faded when it is paused — shows a glyph as well (▲ ▼ … ◆ ■), and
+  is a link to that connection. Anything else (`Internet`) is a plain box. Colours change as
+  sweeps land, without the note being touched.
+- Up to 80 boxes and 200 arrows. Laid out in layers on the server — no script, nothing
+  fetched from anywhere. An arrow that skips a layer is drawn straight across it; an arrow
+  going back round a loop is drawn as a curve under the boxes.
+
+A `` ```mermaid `` block is drawn the same way when it is a **flowchart** — its first line
+`graph` or `flowchart` and a direction (`TD`, `TB`, `BT`, `LR`, `RL`; top-down if left off).
+This much of Mermaid is understood:
+
+| Mermaid | Read as |
+|---|---|
+| `A`, `A[Label]`, `A(Label)`, `A((Label))`, `A{Label}`, `A([Label])`, `A[[Label]]`, `A[(Label)]`, `A>Label]`, with `"quoted text"` inside | a box; the label (or the id, with none) is what is drawn and matched to a connection. The shape is not drawn — every box is a box |
+| `A --> B`, `A ---> B` | an arrow |
+| `A --- B` | a line with no arrowhead |
+| `A -.-> B`, `A -.- B` | a dotted arrow / line |
+| `A ==> B`, `A === B` | a thick arrow / line |
+| `A -->\|text\| B`, `A -- text --> B`, `A -. text .-> B`, `A == text ==> B` | a labelled arrow |
+| `A --> B --> C`, `A & B --> C & D` | chains and groups |
+| `;` | ends a statement, like a new line |
+| `%% comment`, `subgraph … end`, `classDef`, `class`, `style`, `linkStyle`, `click`, `direction` | read past; a subgraph's own frame is not drawn |
+
+Anything else — `sequenceDiagram`, `pie`, `gantt` — leaves the block as the code it always
+was, so pasting one in loses nothing. A diagram that cannot be read is a **?** saying which
+line and why; the rest of the note draws as usual.
+
+**`{{diagram: auto}}`** — on a line of its own: the dependency map, drawn from
+each connection's **Sits behind** (set in its editor on the Connections page), the same
+drawing as the map page and the dependency map card.
+`root="NAS"` draws only that connection and what sits behind it, `standalone=true` adds the
+connections that sit behind nothing, and `title="…"` names it.
+
+Labels in all three are text, never markup: a connection or box called `<script>` is shown
+as those characters.
+
 #### The rules
 
 All of them visible when broken, rather than silently wrong:

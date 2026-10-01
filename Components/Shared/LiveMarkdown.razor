@@ -366,6 +366,9 @@
             "incidents" when blockAllowed => typeof(LiveIncidents),
             "backups" when blockAllowed => typeof(LiveBackups),
             "chart" when blockAllowed => typeof(LiveChart),
+            "gauge" => typeof(LiveGauge),
+            "table" when blockAllowed => typeof(LiveTable),
+            "diagram" when blockAllowed => typeof(LiveDiagram),
             _ => null,
         };
         if (own is not null)
