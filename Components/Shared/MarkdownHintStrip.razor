@@ -60,6 +60,7 @@
             Lists: <code>{{alerts}}</code>, <code>{{containers: stopped}}</code>, <code>{{renewals}}</code>.
             History: <code>{{chart: NAS / cpu_percent last=7d}}</code>, <code>{{changes: last=24h}}</code>, <code>{{incidents: open}}</code>, <code>{{backups: late}}</code>.
             Power: <code>{{power}}</code>, <code>{{power: "NAS plug" period=today}}</code>.
+            Conditions: <code>{{if down: NAS and not maintenance}}</code> … <code>{{elif any alert}}</code> … <code>{{end}}</code>. The lab: <code>{{status: tab "Media"}}</code>, <code>{{who: home}}</code>, <code>{{who: watching}}</code>.
         </span>
         <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAsync" aria-expanded="@(_open ? "true" : "false")">
             @(_open ? "Close" : "Insert live value…")

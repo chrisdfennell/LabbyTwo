@@ -1,0 +1,14 @@
+/* "full": each connection after the line, wrapping like words so it still sits in prose. */
+.md-status-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .15rem .9rem;
+    margin-top: .25rem;
+}
+
+.md-status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    white-space: nowrap;
+}
