@@ -2393,3 +2393,215 @@ html.wall-cursor-hidden * { cursor: none !important; }
 }
 .md-callout-icon { flex: none; fill: currentColor; }
 .markdown-body .md-callout > :last-child { margin-bottom: 0; }
+
+/* ==========================================================================
+   The phone view (/m) — Components/Pages/PhonePage.razor.
+   Built for 360–430 px: one column, nothing wider than the screen, and every button at
+   least 48 px tall, because it is used with a thumb on a bus. Colours come from the
+   tokens only, so light, dark and the dark variants all follow. Long probe messages wrap
+   anywhere rather than pushing the page sideways — a URL in an error has no spaces.
+   ========================================================================== */
+.status-warn { background: var(--warn); box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 60%, transparent); }
+
+.phone-shell {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: max(.75rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+             max(1.5rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+    overflow-x: hidden;
+}
+
+.phone {
+    display: flex;
+    flex-direction: column;
+    gap: .75rem;
+    max-width: 34rem;
+    margin: 0 auto;
+    font-size: 1rem;
+    overflow-wrap: anywhere;
+}
+
+.phone-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    min-height: 2.5rem;
+}
+.phone-brand { font-weight: 650; }
+.phone-top-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 .25rem;
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.phone-status {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: 1rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.phone-status .status-dot { width: .9rem; height: .9rem; }
+.phone-headline { font-size: 1.35rem; font-weight: 650; line-height: 1.2; }
+.phone-status.is-fine { border-color: color-mix(in srgb, var(--up) 45%, transparent); }
+.phone-status.is-red { border-color: var(--down-line); background: var(--down-soft); }
+.phone-status.is-amber { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
+.phone-banner {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    padding: .85rem 1rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.phone-banner.is-blind,
+.phone-banner.is-maintenance {
+    border-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+}
+.phone-banner.is-quiet { background: transparent; border-style: dashed; }
+
+.phone-why { margin: 0; color: var(--muted); font-size: .95rem; }
+.phone-probably { color: var(--text); }
+.phone-more summary { min-height: 44px; display: flex; align-items: center; color: var(--accent); }
+
+/* Every button on the page is a thumb target. ProviderActions draws its own buttons, so
+   they are reached by nesting rather than by a class of ours. */
+.phone .phone-btn,
+.phone-actions .btn,
+.phone-pins .btn {
+    min-height: 48px;
+    font-size: 1rem;
+    padding: .5rem .9rem;
+}
+
+.phone-pins {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: .5rem;
+}
+.phone-pin { min-width: 0; }
+.phone-pin .md-action,
+.phone-pin .btn { display: flex; width: 100%; }
+.phone-pin .btn { justify-content: center; align-items: center; }
+.phone-pin .md-action { flex-direction: column; gap: .25rem; }
+.phone-pin .md-action .tile-meta { margin: 0 !important; }
+
+.phone-list { display: flex; flex-direction: column; gap: .75rem; }
+.phone-empty {
+    margin: 0;
+    padding: 1.25rem 1rem;
+    text-align: center;
+    color: var(--muted);
+    border: 1px dashed var(--edge);
+    border-radius: var(--radius);
+}
+
+.phone-row {
+    display: flex;
+    flex-direction: column;
+    gap: .45rem;
+    padding: .9rem 1rem;
+    border: 1px solid var(--edge);
+    border-left: .3rem solid var(--warn);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.phone-row.is-red { border-left-color: var(--down); }
+.phone-row-head { display: flex; align-items: baseline; gap: .6rem; }
+.phone-row-head .status-dot { align-self: center; }
+.phone-row-title { flex: 1 1 auto; min-width: 0; font-size: 1.05rem; }
+.phone-for { flex: none; color: var(--muted); font-size: .85rem; white-space: nowrap; }
+
+.phone-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .25rem; }
+.phone-actions > .phone-btn { flex: 1 1 9rem; }
+/* A connection's own buttons, one per row: they are the fix, and each may be dangerous. */
+.phone-actions > .d-grid { flex: 1 1 100%; }
+
+.phone-result { font-size: .9rem; }
+.phone-result.is-ok { color: var(--up); }
+.phone-result.is-failed { color: var(--down); }
+
+.phone-rest {
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.phone-rest > summary {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    min-height: 52px;
+    padding: 0 1rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.phone-count {
+    padding: 0 .5rem;
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: .8rem;
+    font-weight: 500;
+}
+.phone-count.is-red { background: var(--down-soft); color: var(--down); }
+
+.phone-group { padding: 0 1rem .75rem; }
+.phone-group-title {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    padding: .5rem 0 .25rem;
+    color: var(--muted);
+    font-size: .8rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+.phone-dots { list-style: none; margin: 0; padding: 0; }
+.phone-dots li {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    min-height: 44px;
+    border-top: 1px solid var(--edge);
+}
+.phone-dot-name { flex: 1 1 auto; min-width: 0; }
+.phone-dot-state { color: var(--muted); font-size: .85rem; }
+
+.phone-setup-body { padding: 0 1rem 1rem; }
+.phone-setup-body .form-select,
+.phone-setup-body .form-control { min-height: 48px; font-size: 1rem; }
+.phone-setup-pin {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+    min-height: 48px;
+    border-bottom: 1px solid var(--edge);
+    margin-bottom: .5rem;
+}
+.phone-setup-pin .btn { min-height: 40px; }
+
+/* The suggestion on an ordinary page, shown by PhoneHint only on a narrow screen. */
+.phone-hint {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem .75rem;
+    margin-bottom: var(--gap);
+    padding: .55rem .75rem;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius);
+    background: var(--accent-soft);
+    font-size: .9rem;
+}
+.phone-hint-text { flex: 1 1 14rem; }
+.phone-hint .btn { min-height: 40px; }

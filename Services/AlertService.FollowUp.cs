@@ -49,6 +49,38 @@ public sealed partial class AlertService
     public FiringAlert? Delivery(string key) => firing.Get(key);
 
     /// <summary>
+    /// Alerts somebody has said they are dealing with, by key, with the <see cref="FiringAlert.Since"/>
+    /// of the firing they acknowledged — so it answers for that outage and not the next one.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _acknowledged = new();
+
+    /// <summary>Raised when an alert is acknowledged, so a page showing it can say so.</summary>
+    public event Action? Acknowledged;
+
+    /// <summary>
+    /// "I've seen it, I'm on it" — from the phone view. Holds this alert's escalations until
+    /// it clears; the first notice has already gone, and the recovery still goes. It is the
+    /// escalation that exists to find somebody who has not noticed, and somebody has.
+    ///
+    /// Kept in memory only, on purpose. It is a statement about the next hour, not a
+    /// setting, and a restart in the middle of an outage that brings the escalations back
+    /// errs on the side of being told. False when the alert is not firing (or the ledger
+    /// has not been read yet), so there is nothing to acknowledge.
+    /// </summary>
+    public bool Acknowledge(string key)
+    {
+        if (firing.Get(key) is not { } entry)
+            return false;
+        _acknowledged[key] = entry.Since;
+        Acknowledged?.Invoke();
+        return true;
+    }
+
+    /// <summary>Whether the firing under <paramref name="key"/> has been acknowledged.</summary>
+    public bool IsAcknowledged(string key) =>
+        firing.Get(key) is { } entry && _acknowledged.TryGetValue(key, out var since) && since == entry.Since;
+
+    /// <summary>
     /// The mute window holding this alert back right now, or null. From the windows as last
     /// read, so a page can ask while it draws without touching the database.
     /// </summary>
@@ -195,6 +227,13 @@ public sealed partial class AlertService
             var windows = await mutes.AllAsync(ct);
             var connections = await config.ConnectionsAsync(ct);
 
+            // An acknowledgement lasts as long as the firing it was given for.
+            foreach (var (key, since) in _acknowledged)
+            {
+                if (firing.Get(key)?.Since != since)
+                    _acknowledged.TryRemove(key, out _);
+            }
+
             foreach (var entry in firing.All)
             {
                 var connection = connections.FirstOrDefault(c => c.Id == entry.ConnectionId);
@@ -227,6 +266,10 @@ public sealed partial class AlertService
                     await DeliverHeldAsync(entry, heldBy, connection, rule, now, ct);
                     continue;
                 }
+
+                // Somebody said they are on it: escalating is for when nobody has noticed.
+                if (IsAcknowledged(entry.Key))
+                    continue;
 
                 var policy = entry.IsStatus ? fallback : EscalationPolicy.For(rule, fallback);
                 if (policy.DueAt(entry.ClockFrom, entry.EscalatedAt) is not { } due || due > now)

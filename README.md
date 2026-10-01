@@ -237,6 +237,70 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **TLS certificate** | Days until a certificate expires, and who issued it. The outage that gives no warning: automatic renewal fails *silently*, and the only sign is a number counting down that nobody is watching. |
 | **MQTT broker** | Any broker — Zigbee2MQTT, Tasmota, ESPHome. Subscribes and turns messages into metrics: `name = topic:path`, the same shape the JSON API provider already used. The one integration here that holds a connection open rather than asking. |
 
+#### Found on your Docker hosts
+
+Once there is a Docker connection, the Connections page lists the containers LabbyTwo has an
+integration for and that are not connections yet — **🔎 Discovered on your Docker hosts** —
+and the Containers tab says so in one dismissible line. Nothing is ever added by itself:
+
+- **Add** opens the ordinary editor, filled in: the provider, a name, and the address
+  LabbyTwo can reach it at, with a sentence saying why that one. Where the provider needs no
+  key it runs **Test** straight away; where it does, the row says where in the app to find
+  it. You paste the key, test, and save — or cancel, and nothing was written.
+- **Ignore** stops suggesting that one (remembered, and undoable from the *ignored* list).
+- A service that already has a connection of its kind reaching it — by container name, by
+  the gateway it sits behind, or by the exact host and port — is listed as *already added*.
+
+The address is chosen in this order: a `labbytwo.url` label; the **container's name** when
+LabbyTwo shares a user-defined network with it (Docker's default `bridge` does not count —
+names do not resolve there); the host's address for a container on `network_mode: host`; the
+**published port** on the host (the Docker connection's host when it is remote, otherwise
+the gateway of LabbyTwo's own network); and failing all of those, the container's name with
+a note saying which network to join. A container on `network_mode: service:gluetun` is
+proposed at the gateway container's name, and starts out *sitting behind* whatever already
+watches that gateway.
+
+**Look for services** asks Docker now; **Keep looking as containers change** (on by default)
+reuses the list the Docker check already fetches every sweep, so it costs no requests.
+LabbyTwo never reads another container's environment or config files to fetch a key.
+
+Recognised by image — any registry, any tag (`lscr.io/linuxserver/…`, `ghcr.io/hotio/…`,
+Docker Hub, pinned digests):
+
+| Service | Images | Port |
+|---|---|---|
+| Sonarr / Radarr / Lidarr / Readarr / Whisparr / Prowlarr / Bazarr | linuxserver, hotio, or anyone's `*/sonarr` etc. | 8989 / 7878 / 8686 / 8787 / 6969 / 9696 / 6767 |
+| Plex | `plexinc/pms-docker`, `*/plex` | 32400 |
+| Jellyfin | `jellyfin/jellyfin`, `*/jellyfin` | 8096 |
+| Tautulli | `tautulli/tautulli`, `*/tautulli` | 8181 |
+| Seerr | `seerr-team/seerr`, `sctx/overseerr`, `fallenbagel/jellyseerr` | 5055 |
+| qBittorrent / Transmission / SABnzbd / NZBGet | linuxserver, hotio, `nzbgetcom/nzbget` | 8080 / 9091 / 8080 / 6789 |
+| Home Assistant | `home-assistant/home-assistant`, `homeassistant/home-assistant`, `linuxserver/homeassistant` | 8123 |
+| Pi-hole / AdGuard Home | `pihole/pihole` / `adguard/adguardhome` | 80 |
+| Uptime Kuma | `louislam/uptime-kuma` | 3001 |
+| Frigate | `blakeblackshear/frigate` | 5000 |
+| Immich | `immich-app/immich-server` | 2283 |
+| Nextcloud | `nextcloud` (http 80), `linuxserver/nextcloud` (https 443) | |
+| Scrutiny, Speedtest Tracker, Duplicati, Healthchecks, Gitea, Prometheus | their official or linuxserver images | 8080, 80, 8200, 8000, 3000, 9090 |
+| ErsatzTV, Unmanic, Tdarr, Audiobookshelf, Komga, Navidrome, Mylar3 | their official or linuxserver images | 8409, 8888, 8265, 80, 25600, 4533, 8090 |
+| Gluetun, Syncthing, Paperless-ngx | with their plugins installed | 8000, 8384, 8000 |
+
+When Docker lists an image only by id (the tag was pulled again since), the container's exact
+name is used instead. Anything else can say what it is with labels — the same ones the Docker
+labels import plugin reads:
+
+```yaml
+labels:
+  labbytwo.provider: "sonarr"          # any installed provider
+  labbytwo.port: "8989"                # the port inside the container
+  labbytwo.url: "http://sonarr:8989"   # skip the guessing entirely
+  labbytwo.name: "Sonarr 4K"
+  labbytwo.icon: "📺"
+  labbytwo.discover: "false"           # never suggest this one
+```
+
+The table lives in `Core/KnownServices.cs`; adding a service is one line there.
+
 #### Watching cloudflared without a token
 
 The **Cloudflare Tunnel** provider asks Cloudflare's API, which needs an account ID and a
@@ -540,6 +604,48 @@ The guardrails:
   database, so an update in the middle neither restarts plex twice nor forgets to say whether
   it worked.
 
+#### Scheduled actions
+
+Self-healing acts when something breaks; **Settings → Alerts → Scheduled actions** acts when
+the clock says so — *"restart the flaky container every Sunday at 4am"*, *"trigger the backup
+script nightly"*. Each one is a name, a target and a schedule:
+
+- **Target** — restart, start or stop a Docker container (by name or Compose service), or run
+  one of a connection's action buttons, through the same code self-healing and the Controls
+  card use.
+- **Schedule** — chosen weekdays at one or more times; every so many minutes or hours;
+  once a month on a given day (a shorter month runs on its last day); or a five-field cron
+  expression such as `0 4 * * 0`, which the editor says back in words — *"Sundays at 04:00"* —
+  along with the next three times it will run. Nothing runs more often than every 5 minutes.
+
+Times are local and behave on the nights the clocks change: a time the clocks skip runs just
+after the jump, and a time that happens twice runs once. Intervals of whole hours count from
+midnight (every 6 hours is 00:00, 06:00, 12:00, 18:00); intervals in minutes are real minutes.
+
+Each action shows its next three runs, its last result, and a history of its last 20 runs;
+**Run now** runs it straight away through the same checks, without moving the schedule. Every
+run, skip and miss is in **What changed** (kind *Scheduled actions*) against the connection it
+acted on, and a failure can be sent to your alert channels — tick *Tell me if it fails* —
+held by quiet hours, maintenance and mute windows like any alert.
+
+The guardrails are self-healing's, from the same code:
+
+- **Not during maintenance**, unless the action ticks *Run during maintenance* (a backup script
+  can; a restart in the middle of your work should not).
+- **Never LabbyTwo's own container**, whatever you tick; a **protected container** or an action
+  the integration marks **dangerous** only with *Allow protected containers and dangerous
+  actions*; an action that **asks for input** cannot be scheduled at all.
+- **Never twice at once.** A run that is still going when the next one is due makes that one
+  a recorded skip, not a second run on top of the first.
+- **No bursts after downtime.** If LabbyTwo was not running when an action was due, it runs
+  once when it comes back — if that is within the grace period (an hour by default, set on the
+  page) — and otherwise the miss is recorded and it waits for its next time. A weekend of
+  downtime never comes back as a queue of restarts.
+
+The job that runs them ticks once a minute and reads nothing from the database unless
+something is due. Scheduled actions are included in **Export** and restored by **Import**;
+their history is not.
+
 Alert channels are connections too. Add a webhook or Pushover channel and both kinds start
 being delivered — there is no separate notification settings screen.
 
@@ -727,6 +833,53 @@ Both go into a runbook with `{{changes}}` and `{{incidents}}` (see [Shortcodes](
 The feed is kept for 90 days and incidents for a year (`Labby__ChangeRetentionDays`,
 `Labby__IncidentRetentionDays`). A plugin that notices something changing can record it
 too: ask for `ChangeStore` and call `RecordAsync`.
+
+### Searching every container's logs
+
+**Logs** in the nav searches the recent logs of every container at once — "error in the
+last hour, everywhere". Type text, or tick **Regular expression**; add **Match case** if it
+matters; and pick any of the quick filters — **error**, **warn**, **exception**, **fatal**,
+**"failed"** — which a line must match as well as whatever is typed (on their own they mean
+"any of these"). Choose how far back (15 minutes, an hour, 6 hours, 24 hours, or between two
+times), which Docker connections, which containers — all, the running ones, ones you tick, or
+one Compose project — and stdout, stderr or both.
+
+Results arrive as each container's log is read, grouped by container with a count, each line
+with its time and the match marked. **context** opens the three lines either side of a
+match; **full log** opens that container's logs panel at that moment — five minutes either
+side of the line. The Containers tab has a box that runs the same search across its host,
+and every incident has **Search logs**, which fills in the incident's timeline window (half
+an hour before it started to just after it ended), picks the containers its services are
+reached through — tied the same way the incident's "Probably" is, by the host name in a
+connection's address, so `http://sonarr:8989` is the container called `sonarr` — ticks the
+trouble filters, and searches.
+
+What it costs, and what it does not do:
+
+- **Nothing runs until you press Search**, and nothing outlives the page: leaving it, or
+  starting another search, cancels whatever is still reading. There is no background indexing
+  and nothing is written to the database; results live in the page's memory and are gone
+  when it closes.
+- The time window is sent to Docker as `since` and `until`, so Docker does the filtering. At
+  most **5,000 lines or 4 MB are read from each container** — the newest, when the window
+  ends now; the earliest, when it ends in the past (Docker applies `tail` before `since`, so
+  "the newest lines of last Tuesday" cannot be asked for). A container that hit the cap says
+  so beside its name.
+- Logs are read **four containers at a time**, and one search keeps at most **20,000 lines**
+  of results — matches and their context. Past that, matches are still counted but not kept,
+  and the page says the search was capped.
+- A regular expression runs on .NET's non-backtracking engine, which takes time in
+  proportion to the line whatever the pattern. A pattern that needs the other engine
+  (back-references, look-arounds) is allowed with a 200 ms limit per line, and after three
+  lines run over that the search stops and says why.
+- **Secret-looking values are hidden before searching** — `PASSWORD=…`, `"api_key": "…"`,
+  `?token=…`, `Bearer …`, and the password in `postgres://user:password@host` — using the same
+  list of names the [config history](#config-history) treats as secrets. Hidden before
+  matching, so searching for a password finds nothing. It is best effort: a secret written in
+  some other shape can still show.
+- Container logs need `CONTAINERS=1` on a socket proxy, and `ALLOW_LOGS=1` on
+  linuxserver/socket-proxy (see [the table](#through-a-socket-proxy-instead)). Only log
+  drivers that keep logs Docker can hand back (`json-file`, `local`, `journald`) can be searched.
 
 ### What the electricity costs
 
@@ -1512,6 +1665,45 @@ Every setting can be overridden in the address, so each screen can bookmark its 
 so when the server restarts and the page reloads itself it comes back to the same tab. With
 a password set, the wall signs in like any other page.
 
+### Phone view
+
+`/m` is LabbyTwo for the moment a notification arrives and you are not at a desk. It shows
+only what needs you, and the fix beside it:
+
+- **One line at the top** — "All 24 fine", or "2 down, 1 alert". If LabbyTwo itself cannot
+  see the lab (see [When LabbyTwo cannot see](#when-labbytwo-cannot-see)) that is said next,
+  so a page of stale states is not mistaken for an outage. Then maintenance: **Maintenance
+  for 1 h** holds every alert while you work, and **End maintenance** lifts it.
+- **Only what is red or amber** — services down, alert rules firing, open incidents with
+  their "Probably: …", late backups and family reports — each one big row saying what, why,
+  and for how long, with its buttons: the connection's own actions (dangerous ones ask
+  first), **Restart** the container its self-healing is set to restart, **Runbook** if the
+  connection has one, **Silence 1 h**, **I'm on it** and **Dismiss**.
+- **Everything else**, folded away and grouped by tab, one dot each.
+- **Pinned quick actions** at the top — "restart Plex", "wake the PC". Choose them under
+  **Set up this page** at the bottom: any connection's action, or any container on a Docker
+  connection.
+
+**I'm on it** acknowledges an alert: it will not be escalated for as long as it lasts, and
+you still hear when it is fixed. It is kept in memory, so a restart during the outage
+brings escalation back — being told twice beats not being told. Container restarts go
+through the same guard rails as self-healing: LabbyTwo's own container and the ones on a
+Containers tab's protected list are refused. A connection's runbook is set in its editor
+under **Runbook note** — paste a note's link, like `t/runbooks#note-abc123`; only links
+inside LabbyTwo are accepted.
+
+The page is drawn from what LabbyTwo already holds in memory — the monitor's states, the
+alerts firing, the incidents it is tracking, the backups as last checked — and redraws at
+most every couple of seconds as they change, so opening it on a weak signal costs no
+database reads once LabbyTwo has been running a minute. It uses the dashboard's theme and
+its login.
+
+On a narrow screen every page offers it once, until **Not now**; the link is also at the
+bottom of the sidebar as **📱 Phone view**. To have LabbyTwo added to a phone's home screen
+open straight onto it, switch on **Open the installed app on this page** under **Set up this
+page**, then add it to the home screen again — phones read where an installed app starts
+only when it is installed.
+
 ---
 
 ## Adding an integration
@@ -1880,6 +2072,7 @@ What each feature asks Docker for, and what the proxy has to allow:
 | **Update now**, one-shot Watchtower | `POST /images/create`, `POST /containers/create`, `POST /containers/{id}/start`, and then everything Watchtower does to recreate LabbyTwo | `CONTAINERS=1`, `IMAGES=1`, `POST=1` at least — the same power as the raw socket, so don't |
 | Containers tab: list, inspect, live stats | `GET /containers/json?all=1`, `GET /containers/{id}/json`, `GET /containers/{id}/stats?stream=false` | `CONTAINERS=1` |
 | Containers tab: logs | `GET /containers/{id}/logs` (with `follow=1` while following) | `CONTAINERS=1` and, on linuxserver, `ALLOW_LOGS=1` |
+| Logs page: searching every container's logs | `GET /containers/json?all=1`, then `GET /containers/{id}/logs?since=…&until=…` for each container searched, four at a time | `CONTAINERS=1` and, on linuxserver, `ALLOW_LOGS=1` — the same as the logs panel. A refusal is shown once per host, with the flag, and the other containers there are not asked |
 | Containers tab: restart / stop | `POST /containers/{id}/restart`, `/stop` | `ALLOW_RESTARTS=1` (or `ALLOW_STOP=1` for stop) — on tecnativa also `POST=1` |
 | Containers tab: start | `POST /containers/{id}/start` | `ALLOW_START=1` — on tecnativa also `POST=1` |
 | Containers tab: pause / unpause | `POST /containers/{id}/pause`, `/unpause` | linuxserver: `ALLOW_PAUSE=1`, `ALLOW_UNPAUSE=1`; tecnativa: `CONTAINERS=1`, `POST=1` |

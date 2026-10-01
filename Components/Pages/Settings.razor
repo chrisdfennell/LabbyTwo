@@ -598,7 +598,7 @@
                 @if (_importResult is { } result)
                 {
                     <div class="alert alert-success py-2 mt-3 mb-0">
-                        Imported @result.Connections connections, @result.Tabs tabs, @result.Widgets widgets and @result.Rules alert rules@(result.Templates > 0 ? $", plus {result.Templates} tab template{(result.Templates == 1 ? "" : "s")}" : "").
+                        Imported @result.Connections connections, @result.Tabs tabs, @result.Widgets widgets and @result.Rules alert rules@(result.Templates > 0 ? $", plus {result.Templates} tab template{(result.Templates == 1 ? "" : "s")}" : "")@(result.ScheduledActions > 0 ? $", plus {result.ScheduledActions} scheduled action{(result.ScheduledActions == 1 ? "" : "s")}" : "").
                         @if (result.Warnings.Count > 0)
                         {
                             <ul class="mb-0 mt-2 small">

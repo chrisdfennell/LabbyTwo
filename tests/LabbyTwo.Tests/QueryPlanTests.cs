@@ -183,6 +183,35 @@ public sealed class QueryPlanTests
     }
 
     [Fact]
+    public void A_scheduled_actions_history_is_one_range_of_its_index_read_backwards()
+    {
+        // Read for every action each time the page opens.
+        var plan = Plan(ScheduledActionStore.RunsSql);
+        Assert.Contains(plan, step => step.Contains("ix_scheduled_runs_action", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN scheduled_runs", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Trimming_a_scheduled_actions_history_never_scans_the_table()
+    {
+        // After every run, of every action.
+        var plan = Plan(ScheduledActionStore.TrimSql);
+        Assert.Contains(plan, step => step.Contains("ix_scheduled_runs_action", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN scheduled_runs", StringComparison.Ordinal)
+                                            && !step.Contains("INDEX", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Moving_a_scheduled_action_on_is_a_primary_key_lookup()
+    {
+        // The only write a due action makes before it runs.
+        var plan = Plan(ScheduledActionStore.SetCoveredSql);
+        Assert.Contains(plan, step => step.StartsWith("SEARCH scheduled_actions USING PRIMARY KEY", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void A_chart_of_a_fixed_span_reads_only_the_index_bounded_at_both_ends()
     {
         // {{chart: … from= to=}} — last month in the monthly report. Raw, hourly on the fly,
