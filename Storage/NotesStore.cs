@@ -364,11 +364,16 @@ public sealed class NotesStore(Db db)
             ORDER BY v.kept_at LIMIT $batch)
         """;
 
-    /// <summary>Ticks on notes that are gone and have no history left to come back with. A small table, read whole.</summary>
+    /// <summary>
+    /// Ticks on notes that are gone and have no history left to come back with. Only the
+    /// notes' share of checklist_ticks — the "note:" range of its key, read along the
+    /// primary key; cards' ticks are <see cref="WidgetHistoryStore"/>'s to tidy.
+    /// </summary>
     public const string PruneTicksSql = """
-        DELETE FROM note_checks
-        WHERE NOT EXISTS (SELECT 1 FROM notes n WHERE n.id = note_checks.note_id)
-          AND NOT EXISTS (SELECT 1 FROM note_versions v WHERE v.note_id = note_checks.note_id)
+        DELETE FROM checklist_ticks
+        WHERE owner >= 'note:' AND owner < 'note;'
+          AND NOT EXISTS (SELECT 1 FROM notes n WHERE n.id = substr(checklist_ticks.owner, 6))
+          AND NOT EXISTS (SELECT 1 FROM note_versions v WHERE v.note_id = substr(checklist_ticks.owner, 6))
         """;
 
     public Task<int> PruneAsync(CancellationToken ct = default) => PruneAsync(DateTimeOffset.UtcNow, ct);

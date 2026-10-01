@@ -1,0 +1,45 @@
+@inject WidgetHistoryStore History
+
+@* A Markdown card's earlier versions — on a dashboard, or a Markdown block on a custom
+   page — in the history view notes use too (TextHistory). Restoring is a save of the card
+   through ConfigStore, which keeps what it replaces and carries the checklist ticks over,
+   exactly as an edit in the card editor does. *@
+
+<TextHistory Name="@Name" Noun="@Noun" OwnerId="@Widget.Id"
+             CurrentTitle="@Widget.Title" CurrentContent="@Widget.Settings.Get(WidgetHistoryStore.ContentKey)"
+             List="ListAsync" Load="LoadAsync" Restore="RestoreAsync"
+             OnRestored="OnRestored" OnClose="OnClose" />
+
+@code {
+    [Parameter, EditorRequired] public Widget Widget { get; set; } = default!;
+
+    /// <summary>What the card is called where it is shown.</summary>
+    [Parameter] public string Name { get; set; } = "";
+
+    /// <summary>"card" on a dashboard, "block" on a custom page.</summary>
+    [Parameter] public string Noun { get; set; } = "card";
+
+    [Parameter] public EventCallback OnRestored { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    /// <summary>
+    /// A card's version, as the view shows any version. Its "written" side is null before
+    /// the first save anybody recorded; a deletion is shown under who deleted it, as a
+    /// note's is.
+    /// </summary>
+    internal static TextVersion Shown(WidgetHistoryStore.WidgetVersion version) => new(
+        version.Id, version.Title, version.Content, version.Size,
+        version.WrittenKnown ? version.WrittenAt : null,
+        version.IsDeletion ? version.KeptBy : version.WrittenBy,
+        version.KeptAt, version.KeptBy, version.IsDeletion);
+
+    private async Task<IReadOnlyList<TextVersion>> ListAsync(CancellationToken ct) =>
+        [.. (await History.VersionsAsync(Widget.Id, ct)).Select(Shown)];
+
+    private async Task<TextVersion?> LoadAsync(long id, CancellationToken ct) =>
+        await History.VersionAsync(id, ct) is { } version ? Shown(version) : null;
+
+    private async Task<bool> RestoreAsync(long id, string by, CancellationToken ct) =>
+        await History.RestoreVersionAsync(id, by, ct) is not null;
+}

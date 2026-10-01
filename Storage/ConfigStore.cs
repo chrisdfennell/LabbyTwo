@@ -1,4 +1,5 @@
 using LabbyTwo.Core;
+using LabbyTwo.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Data.Sqlite;
 
@@ -375,10 +376,24 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
     public async Task<IReadOnlyList<Widget>> WidgetsForTabAsync(string tabId, CancellationToken ct = default)
         => [.. (await WidgetsAsync(ct)).Where(w => w.TabId == tabId).OrderBy(w => w.Sort)];
 
-    public async Task SaveWidgetAsync(Widget value, CancellationToken ct = default)
+    public Task SaveWidgetAsync(Widget value, CancellationToken ct = default) => SaveWidgetAsync(value, "", ct);
+
+    /// <summary>
+    /// Writes a card. For a Markdown card whose text this changes, what it said before is
+    /// kept as a version in the same transaction (see <see cref="WidgetHistoryStore"/>) and
+    /// its checklist ticks are carried over to the new text afterwards, wherever the save
+    /// came from — the editor, a restored version, an import, an undo.
+    /// <paramref name="by"/> is who is saving, which that version's successor will name.
+    /// </summary>
+    public async Task SaveWidgetAsync(Widget value, string by, CancellationToken ct = default)
     {
-        await WriteWidgetAsync(value, ct);
+        var changedText = await WriteWidgetAsync(value, by, ct);
         Invalidate(connections: false, tabs: false);
+        if (changedText && services.GetService<MarkdownChecklists>() is { } checklists)
+        {
+            await checklists.ReconcileAsync(ChecklistOwners.Widget(value.Id),
+                value.Settings.Get(WidgetHistoryStore.ContentKey), ct);
+        }
     }
 
     /// <summary>
@@ -386,10 +401,21 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
     /// through <see cref="SaveWidgetAsync"/> meant one cache drop, one event and one
     /// re-render *per card* — which is what made a drag feel broken rather than slow.
     /// </summary>
-    private async Task WriteWidgetAsync(Widget value, CancellationToken ct)
+    /// <returns>
+    /// Whether a Markdown card's text changed (and so a version was kept). Only a Markdown
+    /// card opens a transaction for it; a drag rewriting every other card on the tab writes
+    /// as it always did.
+    /// </returns>
+    private async Task<bool> WriteWidgetAsync(Widget value, string by, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
+        await using var transaction = WidgetHistoryStore.Keeps(value)
+            ? (SqliteTransaction)await connection.BeginTransactionAsync(ct)
+            : null;
+        var kept = transaction is not null && await WidgetHistoryStore.KeepAsync(connection, transaction, value.Id,
+            value.Settings.Get(WidgetHistoryStore.ContentKey), by, WidgetHistoryStore.Edited, ct);
         var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText = """
             INSERT INTO widgets (id, tab_id, type, title, connection_id, sort, width, height, settings)
             VALUES ($id, $tab, $type, $title, $conn, $sort, $width, $height, $settings)
@@ -408,15 +434,30 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
         cmd.Parameters.AddWithValue("$height", value.Height);
         cmd.Parameters.AddWithValue("$settings", value.Settings.ToJson());
         await cmd.ExecuteNonQueryAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
+        return kept;
     }
 
-    public async Task DeleteWidgetAsync(string id, CancellationToken ct = default)
+    public Task DeleteWidgetAsync(string id, CancellationToken ct = default) => DeleteWidgetAsync(id, "", ct);
+
+    /// <summary>
+    /// Deletes a card. A Markdown card is kept whole as a version first, so it can be
+    /// brought back from "Recently deleted" with its history and ticks for
+    /// <see cref="WidgetHistoryStore.DeletedFor"/>; any other card writes nothing extra
+    /// (the keep only matches a Markdown card). <paramref name="by"/> is who deleted it.
+    /// </summary>
+    public async Task DeleteWidgetAsync(string id, string by, CancellationToken ct = default)
     {
         await using var connection = await db.OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct);
+        await WidgetHistoryStore.KeepAsync(connection, transaction, id, "", by, WidgetHistoryStore.Deleted, ct);
         var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText = "DELETE FROM widgets WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", id);
         await cmd.ExecuteNonQueryAsync(ct);
+        await transaction.CommitAsync(ct);
         Invalidate(connections: false, tabs: false);
     }
 
@@ -437,7 +478,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
         for (var i = 0; i < siblings.Count; i++)
         {
             if (siblings[i].Sort != i)
-                await WriteWidgetAsync(siblings[i] with { Sort = i }, ct);
+                await WriteWidgetAsync(siblings[i] with { Sort = i }, "", ct);
         }
 
         Invalidate(connections: false, tabs: false);
@@ -465,7 +506,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
         for (var i = 0; i < siblings.Count; i++)
         {
             if (siblings[i].Sort != i)
-                await WriteWidgetAsync(siblings[i] with { Sort = i }, ct);
+                await WriteWidgetAsync(siblings[i] with { Sort = i }, "", ct);
         }
 
         Invalidate(connections: false, tabs: false);

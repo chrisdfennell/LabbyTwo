@@ -4,6 +4,7 @@
 @inject ShareTransfer Share
 @inject Registry Registry
 @inject IJSRuntime JS
+@using Microsoft.AspNetCore.Components.Authorization
 
 @* A page made of blocks: cards, other pages as sections, headings and dividers, each with
    a width and a height. Deliberately the grid tab's machinery rather than a layout engine
@@ -22,6 +23,7 @@
     <div class="d-flex gap-2">
         @if (_editing)
         {
+            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _showDeleted = true">Recently deleted</button>
             <button class="btn btn-sm btn-outline-primary" @onclick="() => _picking = true">+ Add block</button>
         }
         <button class="btn btn-sm @(_editing ? "btn-primary" : "btn-outline-secondary")"
@@ -138,6 +140,7 @@ else
                                          OnHeightStep="step => StepHeightAsync(current, step)"
                                          OnEdit="() => _editingBlock = current"
                                          OnDuplicate="() => DuplicateAsync(current)"
+                                         OnHistory="@HistoryFor(current)"
                                          OnDelete="() => _confirmDelete = current" />
                     </div>
                 }
@@ -166,6 +169,17 @@ else
     <WidgetEditor Widget="editing" PageLayout="true" OnClose="() => _editingBlock = null" />
 }
 
+@if (_history is { } history)
+{
+    <CardHistory Widget="history" Name="@Describe(history)" Noun="block"
+                 OnClose="() => _history = null" OnRestored="() => _history = null" />
+}
+
+@if (_showDeleted)
+{
+    <RecentlyDeletedCards TabId="@Tab.Id" Noun="block" OnClose="() => _showDeleted = false" />
+}
+
 @if (_confirmDelete is not null)
 {
     <ConfirmDialog Title="Remove this block?"
@@ -185,6 +199,18 @@ else
     private Widget? _editingBlock;
     private Widget? _confirmDelete;
     private Widget? _moving;
+    private Widget? _history;
+    private bool _showDeleted;
+
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    /// <summary>
+    /// The History button's handler, for a Markdown card only — the one kind whose text is
+    /// kept as versions (see WidgetHistoryStore). Any other card gets none, and no button.
+    /// </summary>
+    private EventCallback HistoryFor(Widget widget) =>
+        WidgetHistoryStore.Keeps(widget) ? EventCallback.Factory.Create(this, () => _history = widget) : default;
+
     private DotNetObjectReference<CustomTab>? _self;
     private bool _settle;
 
@@ -293,7 +319,10 @@ else
     private async Task DeleteConfirmedAsync()
     {
         if (_confirmDelete is { } block)
-            await Deletions.WidgetAsync(block);
+        {
+            var by = Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name } ? name : "";
+            await Deletions.WidgetAsync(block, by);
+        }
         _confirmDelete = null;
     }
 

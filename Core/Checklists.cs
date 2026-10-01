@@ -185,3 +185,26 @@ public sealed class ChecklistCounter
         return item;
     }
 }
+
+/// <summary>
+/// The keys checklist ticks are stored under (see <see cref="Storage.ChecklistStore"/>):
+/// what the boxes belong to, prefixed with what kind of thing that is.
+///
+/// Prefixed because notes and cards are told apart by nothing else — both ids come from
+/// <see cref="Ids.New"/>, from different tables — and a tick must never surface on the
+/// wrong one. A custom page's Markdown block is a widget row like a dashboard card (see
+/// <see cref="PageBlocks"/>), so the two share <see cref="Widget(string)"/>: the block's
+/// id is stable through moves, resizes, edits and an undone delete, which is all a key
+/// needs to be.
+/// </summary>
+public static class ChecklistOwners
+{
+    public const string NotePrefix = "note:";
+    public const string WidgetPrefix = "widget:";
+
+    /// <summary>The ticks of a note on a notes tab, or in a notes section.</summary>
+    public static string Note(string noteId) => NotePrefix + noteId;
+
+    /// <summary>The ticks of a Markdown card on a dashboard, or a Markdown block on a custom page.</summary>
+    public static string Widget(string widgetId) => WidgetPrefix + widgetId;
+}

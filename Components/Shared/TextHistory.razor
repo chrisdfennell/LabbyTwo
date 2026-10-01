@@ -1,0 +1,320 @@
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Logging
+@inject Offload Offload
+@inject ILogger<TextHistory> Log
+
+@* Earlier versions of some Markdown — a note's, a dashboard's Markdown card's, a custom
+   page's Markdown block's: each one drawn, as its Markdown, or as what changed between it
+   and the text as it is now — and any of them made the text again. Restoring saves, so
+   what it replaces becomes a version in its turn and a restore can itself be undone.
+
+   One view for all of them, told where the versions come from by three delegates, so a
+   note and a card can never show history differently. Every read goes through Offload;
+   nothing here waits on the database to draw. Versions are drawn display-only: a box in
+   a text that is not the text any more is nothing to tick. *@
+
+<Modal Title="@($"History of “{Name}”")" Size="xl" OnClose="() => OnClose.InvokeAsync()">
+    <ChildContent>
+        <div class="row g-3">
+            <div class="col-lg-4">
+                <div class="list-group note-versions" role="listbox" aria-label="Versions">
+                    <button type="button" role="option" aria-selected="@(_selected is null)"
+                            class="list-group-item list-group-item-action @(_selected is null ? "active" : "")"
+                            @onclick="SelectCurrent">
+                        <div class="fw-semibold">Now</div>
+                        <div class="small">@DescribeNow()</div>
+                    </button>
+                    @if (!_listed)
+                    {
+                        <div class="list-group-item tile-meta">Loading…</div>
+                    }
+                    else if (_versions.Count == 0)
+                    {
+                        <div class="list-group-item tile-meta">No earlier versions yet. Each save from now on keeps the one before it.</div>
+                    }
+                    @foreach (var version in _versions)
+                    {
+                        var chosen = _selected?.Id == version.Id;
+                        <button type="button" role="option" aria-selected="@chosen"
+                                class="list-group-item list-group-item-action @(chosen ? "active" : "")"
+                                @onclick="() => SelectAsync(version)">
+                            <div class="fw-semibold">
+                                @((version.WrittenAt ?? version.KeptAt).ToString("d MMM yyyy HH:mm"))
+                                @if (version.IsDeletion)
+                                {
+                                    <span class="badge text-bg-secondary ms-1">deleted</span>
+                                }
+                            </div>
+                            <div class="small">@Describe(version)</div>
+                        </button>
+                    }
+                </div>
+                @if (_listed)
+                {
+                    <p class="tile-meta mt-2 mb-0">
+                        The last @NotesStore.KeepPerNote versions are kept, for up to @((int)NotesStore.KeepFor.TotalDays) days.
+                    </p>
+                }
+            </div>
+            <div class="col-lg-8">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="How to show it">
+                        <button type="button" class="btn @(_view == View.Rendered ? "btn-primary" : "btn-outline-secondary")"
+                                aria-pressed="@(_view == View.Rendered)" @onclick="() => _view = View.Rendered">As the @Noun</button>
+                        <button type="button" class="btn @(_view == View.Source ? "btn-primary" : "btn-outline-secondary")"
+                                aria-pressed="@(_view == View.Source)" @onclick="() => _view = View.Source">Markdown</button>
+                        <button type="button" class="btn @(_view == View.Changes ? "btn-primary" : "btn-outline-secondary")"
+                                aria-pressed="@(_view == View.Changes)" disabled="@(_selected is null)"
+                                @onclick="() => _view = View.Changes">Changes since</button>
+                    </div>
+                    @if (_selected is not null && _diff is not null)
+                    {
+                        <span class="tile-meta">
+                            <span class="note-diff-count-added">+@_diff.Count(d => d.Kind == DiffKind.Added)</span>
+                            <span class="note-diff-count-removed">−@_diff.Count(d => d.Kind == DiffKind.Removed)</span>
+                            lines from this version to now
+                        </span>
+                    }
+                </div>
+
+                @if (_selected is not null && _selectedText is null)
+                {
+                    <div class="tile-meta">Loading…</div>
+                }
+                else if (_view == View.Source)
+                {
+                    <pre class="note-source">@Text</pre>
+                }
+                else if (_view == View.Changes && _diff is not null)
+                {
+                    @if (_diff.All(d => d.Kind == DiffKind.Same))
+                    {
+                        <div class="tile-meta">The text is the same as now@(_selected?.Title != CurrentTitle ? " — only the title differs" : "").</div>
+                    }
+                    else
+                    {
+                        <div class="note-diff" role="table" aria-label="Changes from this version to now">
+                            @foreach (var line in _diff)
+                            {
+                                <div class="note-diff-line note-diff-@line.Kind.ToString().ToLowerInvariant()" role="row">
+                                    <span class="note-diff-sign" aria-hidden="true">@(line.Kind switch { DiffKind.Added => "+", DiffKind.Removed => "−", _ => " " })</span>
+                                    <span class="visually-hidden">@(line.Kind switch { DiffKind.Added => "Added: ", DiffKind.Removed => "Removed: ", _ => "" })</span>
+                                    <span class="note-diff-text">@line.Text</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+                else
+                {
+                    @if (_selected is not null && _selected.Title != CurrentTitle)
+                    {
+                        <div class="tile-meta mb-2">Titled “@(_selected.Title.Length > 0 ? _selected.Title : "Untitled")” then.</div>
+                    }
+                    <div class="panel p-3 markdown-body">
+                        <LiveMarkdown Content="@Text" OwnerId="@OwnerId" />
+                    </div>
+                }
+                @if (_error is not null)
+                {
+                    <div class="alert alert-danger mt-2 mb-0" role="alert">@_error</div>
+                }
+            </div>
+        </div>
+    </ChildContent>
+    <Footer>
+        <button class="btn btn-secondary btn-sm" @onclick="() => OnClose.InvokeAsync()">Close</button>
+        @if (_selected is not null)
+        {
+            <button class="btn btn-primary btn-sm" disabled="@(_restoring || _selectedText is null)" @onclick="RestoreAsync">
+                Restore this version
+            </button>
+        }
+    </Footer>
+</Modal>
+
+@code {
+    /// <summary>What a person calls it: the note's or card's title.</summary>
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+
+    /// <summary>"note", "card" or "block", for "As the note".</summary>
+    [Parameter] public string Noun { get; set; } = "note";
+
+    /// <summary>The note's or card's id, for the embedded-card recursion guard while drawing a version.</summary>
+    [Parameter, EditorRequired] public string OwnerId { get; set; } = "";
+
+    [Parameter] public string CurrentTitle { get; set; } = "";
+    [Parameter] public string CurrentContent { get; set; } = "";
+
+    /// <summary>When the text now was saved; null to take it from the newest version's replacement.</summary>
+    [Parameter] public DateTimeOffset? CurrentSavedAt { get; set; }
+    [Parameter] public string CurrentSavedBy { get; set; } = "";
+
+    /// <summary>Its versions, newest first, without their text.</summary>
+    [Parameter, EditorRequired] public Func<CancellationToken, Task<IReadOnlyList<TextVersion>>> List { get; set; } = default!;
+
+    /// <summary>One version with its text; null when it has been tidied away since it was listed.</summary>
+    [Parameter, EditorRequired] public Func<long, CancellationToken, Task<TextVersion?>> Load { get; set; } = default!;
+
+    /// <summary>Makes a version the text again, as a save by the person named; false when it has been tidied away.</summary>
+    [Parameter, EditorRequired] public Func<long, string, CancellationToken, Task<bool>> Restore { get; set; } = default!;
+
+    /// <summary>After a version has been made the text again.</summary>
+    [Parameter] public EventCallback OnRestored { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private enum View { Rendered, Source, Changes }
+
+    private IReadOnlyList<TextVersion> _versions = [];
+    private bool _listed;
+    private TextVersion? _selected;
+    private string? _selectedText;
+    private IReadOnlyList<DiffLine>? _diff;
+    private View _view = View.Rendered;
+    private bool _restoring;
+    private string? _error;
+    private string? _loadedFor;
+    private readonly CancellationTokenSource _gone = new();
+
+    private string Text => _selected is null ? CurrentContent : _selectedText ?? "";
+
+    protected override void OnParametersSet()
+    {
+        if (_loadedFor == OwnerId || !RendererInfo.IsInteractive)
+            return;
+        _loadedFor = OwnerId;
+        _ = ListAsync();
+    }
+
+    private async Task ListAsync()
+    {
+        try
+        {
+            var versions = await Offload.Run(List, _gone.Token);
+            await InvokeAsync(() =>
+            {
+                _versions = versions;
+                _listed = true;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not list a {Noun}'s versions", Noun);
+            await InvokeAsync(() =>
+            {
+                _listed = true;
+                _error = $"Could not read this {Noun}'s history. Try again in a moment.";
+                StateHasChanged();
+            });
+        }
+    }
+
+    private void SelectCurrent()
+    {
+        _selected = null;
+        _selectedText = null;
+        _diff = null;
+        if (_view == View.Changes)
+            _view = View.Rendered;
+    }
+
+    private async Task SelectAsync(TextVersion version)
+    {
+        _selected = version;
+        _selectedText = null;
+        _diff = null;
+        _error = null;
+        try
+        {
+            var full = await Offload.Run(ct => Load(version.Id, ct), _gone.Token);
+            if (_selected?.Id != version.Id)
+                return;
+            if (full is null)
+            {
+                _error = "That version has just been tidied away — it was past what is kept.";
+                _selectedText = "";
+                return;
+            }
+            _selected = full;
+            _selectedText = full.Content;
+            _diff = LineDiff.Compare(full.Content, CurrentContent);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not read a {Noun} version", Noun);
+            _error = "Could not read that version. Try again in a moment.";
+        }
+    }
+
+    private async Task RestoreAsync()
+    {
+        if (_selected is not { } version || _restoring)
+            return;
+        _restoring = true;
+        _error = null;
+        try
+        {
+            var by = "";
+            if (Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name })
+                by = name;
+            var restored = await Offload.Run(ct => Restore(version.Id, by, ct));
+            if (!restored)
+            {
+                _error = "That version has just been tidied away — it was past what is kept.";
+                return;
+            }
+            await OnRestored.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not restore a {Noun} version", Noun);
+            _error = "Could not restore that version. Nothing was changed.";
+        }
+        finally
+        {
+            _restoring = false;
+        }
+    }
+
+    /// <summary>
+    /// When the text now was saved and by whom. A note knows; a card's is when its newest
+    /// version was replaced, and by whom, and before its first versioned save nobody knows.
+    /// </summary>
+    private string DescribeNow()
+    {
+        if (CurrentSavedAt is { } at)
+            return Describe(at, CurrentSavedBy, CurrentContent.Length);
+        if (_versions.FirstOrDefault(v => !v.IsDeletion) is { } newest)
+            return Describe(newest.KeptAt, newest.KeptBy, CurrentContent.Length);
+        return Size(CurrentContent.Length);
+    }
+
+    private static string Describe(DateTimeOffset at, string by, int size) =>
+        $"Saved {at:d MMM HH:mm}{(by.Length > 0 ? $" by {by}" : "")} · {Size(size)}";
+
+    private static string Describe(TextVersion version) => version.IsDeletion
+        ? $"Deleted {version.KeptAt:d MMM HH:mm}{(version.WrittenBy.Length > 0 ? $" by {version.WrittenBy}" : "")} · {Size(version.Size)}"
+        : $"{(version.WrittenBy.Length > 0 ? $"By {version.WrittenBy} · " : "")}{Size(version.Size)} · replaced {version.KeptAt:d MMM HH:mm}";
+
+    private static string Size(int characters) => characters == 1 ? "1 character" : $"{characters:N0} characters";
+
+    public void Dispose()
+    {
+        _gone.Cancel();
+        _gone.Dispose();
+    }
+}

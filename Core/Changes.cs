@@ -88,7 +88,7 @@ public static class ChangeKinds
     /// <summary>A scheduled action ran, failed, was skipped or was missed — see <see cref="ScheduledAction"/>.</summary>
     public const string Scheduled = "scheduled";
 
-    /// <summary>Somebody reset a note's checklist — see <see cref="Checklists"/>.</summary>
+    /// <summary>Somebody reset a checklist in a note, a Markdown card or a custom page's Markdown block — see <see cref="Checklists"/>.</summary>
     public const string Checklist = "checklist";
 
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
@@ -193,7 +193,7 @@ public static class ChangeActions
     /// <summary>A container put back on the image it ran before an update.</summary>
     public const string RolledBack = "rolled-back";
 
-    /// <summary>A note's checklist had every tick cleared.</summary>
+    /// <summary>A checklist — a note's, a card's or a block's — had every tick cleared.</summary>
     public const string Reset = "reset";
 }
 

@@ -1,8 +1,106 @@
-@* Live values and embedded cards are drawn by LiveMarkdown; the card's own id goes with
-   them so a card that embeds itself, directly or through another, stops at once. *@
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ChecklistStore Ticks
+@inject MarkdownChecklists MarkdownChecklists
+@inject Offload Offload
 
-<div class="markdown-body"><LiveMarkdown Content="@Context.Widget.Settings.Get("content")" OwnerId="@Context.Widget.Id" /></div>
+@* Live values and embedded cards are drawn by LiveMarkdown; the card's own id goes with
+   them so a card that embeds itself, directly or through another, stops at once.
+
+   A task list in it can be ticked, on a dashboard and as a custom page's Markdown block
+   alike — both are this card — and the ticks are kept under the card's id
+   (ChecklistOwners.Widget), apart from its text, exactly as a note's are. Once anything is
+   ticked, "Reset checklist" unticks the lot for everyone. *@
+
+<div class="markdown-body"><LiveMarkdown Content="@Content" OwnerId="@Context.Widget.Id" ChecklistOwner="@_owner" /></div>
+@if (Ticked > 0)
+{
+    <div class="tile-meta mt-2 d-flex">
+        <button class="btn btn-link btn-sm p-0 ms-auto" @onclick="() => _confirmReset = true">
+            Reset checklist (@Ticked ticked)
+        </button>
+    </div>
+}
+
+@if (_confirmReset)
+{
+    <ConfirmDialog Title="Reset this checklist?"
+                   Message="@($"Every box in {Name} will be unticked, for everyone. The text is not changed, and the reset is recorded in What changed.")"
+                   ConfirmText="Reset"
+                   OnCancel="() => _confirmReset = false"
+                   OnConfirm="ResetAsync" />
+}
 
 @code {
     [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private string _owner = "";
+    private string? _loadedFor;
+    private bool _confirmReset;
+    private bool _disposed;
+
+    private string Content => Context.Widget.Settings.Get(WidgetHistoryStore.ContentKey);
+
+    private string Name => Context.Widget.Title is { Length: > 0 } title ? $"“{title}”" : "this card";
+
+    /// <summary>How many of its items are ticked, from memory; zero until the boxes have read them.</summary>
+    private int Ticked => Checklists.MayHaveItems(Content) && Ticks.TryCached(_owner, out var ticks) ? ticks.Count : 0;
+
+    protected override void OnInitialized() => Ticks.Changed += OnTicksChanged;
+
+    protected override void OnParametersSet()
+    {
+        _owner = ChecklistOwners.Widget(Context.Widget.Id);
+
+        // The boxes read the ticks themselves; this asks for the same read (the store makes
+        // it one query) only so the reset link knows when there is something to reset.
+        if (!RendererInfo.IsInteractive || _loadedFor == _owner || !Checklists.MayHaveItems(Content)
+            || Ticks.TryCached(_owner, out _))
+            return;
+        _loadedFor = _owner;
+        _ = LoadTicksAsync(_owner);
+    }
+
+    private async Task LoadTicksAsync(string owner)
+    {
+        try
+        {
+            await Offload.Run(ct => Ticks.TicksAsync(owner, ct));
+            if (!_disposed)
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception)
+        {
+            // The boxes say so themselves; the link simply stays hidden.
+        }
+    }
+
+    private void OnTicksChanged(string owner)
+    {
+        if (_disposed || owner != _owner)
+            return;
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed)
+                StateHasChanged();
+        });
+    }
+
+    private async Task ResetAsync()
+    {
+        _confirmReset = false;
+        var by = "";
+        if (Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name })
+            by = name;
+        var (owner, title) = (_owner, Context.Widget.Title is { Length: > 0 } t ? t : "Markdown card");
+        await Offload.Run(ct => MarkdownChecklists.ResetAsync(owner, title, by, ct));
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Ticks.Changed -= OnTicksChanged;
+    }
 }

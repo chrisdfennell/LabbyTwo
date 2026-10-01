@@ -812,6 +812,63 @@ public sealed class Db
         // 36 — who last saved a note, so the version it becomes on the next save can say
         // who wrote it. Empty for every note written before this existed.
         "ALTER TABLE notes ADD COLUMN updated_by TEXT NOT NULL DEFAULT ''",
+
+        // 37 — checklist ticks for anything with Markdown in it, not only notes: a Markdown
+        // card on a dashboard and a Markdown block on a custom page tick too. Keyed by an
+        // owner ("note:<id>", "widget:<id>" — see ChecklistOwners) instead of a note id, so
+        // one table, one cache and one query shape serve all of them. The note ticks made
+        // under 34 move across as "note:<id>" and the old table goes.
+        //
+        // Safe to run twice, which matters because migrations are not wrapped in a
+        // transaction: an interrupted run that had already dropped note_checks finds it
+        // again (empty) rather than failing on "no such table" for ever.
+        """
+        CREATE TABLE IF NOT EXISTS checklist_ticks (
+            owner     TEXT    NOT NULL,
+            item_key  TEXT    NOT NULL,
+            item_text TEXT    NOT NULL DEFAULT '',
+            position  INTEGER NOT NULL DEFAULT 0,
+            ticked_by TEXT    NOT NULL DEFAULT '',
+            ticked_at INTEGER NOT NULL,
+            PRIMARY KEY (owner, item_key)) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS note_checks (
+            note_id   TEXT    NOT NULL,
+            item_key  TEXT    NOT NULL,
+            item_text TEXT    NOT NULL DEFAULT '',
+            position  INTEGER NOT NULL DEFAULT 0,
+            ticked_by TEXT    NOT NULL DEFAULT '',
+            ticked_at INTEGER NOT NULL,
+            PRIMARY KEY (note_id, item_key)) WITHOUT ROWID;
+        INSERT OR IGNORE INTO checklist_ticks (owner, item_key, item_text, position, ticked_by, ticked_at)
+            SELECT 'note:' || note_id, item_key, item_text, position, ticked_by, ticked_at FROM note_checks;
+        DROP TABLE IF EXISTS note_checks;
+        """,
+
+        // 38 — earlier versions of Markdown cards and custom-page Markdown blocks (both are
+        // "markdown" widget rows): what the card's text was before each save that changed
+        // it, and what a deleted card held when it went (reason 'deleted', with the whole
+        // card in `card` so it can be put back). A sibling of note_versions rather than more
+        // rows in it, because a card is one setting of a row in a cached table with its own
+        // life — undo, duplicate, export — and keeping them apart leaves every note query
+        // and its plan exactly as it was. Same three indexes, for the same three reads.
+        """
+        CREATE TABLE IF NOT EXISTS widget_versions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            widget_id  TEXT    NOT NULL,
+            tab_id     TEXT    NOT NULL,
+            title      TEXT    NOT NULL DEFAULT '',
+            content    TEXT    NOT NULL DEFAULT '',
+            size       INTEGER NOT NULL DEFAULT 0,
+            written_at INTEGER NOT NULL DEFAULT 0,
+            written_by TEXT    NOT NULL DEFAULT '',
+            kept_at    INTEGER NOT NULL,
+            kept_by    TEXT    NOT NULL DEFAULT '',
+            reason     TEXT    NOT NULL DEFAULT 'edit',
+            card       TEXT    NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS ix_widget_versions_widget ON widget_versions (widget_id, id);
+        CREATE INDEX IF NOT EXISTS ix_widget_versions_kept ON widget_versions (kept_at);
+        CREATE INDEX IF NOT EXISTS ix_widget_versions_deleted ON widget_versions (tab_id, kept_at) WHERE reason = 'deleted';
+        """,
     ];
 
     /// <summary>

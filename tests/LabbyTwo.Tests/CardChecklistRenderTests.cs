@@ -1,73 +1,31 @@
 #pragma warning disable BL0006 // The interactive test renderer is a Renderer, which is the whole point of it.
 using System.Net;
 using System.Text.RegularExpressions;
-using LabbyTwo.Components.Shared;
+using LabbyTwo.Components.Widgets;
 using LabbyTwo.Core;
 using LabbyTwo.Services;
 using LabbyTwo.Storage;
-using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.RenderTree;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LabbyTwo.Tests;
 
-/// <summary>Changing a form field, for the render tests that have boxes to tick.</summary>
-internal sealed partial class InteractiveRenderer
-{
-    /// <summary>
-    /// Sends the nth element with a change handler the value a browser would send. Throws
-    /// when there are not that many, so a test never passes by changing nothing.
-    /// </summary>
-    public Task ChangeAsync(int nth, object value) => Dispatcher.InvokeAsync(async () =>
-    {
-        var found = new List<ulong>();
-        FindChanges(_root, found);
-        if (found.Count <= nth)
-            throw new InvalidOperationException($"Only {found.Count} element(s) can be changed.");
-        await DispatchEventAsync(found[nth], new EventFieldInfo(), new ChangeEventArgs { Value = value });
-    });
-
-    private void FindChanges(int componentId, List<ulong> found)
-    {
-        var frames = GetCurrentRenderTreeFrames(componentId);
-        FindChanges(frames.Array, 0, frames.Count, found);
-    }
-
-    private void FindChanges(RenderTreeFrame[] frames, int start, int end, List<ulong> found)
-    {
-        for (var i = start; i < end; i++)
-        {
-            var frame = frames[i];
-            switch (frame.FrameType)
-            {
-                case RenderTreeFrameType.Attribute when frame.AttributeName == "onchange" && frame.AttributeEventHandlerId != 0:
-                    found.Add(frame.AttributeEventHandlerId);
-                    break;
-                case RenderTreeFrameType.Component:
-                    FindChanges(frame.ComponentId, found);
-                    i += frame.ComponentSubtreeLength - 1;
-                    break;
-            }
-        }
-    }
-}
-
 /// <summary>
-/// Checklists drawn by the real components against a real database: boxes that can be
-/// ticked in a note and are display-only everywhere else, ticks that every viewer sees,
-/// item text that stays text — and the whole of a real note, every kind of shortcode in
-/// it, still drawing without a single question mark now that its boxes are live.
+/// Checklists in a Markdown card — a custom page's Markdown block, which is what the
+/// owner's "Home Lab Roundup" page is, and a dashboard's Markdown card, which is the same
+/// component — drawn by the real components against a real database: boxes anyone can
+/// tick, seen by every viewer, read from the database once and from memory after; a reset
+/// link once something is ticked; and the owner's real page, every shortcode in it, still
+/// drawing everything now its boxes are live.
 /// </summary>
-public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
+public sealed partial class CardChecklistRenderTests : IAsyncDisposable
 {
     private readonly string _directory = TestHost.TempDirectory();
     private readonly ServiceProvider _services;
     private readonly List<InteractiveRenderer> _renderers = [];
-    private readonly Stub _stub = new();
     private readonly RecordingBoundaryLogger _boundary = new();
 
-    /// <summary>What any card in the note threw, so a card that failed quietly still fails the test.</summary>
+    /// <summary>What any card in the page threw, so a card that failed quietly still fails the test.</summary>
     private sealed class RecordingBoundaryLogger : IErrorBoundaryLogger
     {
         public System.Collections.Concurrent.ConcurrentQueue<Exception> Errors { get; } = new();
@@ -79,7 +37,7 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
         }
     }
 
-    /// <summary>A connection with readings and an action, for the note's live values and its button.</summary>
+    /// <summary>A connection with readings and an action, for the page's live values and its button.</summary>
     private sealed class Stub : IConnectionProvider
     {
         public string Type => "stub";
@@ -90,21 +48,19 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
         public IReadOnlyList<MetricSpec> Metrics => [new("disk_percent", "Disk used", "%", 1), new("cpu_percent", "CPU", "%", 1)];
         public IReadOnlyList<ProviderAction> Actions => [new("poke", "Poke") { Confirms = false }];
 
-        public double Disk { get; set; } = 50;
-
         public Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct) =>
             Task.FromResult(ProbeResult.Up(TimeSpan.FromMilliseconds(3), "OK",
-                new Dictionary<string, double> { ["disk_percent"] = Disk, ["cpu_percent"] = 12 }));
+                new Dictionary<string, double> { ["disk_percent"] = 50, ["cpu_percent"] = 12 }));
 
         public Task<ActionResult> RunActionAsync(Connection connection, ProviderAction action, SettingsBag input, CancellationToken ct) =>
             Task.FromResult(ActionResult.Done("Poked"));
     }
 
-    public NoteChecklistRenderTests()
+    public CardChecklistRenderTests()
     {
         _services = TestHost.Build(_directory, services =>
         {
-            services.AddSingleton<IConnectionProvider>(_stub);
+            services.AddSingleton<IConnectionProvider>(new Stub());
             services.AddSingleton<IErrorBoundaryLogger>(_boundary);
             services.AddSingleton<HealthMonitor>();
             services.AddSingleton<AlertService>();
@@ -120,6 +76,7 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
             services.AddSingleton<NotesStore>();
             services.AddSingleton<ChecklistStore>();
             services.AddSingleton<MarkdownChecklists>();
+            services.AddSingleton<WidgetHistoryStore>();
         });
         Get<Db>().EnsureSchemaAsync().GetAwaiter().GetResult();
     }
@@ -140,12 +97,27 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
         return renderer;
     }
 
-    private static Task RenderNoteAsync(InteractiveRenderer renderer, string markdown, string? noteId, bool checklist = true) =>
-        renderer.RenderAsync<LiveMarkdown>(new Dictionary<string, object?>
+    /// <summary>A Markdown block on a custom page, saved as the page saves one.</summary>
+    private async Task<Widget> BlockAsync(string markdown, string id = "roundup")
+    {
+        var page = new Tab { Id = "home-lab-roundup", Name = "Home Lab Roundup", Slug = "home-lab-roundup", Kind = TabKinds.Custom };
+        await Get<ConfigStore>().SaveTabAsync(page);
+        var block = new Widget
         {
-            [nameof(LiveMarkdown.Content)] = markdown,
-            [nameof(LiveMarkdown.OwnerId)] = noteId,
-            [nameof(LiveMarkdown.ChecklistOwner)] = checklist && noteId is not null ? ChecklistOwners.Note(noteId) : null,
+            Id = id,
+            TabId = page.Id,
+            Type = WidgetHistoryStore.MarkdownType,
+            Width = 12,
+            Settings = new SettingsBag { [WidgetHistoryStore.ContentKey] = markdown },
+        };
+        await Get<ConfigStore>().SaveWidgetAsync(block);
+        return block;
+    }
+
+    private static Task RenderCardAsync(InteractiveRenderer renderer, Widget block) =>
+        renderer.RenderAsync<MarkdownCard>(new Dictionary<string, object?>
+        {
+            [nameof(MarkdownCard.Context)] = new WidgetContext(block, null),
         });
 
     private async Task<Connection> ConnectionAsync(string name, string provider = "stub", params (string Key, string Value)[] settings)
@@ -165,121 +137,115 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
 
     private static List<string> Boxes(string html) => [.. Box().Matches(html).Select(m => m.Value)];
 
-    [Fact]
-    public async Task ANotesBoxesCanBeTickedAndEveryViewerSeesIt()
-    {
-        const string note = "## Before the NAS restart\n\n- [ ] Stopped Plex\n- [x] Took a snapshot\n- [ ] Told the family\n";
-        var first = Renderer();
-        var second = Renderer();
-        await RenderNoteAsync(first, note, "note-1");
-        await RenderNoteAsync(second, note, "note-1");
+    private static bool Ready(string html, int live) => Boxes(html).Count(b => !b.Contains(" disabled", StringComparison.Ordinal)) == live;
 
-        // Ready once the ticks are read: the live boxes are no longer disabled.
-        var html = await first.WaitForAsync(h => Boxes(h).Count(b => !b.Contains(" disabled", StringComparison.Ordinal)) == 2);
+    [Fact]
+    public async Task ABlocksBoxesCanBeTickedAndEveryViewerSeesItFromOneRead()
+    {
+        var block = await BlockAsync("## Before the NAS restart\n\n- [ ] Stopped Plex\n- [x] Took a snapshot\n- [ ] Told the family\n");
+        var first = Renderer();
+        await RenderCardAsync(first, block);
+        var html = await first.WaitForAsync(h => Ready(h, 2));
         var boxes = Boxes(html);
         Assert.Equal(3, boxes.Count);
         Assert.Contains(" checked", boxes[1]);
-        Assert.Contains("Ticked in the text itself", boxes[1]);
         Assert.DoesNotContain(" checked", boxes[0]);
-        Assert.Contains("Stopped Plex", html);
-        await second.WaitForAsync(h => Boxes(h).Count(b => !b.Contains(" disabled", StringComparison.Ordinal)) == 2);
+        Assert.DoesNotContain("Reset checklist", html);
+
+        // A second viewer — the wall display — is drawn from memory: not one connection opened.
+        var before = Get<Db>().Opens;
+        var second = Renderer();
+        await RenderCardAsync(second, block);
+        await second.WaitForAsync(h => Ready(h, 2));
+        Assert.Equal(before, Get<Db>().Opens);
 
         await first.ChangeAsync(0, true);
 
-        // The other viewer's box ticks without it asking for anything.
+        // The other viewer's box ticks without it asking for anything; the tick was one write.
         var seen = Text(await second.WaitForAsync(h => Boxes(h)[0].Contains(" checked", StringComparison.Ordinal)));
-        Assert.Contains(" checked", Boxes(seen)[0]);
         Assert.Contains("Ticked by someone, today at", Boxes(seen)[0]);
+        Assert.Contains("Reset checklist (1 ticked)", Text(await first.WaitForAsync("Reset checklist (1 ticked)")));
+        Assert.Equal(before + 1, Get<Db>().Opens);
 
-        // Stored apart from the note: the store has it, under the item's key.
-        var ticks = await Get<ChecklistStore>().TicksAsync(ChecklistOwners.Note("note-1"));
-        var tick = Assert.Single(ticks.Values);
+        // Kept under the block, not under a note, and the text is untouched.
+        var tick = Assert.Single((await Get<ChecklistStore>().TicksAsync(ChecklistOwners.Widget(block.Id))).Values);
         Assert.Equal("Stopped Plex", tick.Text);
-
-        await second.ChangeAsync(0, false);
-        await first.WaitForAsync(h => !Boxes(h)[0].Contains(" checked", StringComparison.Ordinal));
-        Assert.Empty(await Get<ChecklistStore>().TicksAsync(ChecklistOwners.Note("note-1")));
+        Assert.Empty(await Get<ChecklistStore>().TicksAsync(ChecklistOwners.Note(block.Id)));
+        var stored = (await Get<ConfigStore>().WidgetsAsync()).Single(w => w.Id == block.Id);
+        Assert.Contains("- [ ] Stopped Plex", stored.Settings.Get(WidgetHistoryStore.ContentKey));
+        Assert.Empty(await Get<WidgetHistoryStore>().VersionsAsync(block.Id));
     }
 
     [Fact]
-    public async Task OutsideANoteTheBoxesAreTheRenderersOwn()
+    public async Task AResetUnticksTheBlockForEveryoneAndSaysSoInWhatChanged()
     {
-        const string text = "- [ ] Stopped Plex\n- [x] Done\n";
-        var renderer = Renderer();
-        await RenderNoteAsync(renderer, text, "card-1", checklist: false);
-        var html = await renderer.HtmlAsync();
+        var block = await BlockAsync("- [ ] One\n- [ ] Two\n");
+        var items = Get<Markdown>().ChecklistItems("- [ ] One\n- [ ] Two\n");
+        var owner = ChecklistOwners.Widget(block.Id);
+        await Get<ChecklistStore>().SetAsync(owner, items[0], true, "chris", DateTimeOffset.Now);
+        await Get<ChecklistStore>().SetAsync(owner, items[1], true, "chris", DateTimeOffset.Now);
 
-        Assert.Equal(new Markdown().ToHtml(text), html);
+        var renderer = Renderer();
+        await RenderCardAsync(renderer, block);
+        await renderer.WaitForAsync(h => Boxes(h).All(b => b.Contains(" checked", StringComparison.Ordinal)) && h.Contains("Reset checklist (2 ticked)", StringComparison.Ordinal));
+
+        Assert.Equal(2, await Get<MarkdownChecklists>().ResetAsync(owner, "Home Lab Roundup", "chris"));
+
+        var html = await renderer.WaitForAsync(h => Boxes(h).All(b => !b.Contains(" checked", StringComparison.Ordinal)));
+        Assert.DoesNotContain("Reset checklist", html);
+        var change = Assert.Single(await Get<ChangeStore>().QueryAsync(new ChangeQuery(DateTimeOffset.Now.AddHours(-1), DateTimeOffset.Now.AddHours(1), [ChangeKinds.Checklist])));
+        Assert.Equal("Checklist in “Home Lab Roundup” reset", change.Title);
     }
 
     [Fact]
-    public async Task ItemTextIsText()
+    public async Task ItemTextInABlockIsText()
     {
+        var block = await BlockAsync("- [ ] <script>alert(1)</script> and <img src=x onerror=alert(2)>\n");
         var renderer = Renderer();
-        await RenderNoteAsync(renderer, "- [ ] <script>alert(1)</script> and <img src=x onerror=alert(2)>\n- [ ] \"><b>quoted\n", "note-x");
-        var html = await renderer.WaitForAsync(h => Boxes(h).All(b => !b.Contains(" disabled", StringComparison.Ordinal)));
+        await RenderCardAsync(renderer, block);
+        var html = await renderer.WaitForAsync(h => Ready(h, 1));
 
         Assert.DoesNotContain("<script", html);
         Assert.DoesNotContain("<img", html);
-        Assert.DoesNotContain("<b>", html);
-        Assert.Contains("&lt;script&gt;", html);
-        // The words are in the box's label too, encoded as an attribute.
         Assert.Contains("aria-label=\"Tick “&lt;script&gt;alert(1)&lt;/script&gt;", html);
     }
 
+    /// <summary>
+    /// A block's History lists what it said before, with who and how big, and draws the
+    /// text as it is now with display-only boxes: ticking belongs to the block, not to a
+    /// view of its history.
+    /// </summary>
     [Fact]
-    public async Task AResetUnticksEverythingAndSaysSoInWhatChanged()
+    public async Task ABlocksHistoryListsItsVersionsAndItsBoxesAreDisplayOnly()
     {
-        var store = Get<ChecklistStore>();
-        var items = Get<Markdown>().ChecklistItems("- [ ] One\n- [ ] Two\n");
-        await store.SetAsync(ChecklistOwners.Note("note-r"), items[0], true, "chris", DateTimeOffset.Now);
-        await store.SetAsync(ChecklistOwners.Note("note-r"), items[1], true, "chris", DateTimeOffset.Now);
+        var block = await BlockAsync("- [ ] One\n");
+        await Get<ConfigStore>().SaveWidgetAsync(block with { Settings = new SettingsBag { [WidgetHistoryStore.ContentKey] = "- [ ] One\n- [ ] Two\n" } }, "alice");
+        var now = (await Get<ConfigStore>().WidgetsAsync()).Single(w => w.Id == block.Id);
 
         var renderer = Renderer();
-        await RenderNoteAsync(renderer, "- [ ] One\n- [ ] Two\n", "note-r");
-        await renderer.WaitForAsync(h => Boxes(h).All(b => b.Contains(" checked", StringComparison.Ordinal)));
+        await renderer.RenderAsync<LabbyTwo.Components.Shared.CardHistory>(new Dictionary<string, object?>
+        {
+            [nameof(LabbyTwo.Components.Shared.CardHistory.Widget)] = now,
+            [nameof(LabbyTwo.Components.Shared.CardHistory.Name)] = "Home Lab Roundup",
+            [nameof(LabbyTwo.Components.Shared.CardHistory.Noun)] = "block",
+        });
+        var html = Text(await renderer.WaitForAsync("10 characters · replaced"));
 
-        var cleared = await Get<MarkdownChecklists>().ResetAsync(ChecklistOwners.Note("note-r"), "Restart", "chris");
-
-        Assert.Equal(2, cleared);
-        await renderer.WaitForAsync(h => Boxes(h).All(b => !b.Contains(" checked", StringComparison.Ordinal)));
-        var changes = await Get<ChangeStore>().QueryAsync(new ChangeQuery(DateTimeOffset.Now.AddHours(-1), DateTimeOffset.Now.AddHours(1), [ChangeKinds.Checklist]));
-        var change = Assert.Single(changes);
-        Assert.Equal("Checklist in “Restart” reset", change.Title);
-        Assert.Equal("2 ticks cleared by chris", change.Detail);
-
-        // Nothing to clear: nothing recorded.
-        Assert.Equal(0, await Get<MarkdownChecklists>().ResetAsync(ChecklistOwners.Note("note-r"), "Restart", "chris"));
-        Assert.Single(await Get<ChangeStore>().QueryAsync(new ChangeQuery(DateTimeOffset.Now.AddHours(-1), DateTimeOffset.Now.AddHours(1), [ChangeKinds.Checklist])));
-    }
-
-    [Fact]
-    public async Task TicksFollowTheirItemsThroughAnEdit()
-    {
-        var markdown = Get<Markdown>();
-        var store = Get<ChecklistStore>();
-        var before = markdown.ChecklistItems("- [ ] Stop Plex\n- [ ] Snapshot\n- [ ] Gone soon\n");
-        foreach (var item in before)
-            await store.SetAsync(ChecklistOwners.Note("note-e"), item, true, "chris", DateTimeOffset.Now);
-
-        const string after = "New intro line.\n\n- [ ] Stop Plex and Sonarr\n- [ ] Snapshot\n";
-        await Get<MarkdownChecklists>().ReconcileAsync(ChecklistOwners.Note("note-e"), after);
-
-        var ticks = await store.TicksAsync(ChecklistOwners.Note("note-e"));
-        var now = markdown.ChecklistItems(after);
-        Assert.Equal(2, ticks.Count);
-        Assert.True(ticks.ContainsKey(now[0].Key));
-        Assert.True(ticks.ContainsKey(now[1].Key));
-        Assert.Equal("Stop Plex and Sonarr", ticks[now[0].Key].Text);
+        Assert.Contains("History of “Home Lab Roundup”", html);
+        Assert.Contains("As the block", html);
+        Assert.Contains("by alice", html);
+        Assert.Equal(2, Boxes(html).Count);
+        Assert.All(Boxes(html), b => Assert.Contains(" disabled", b));
+        Assert.DoesNotContain("md-check", html);
     }
 
     /// <summary>
-    /// The note this whole feature has to leave alone: every shortcode its owner uses, in
-    /// one page, with a checklist in it. Drawn as a note — checklists on — it must show
-    /// every value and never a "?", a placeholder or a shortcode's raw text.
+    /// The owner's real page: a custom page whose Markdown block uses every shortcode they
+    /// use, with a checklist in it. Drawn as the page draws it, it must show every value and
+    /// never a "?", a placeholder or a shortcode's raw text — and its boxes must be live.
     /// </summary>
     [Fact]
-    public async Task TheOwnersRealNoteStillDrawsEverything()
+    public async Task TheOwnersRoundupPageStillDrawsEverything()
     {
         var nas = await ConnectionAsync("NAS", "stub", ("url", "http://nas.lan"));
         using var docker = new ScriptedDocker(async context =>
@@ -300,8 +266,8 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
         await ConnectionAsync("Docker", "docker", ("endpoint", docker.Endpoint));
         await Get<HealthMonitor>().RefreshAsync(nas);
 
-        const string note = """
-            # Home lab
+        const string page = """
+            # Home Lab Roundup
 
             {{today}} · the NAS was checked {{ago: NAS}} · Christmas is {{countdown: 2026-12-25}}
 
@@ -363,13 +329,15 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
 
             - [ ] Stopped Plex
             - [x] Took a snapshot
+            - [ ] Told the family
 
             > [!CAUTION]
             > Never pull the plug during a scrub.
             """;
 
+        var block = await BlockAsync(page);
         var renderer = Renderer();
-        await RenderNoteAsync(renderer, note, "owners-note");
+        await RenderCardAsync(renderer, block);
         var html = Text(await renderer.WaitForAsync(h =>
         {
             var text = Text(h);
@@ -380,7 +348,7 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
                    && text.Contains("Restart procedure", StringComparison.Ordinal)
                    && text.Contains("Nothing due in the next 60 days", StringComparison.Ordinal)
                    && text.Contains("gauge-value", StringComparison.Ordinal)
-                   && Boxes(h).Count(b => !b.Contains(" disabled", StringComparison.Ordinal)) == 1;
+                   && Ready(h, 2);
         }, TimeSpan.FromSeconds(20)));
 
         Assert.Empty(_boundary.Errors);
@@ -395,13 +363,21 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
         Assert.Contains("md-callout md-callout-caution", html);
         Assert.Contains("The NAS disk is at", html);
         Assert.Contains("<table>", html);
+        Assert.Contains("<ol>", html);
         Assert.Contains("<code>docker compose up -d</code>", html);
+        Assert.Contains("<code>docker ps</code>", html);
         Assert.Contains("NAS disk", html);
         Assert.Contains("Poke", html);
         Assert.Contains("http://nas.lan", html);
-        Assert.Equal(2, Boxes(html).Count);
+        Assert.Equal(3, Boxes(html).Count);
+        Assert.Contains("Stopped Plex", html);
         // The down branch is not drawn while the NAS is up, and nor is the over-85% warning.
         Assert.DoesNotContain("Do not restart Plex", html);
         Assert.DoesNotContain("Over 85% full", html);
+
+        // And the boxes work on it.
+        await renderer.ChangeAsync(0, true);
+        await renderer.WaitForAsync("Reset checklist (1 ticked)");
+        Assert.Single(await Get<ChecklistStore>().TicksAsync(ChecklistOwners.Widget(block.Id)));
     }
 }

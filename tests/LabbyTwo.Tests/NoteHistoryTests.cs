@@ -156,7 +156,7 @@ public sealed class NoteHistoryTests : IDisposable
         var gone = await Notes.SaveAsync(null, "tab", "Gone", "x");
         await Notes.SaveAsync(gone, "tab", "Gone", "y");
         await Notes.DeleteAsync(gone);
-        await _services.GetRequiredService<ChecklistStore>().SetAsync(gone, new ChecklistItem("k:0", "k", 0, false), true, "", DateTimeOffset.Now);
+        await _services.GetRequiredService<ChecklistStore>().SetAsync(ChecklistOwners.Note(gone), new ChecklistItem("k:0", "k", 0, false), true, "", DateTimeOffset.Now);
 
         // A month and a bit on: the deleted note's history goes, the live note's stays.
         var monthOn = DateTimeOffset.UtcNow + NotesStore.DeletedFor + TimeSpan.FromDays(2);
@@ -168,7 +168,7 @@ public sealed class NoteHistoryTests : IDisposable
         await using (var db = await _services.GetRequiredService<Db>().OpenAsync())
         {
             var count = db.CreateCommand();
-            count.CommandText = "SELECT COUNT(*) FROM note_checks";
+            count.CommandText = "SELECT COUNT(*) FROM checklist_ticks";
             Assert.Equal(0L, (long)(await count.ExecuteScalarAsync())!);
         }
 
@@ -256,7 +256,7 @@ public sealed class NoteHistoryTests : IDisposable
     [InlineData(NotesStore.VersionSql)]
     [InlineData(NotesStore.KeepVersionSql)]
     [InlineData(NotesStore.ByIdSql)]
-    [InlineData(ChecklistStore.ForNoteSql)]
+    [InlineData(ChecklistStore.ForOwnerSql)]
     public void LookupsAreByKey(string sql)
     {
         var plan = QueryPlanTests.Plan(sql);

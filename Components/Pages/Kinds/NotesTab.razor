@@ -1,7 +1,7 @@
 @implements IDisposable
 @inject NotesStore Notes
 @inject ChecklistStore Ticks
-@inject NoteChecklists NoteChecklists
+@inject MarkdownChecklists MarkdownChecklists
 @inject Offload Offload
 @inject NavigationManager Nav
 @using Microsoft.AspNetCore.Components.Authorization
@@ -38,7 +38,7 @@ else
                             <button class="btn btn-sm btn-outline-danger" aria-label="@($"Delete {Describe(note)}")" @onclick="() => _confirmDelete = note">✕</button>
                         </div>
                     </div>
-                    <div class="widget-body markdown-body"><LiveMarkdown Content="@note.Content" OwnerId="@note.Id" Checklist="true" /></div>
+                    <div class="widget-body markdown-body"><LiveMarkdown Content="@note.Content" OwnerId="@note.Id" ChecklistOwner="@ChecklistOwners.Note(note.Id)" /></div>
                     <div class="tile-meta mt-2 d-flex flex-wrap align-items-center gap-2">
                         <span>Updated @note.UpdatedAt.ToString("d MMM yyyy HH:mm")@(note.UpdatedBy.Length > 0 ? $" by {note.UpdatedBy}" : "")</span>
                         @if (ticked > 0)
@@ -184,7 +184,7 @@ else
             return;
         foreach (var note in _notes)
         {
-            if (!Checklists.MayHaveItems(note.Content) || Ticks.TryCached(note.Id, out _))
+            if (!Checklists.MayHaveItems(note.Content) || Ticks.TryCached(ChecklistOwners.Note(note.Id), out _))
                 continue;
             _ = LoadTicksAsync(note.Id);
         }
@@ -194,7 +194,7 @@ else
     {
         try
         {
-            await Offload.Run(ct => Ticks.TicksAsync(noteId, ct));
+            await Offload.Run(ct => Ticks.TicksAsync(ChecklistOwners.Note(noteId), ct));
             if (!_disposed)
                 await InvokeAsync(StateHasChanged);
         }
@@ -206,11 +206,11 @@ else
 
     /// <summary>How many of the note's items are ticked, from memory; zero until read.</summary>
     private int TickCount(NotesStore.Note note) =>
-        Checklists.MayHaveItems(note.Content) && Ticks.TryCached(note.Id, out var ticks) ? ticks.Count : 0;
+        Checklists.MayHaveItems(note.Content) && Ticks.TryCached(ChecklistOwners.Note(note.Id), out var ticks) ? ticks.Count : 0;
 
-    private void OnTicksChanged(string noteId)
+    private void OnTicksChanged(string owner)
     {
-        if (_disposed || _notes.All(n => n.Id != noteId))
+        if (_disposed || _notes.All(n => ChecklistOwners.Note(n.Id) != owner))
             return;
         _ = InvokeAsync(() =>
         {
@@ -245,7 +245,7 @@ else
         {
             var id = await Notes.SaveAsync(editingId, tab, draft.Title, draft.Content, by, ct);
             // Ticks follow their items to the new text (Checklists.Reconcile).
-            await NoteChecklists.ReconcileAsync(id, draft.Content, ct);
+            await MarkdownChecklists.ReconcileAsync(ChecklistOwners.Note(id), draft.Content, ct);
             return id;
         });
         _editing = null;
@@ -272,7 +272,7 @@ else
         if (_confirmReset is { } note)
         {
             var by = await WhoAsync();
-            await Offload.Run(ct => NoteChecklists.ResetAsync(note.Id, note.Title, by, ct));
+            await Offload.Run(ct => MarkdownChecklists.ResetAsync(ChecklistOwners.Note(note.Id), note.Title, by, ct));
         }
         _confirmReset = null;
     }
