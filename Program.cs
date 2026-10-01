@@ -120,6 +120,8 @@ builder.Services.AddSingleton<LatestReadings>();
 builder.Services.AddSingleton<Offload>();
 builder.Services.AddSingleton<SharedSeries>();
 builder.Services.AddSingleton<NotesStore>();
+builder.Services.AddSingleton<ChecklistStore>();
+builder.Services.AddSingleton<NoteChecklists>();
 builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();

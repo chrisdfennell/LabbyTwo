@@ -1,0 +1,157 @@
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Logging
+@inject ChecklistStore Store
+@inject Offload Offload
+@inject ILogger<LiveChecklistItem> Log
+
+@* One task-list box in a note (see Core/Checklists.cs). Without a note to remember it in —
+   a card, the editor's preview — it is the renderer's own display-only box, exactly as it
+   was. In a note it can be ticked, by anyone looking, and everyone else looking sees it
+   ticked a moment later. An item written "[x]" is ticked for good: the note says so. *@
+
+@if (_item is null || NoteId is null)
+{
+    <input disabled="disabled" type="checkbox" checked="@(_item?.TickedInSource == true)" />
+}
+else if (_item.TickedInSource)
+{
+    <input type="checkbox" class="md-check" checked disabled
+           title="Ticked in the note's text. Edit the note to untick it." />
+}
+else
+{
+    <input type="checkbox" class="md-check" checked="@(_tick is not null)" disabled="@(!_ready)"
+           title="@Hover" aria-label="@Label" @onchange="ToggleAsync" />
+}
+
+@code {
+    /// <summary>The stand-in shortcode the note's Markdown made of the box.</summary>
+    [Parameter] public Shortcode? Code { get; set; }
+
+    /// <summary>The note whose ticks these are; null for display only.</summary>
+    [Parameter] public string? NoteId { get; set; }
+
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private ChecklistItem? _item;
+    private ChecklistTick? _tick;
+    private bool _ready;
+    private bool _disposed;
+    private string? _loadedFor;
+
+    protected override void OnInitialized() => Store.Changed += OnStoreChanged;
+
+    protected override void OnParametersSet()
+    {
+        _item = Checklists.FromShortcode(Code);
+        if (NoteId is null || _item is null)
+            return;
+        if (Store.TryCached(NoteId, out var ticks))
+        {
+            Apply(ticks);
+            return;
+        }
+        // Not read yet: once, on the pool, shared by every other box of the same note
+        // asking at the same moment (the store makes them one query).
+        if (_loadedFor == NoteId || !RendererInfo.IsInteractive)
+            return;
+        _loadedFor = NoteId;
+        var note = NoteId;
+        _ = LoadAsync(note);
+    }
+
+    private async Task LoadAsync(string note)
+    {
+        try
+        {
+            var ticks = await Offload.Run(ct => Store.TicksAsync(note, ct));
+            if (_disposed)
+                return;
+            await InvokeAsync(() =>
+            {
+                if (_disposed || note != NoteId)
+                    return;
+                Apply(ticks);
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // The circuit went while the ticks were loading.
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not read a note's checklist ticks");
+        }
+    }
+
+    private void Apply(IReadOnlyDictionary<string, ChecklistTick> ticks)
+    {
+        _ready = true;
+        _tick = _item is not null && ticks.TryGetValue(_item.Key, out var tick) ? tick : null;
+    }
+
+    private void OnStoreChanged(string noteId)
+    {
+        if (_disposed || noteId != NoteId)
+            return;
+        _ = InvokeAsync(() =>
+        {
+            if (_disposed || NoteId is null || !Store.TryCached(NoteId, out var ticks))
+                return;
+            Apply(ticks);
+            StateHasChanged();
+        });
+    }
+
+    private async Task ToggleAsync(ChangeEventArgs e)
+    {
+        if (_item is null || NoteId is null)
+            return;
+        var ticked = e.Value is true || (e.Value is string text && bool.TryParse(text, out var parsed) && parsed);
+        var by = "";
+        if (Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name })
+            by = name;
+        var now = DateTimeOffset.Now;
+
+        // Drawn at once; the store's Changed confirms it a moment later, here and everywhere.
+        _tick = ticked ? new ChecklistTick(_item.Key, _item.Text, _item.Position, by, now) : null;
+        var note = NoteId;
+        var item = _item;
+        try
+        {
+            await Offload.Run(async ct =>
+            {
+                await Store.SetAsync(note, item, ticked, by, now, ct);
+                return true;
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not save a checklist tick");
+            if (Store.TryCached(note, out var ticks))
+                Apply(ticks);
+        }
+    }
+
+    private string Hover => _tick is null
+        ? "Not ticked yet. Ticking it is remembered for everyone, and does not change the note's text."
+        : $"Ticked by {(_tick.By.Length > 0 ? _tick.By : "someone")}, {When(_tick.At)}";
+
+    private string Label => _tick is null ? $"Tick “{_item?.Text}”" : $"Untick “{_item?.Text}” — {Hover}";
+
+    private static string When(DateTimeOffset at)
+    {
+        var local = at.ToLocalTime();
+        return local.Date == DateTime.Today ? $"today at {local:HH:mm}"
+            : local.Date == DateTime.Today.AddDays(-1) ? $"yesterday at {local:HH:mm}"
+            : local.ToString("d MMM yyyy 'at' HH:mm", System.Globalization.CultureInfo.CurrentCulture);
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Store.Changed -= OnStoreChanged;
+    }
+}

@@ -88,6 +88,9 @@ public static class ChangeKinds
     /// <summary>A scheduled action ran, failed, was skipped or was missed — see <see cref="ScheduledAction"/>.</summary>
     public const string Scheduled = "scheduled";
 
+    /// <summary>Somebody reset a note's checklist — see <see cref="Checklists"/>.</summary>
+    public const string Checklist = "checklist";
+
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
     public static readonly IReadOnlyList<(string Key, string Label)> All =
     [
@@ -103,6 +106,7 @@ public static class ChangeKinds
         (Backup, "Backups and restore tests"),
         (Monitor, "LabbyTwo losing sight of the lab"),
         (Scheduled, "Scheduled actions"),
+        (Checklist, "Checklists reset"),
     ];
 
     /// <summary>
@@ -127,6 +131,7 @@ public static class ChangeKinds
             "backup" or "backups" or "restore" or "restores" => Backup,
             "monitor" or "monitoring" or "blind" or "sight" => Monitor,
             "scheduled" or "schedule" or "schedules" => Scheduled,
+            "checklist" or "checklists" => Checklist,
             _ => null,
         };
     }
@@ -187,6 +192,9 @@ public static class ChangeActions
 
     /// <summary>A container put back on the image it ran before an update.</summary>
     public const string RolledBack = "rolled-back";
+
+    /// <summary>A note's checklist had every tick cleared.</summary>
+    public const string Reset = "reset";
 }
 
 /// <summary>

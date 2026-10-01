@@ -771,6 +771,47 @@ public sealed class Db
             record        INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (connection_id, metric)) WITHOUT ROWID
         """,
+
+        // 34 — ticks on a note's task-list items, kept apart from the note's text so that
+        // ticking is not an edit (see Core/Checklists.cs). One row per ticked item; an
+        // unticked item has no row. Read a note at a time by the primary key, and held in
+        // memory after the first read. Self-contained, like 33.
+        """
+        CREATE TABLE IF NOT EXISTS note_checks (
+            note_id   TEXT    NOT NULL,
+            item_key  TEXT    NOT NULL,
+            item_text TEXT    NOT NULL DEFAULT '',
+            position  INTEGER NOT NULL DEFAULT 0,
+            ticked_by TEXT    NOT NULL DEFAULT '',
+            ticked_at INTEGER NOT NULL,
+            PRIMARY KEY (note_id, item_key)) WITHOUT ROWID
+        """,
+
+        // 35 — earlier versions of notes: what a note said before each save, and what a
+        // deleted note said when it went (reason 'deleted'). Listed a note at a time
+        // newest first (ix_note_versions_note), pruned by age (ix_note_versions_kept), and
+        // the "Recently deleted" list reads only the deleted rows of one tab through a
+        // partial index that holds nothing else. Self-contained.
+        """
+        CREATE TABLE IF NOT EXISTS note_versions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            note_id    TEXT    NOT NULL,
+            tab_id     TEXT    NOT NULL,
+            title      TEXT    NOT NULL DEFAULT '',
+            content    TEXT    NOT NULL DEFAULT '',
+            size       INTEGER NOT NULL DEFAULT 0,
+            written_at INTEGER NOT NULL,
+            written_by TEXT    NOT NULL DEFAULT '',
+            kept_at    INTEGER NOT NULL,
+            reason     TEXT    NOT NULL DEFAULT 'edit');
+        CREATE INDEX IF NOT EXISTS ix_note_versions_note ON note_versions (note_id, id);
+        CREATE INDEX IF NOT EXISTS ix_note_versions_kept ON note_versions (kept_at);
+        CREATE INDEX IF NOT EXISTS ix_note_versions_deleted ON note_versions (tab_id, kept_at) WHERE reason = 'deleted';
+        """,
+
+        // 36 — who last saved a note, so the version it becomes on the next save can say
+        // who wrote it. Empty for every note written before this existed.
+        "ALTER TABLE notes ADD COLUMN updated_by TEXT NOT NULL DEFAULT ''",
     ];
 
     /// <summary>

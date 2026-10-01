@@ -1,5 +1,10 @@
+@implements IDisposable
 @inject NotesStore Notes
+@inject ChecklistStore Ticks
+@inject NoteChecklists NoteChecklists
+@inject Offload Offload
 @inject NavigationManager Nav
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.WebUtilities
 
 <div class="page-head">
@@ -7,7 +12,10 @@
         <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "" : Tab.Icon + " ")@Tab.Name</h1>
         <p class="subtitle">Markdown notes and runbooks.</p>
     </div>
-    <button class="btn btn-sm btn-primary" @onclick="NewNote">+ New note</button>
+    <div class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _showDeleted = true">Recently deleted</button>
+        <button class="btn btn-sm btn-primary" @onclick="NewNote">+ New note</button>
+    </div>
 </div>
 
 @if (_notes.Count == 0)
@@ -19,17 +27,27 @@ else
     <div class="row g-3">
         @foreach (var note in _notes)
         {
+            var ticked = TickCount(note);
             <div class="col-12 col-lg-6" id="@($"note-{note.Id}")">
                 <div class="widget h-100">
                     <div class="widget-head">
-                        <h2 class="widget-title text-truncate">@(note.Title is { Length: > 0 } ? note.Title : "Untitled")</h2>
+                        <h2 class="widget-title text-truncate">@Describe(note)</h2>
                         <div class="d-flex gap-1 flex-none">
                             <button class="btn btn-sm btn-outline-secondary" @onclick="() => Edit(note)">Edit</button>
-                            <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = note">✕</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _history = note">History</button>
+                            <button class="btn btn-sm btn-outline-danger" aria-label="@($"Delete {Describe(note)}")" @onclick="() => _confirmDelete = note">✕</button>
                         </div>
                     </div>
-                    <div class="widget-body markdown-body"><LiveMarkdown Content="@note.Content" OwnerId="@note.Id" /></div>
-                    <div class="tile-meta mt-2">Updated @note.UpdatedAt.ToString("d MMM yyyy HH:mm")</div>
+                    <div class="widget-body markdown-body"><LiveMarkdown Content="@note.Content" OwnerId="@note.Id" Checklist="true" /></div>
+                    <div class="tile-meta mt-2 d-flex flex-wrap align-items-center gap-2">
+                        <span>Updated @note.UpdatedAt.ToString("d MMM yyyy HH:mm")@(note.UpdatedBy.Length > 0 ? $" by {note.UpdatedBy}" : "")</span>
+                        @if (ticked > 0)
+                        {
+                            <button class="btn btn-link btn-sm p-0 ms-auto" @onclick="() => _confirmReset = note">
+                                Reset checklist (@ticked ticked)
+                            </button>
+                        }
+                    </div>
                 </div>
             </div>
         }
@@ -56,6 +74,12 @@ else
                 <div class="panel p-3 markdown-body" style="min-height: 20rem">
                     <LiveMarkdown Content="@_editing.Content" OwnerId="@_editingId" />
                 </div>
+                @if (Checklists.MayHaveItems(_editing.Content))
+                {
+                    <p class="tile-meta mt-1 mb-0">
+                        The preview shows the boxes as written. Ticks made on the note are kept separately and stay on their items when you save.
+                    </p>
+                }
             </div>
         </div>
         </ChildContent>
@@ -69,18 +93,43 @@ else
 @if (_confirmDelete is not null)
 {
     <ConfirmDialog Title="Delete this note?"
-                   Message="@($"“{Describe(_confirmDelete)}” will be gone for good.")"
+                   Message="@($"“{Describe(_confirmDelete)}” can be brought back from Recently deleted for {(int)NotesStore.DeletedFor.TotalDays} days.")"
                    OnCancel="() => _confirmDelete = null"
                    OnConfirm="DeleteAsync" />
+}
+
+@if (_confirmReset is not null)
+{
+    <ConfirmDialog Title="Reset this checklist?"
+                   Message="@($"Every box in “{Describe(_confirmReset)}” will be unticked, for everyone. The note's text is not changed, and the reset is recorded in What changed.")"
+                   ConfirmText="Reset"
+                   OnCancel="() => _confirmReset = null"
+                   OnConfirm="ResetAsync" />
+}
+
+@if (_history is not null)
+{
+    <NoteHistory Note="_history" OnClose="() => _history = null" OnRestored="RestoredAsync" />
+}
+
+@if (_showDeleted)
+{
+    <RecentlyDeletedNotes TabId="@Tab.Id" OnClose="() => _showDeleted = false" OnRestored="LoadAsync" />
 }
 
 @code {
     [Parameter, EditorRequired] public Tab Tab { get; set; } = default!;
 
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
     private IReadOnlyList<NotesStore.Note> _notes = [];
     private Draft? _editing;
     private string? _editingId;
     private NotesStore.Note? _confirmDelete;
+    private NotesStore.Note? _confirmReset;
+    private NotesStore.Note? _history;
+    private bool _showDeleted;
+    private bool _disposed;
 
     private sealed class Draft
     {
@@ -89,6 +138,8 @@ else
     }
 
     private static string Describe(NotesStore.Note note) => note.Title is { Length: > 0 } ? note.Title : "Untitled";
+
+    protected override void OnInitialized() => Ticks.Changed += OnTicksChanged;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -115,7 +166,61 @@ else
         Nav.NavigateTo(uri.GetLeftPart(UriPartial.Path) + $"#note-{asked}", replace: true);
     }
 
-    private async Task LoadAsync() => _notes = await Notes.ForTabAsync(Tab.Id);
+    private async Task LoadAsync()
+    {
+        var tab = Tab.Id;
+        _notes = await Offload.Run(ct => Notes.ForTabAsync(tab, ct));
+        LoadTicks();
+    }
+
+    /// <summary>
+    /// Reads the ticks of every note with a checklist, on the pool, so the "Reset checklist"
+    /// button knows whether there is anything to reset. The boxes ask for the same notes at
+    /// the same moment, and the store makes each note one query for all of them.
+    /// </summary>
+    private void LoadTicks()
+    {
+        if (!RendererInfo.IsInteractive)
+            return;
+        foreach (var note in _notes)
+        {
+            if (!Checklists.MayHaveItems(note.Content) || Ticks.TryCached(note.Id, out _))
+                continue;
+            _ = LoadTicksAsync(note.Id);
+        }
+    }
+
+    private async Task LoadTicksAsync(string noteId)
+    {
+        try
+        {
+            await Offload.Run(ct => Ticks.TicksAsync(noteId, ct));
+            if (!_disposed)
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception)
+        {
+            // The boxes say so themselves; the button simply stays hidden.
+        }
+    }
+
+    /// <summary>How many of the note's items are ticked, from memory; zero until read.</summary>
+    private int TickCount(NotesStore.Note note) =>
+        Checklists.MayHaveItems(note.Content) && Ticks.TryCached(note.Id, out var ticks) ? ticks.Count : 0;
+
+    private void OnTicksChanged(string noteId)
+    {
+        if (_disposed || _notes.All(n => n.Id != noteId))
+            return;
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed)
+                StateHasChanged();
+        });
+    }
+
+    private async Task<string> WhoAsync() =>
+        Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name } ? name : "";
 
     private void NewNote()
     {
@@ -133,16 +238,54 @@ else
     {
         if (_editing is null)
             return;
-        await Notes.SaveAsync(_editingId, Tab.Id, _editing.Title, _editing.Content);
+        var draft = _editing;
+        var by = await WhoAsync();
+        var (editingId, tab) = (_editingId, Tab.Id);
+        await Offload.Run(async ct =>
+        {
+            var id = await Notes.SaveAsync(editingId, tab, draft.Title, draft.Content, by, ct);
+            // Ticks follow their items to the new text (Checklists.Reconcile).
+            await NoteChecklists.ReconcileAsync(id, draft.Content, ct);
+            return id;
+        });
         _editing = null;
         await LoadAsync();
     }
 
     private async Task DeleteAsync()
     {
-        if (_confirmDelete is not null)
-            await Notes.DeleteAsync(_confirmDelete.Id);
+        if (_confirmDelete is { } note)
+        {
+            var by = await WhoAsync();
+            await Offload.Run(async ct =>
+            {
+                await Notes.DeleteAsync(note.Id, by, ct);
+                return true;
+            });
+        }
         _confirmDelete = null;
         await LoadAsync();
+    }
+
+    private async Task ResetAsync()
+    {
+        if (_confirmReset is { } note)
+        {
+            var by = await WhoAsync();
+            await Offload.Run(ct => NoteChecklists.ResetAsync(note.Id, note.Title, by, ct));
+        }
+        _confirmReset = null;
+    }
+
+    private async Task RestoredAsync()
+    {
+        _history = null;
+        await LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Ticks.Changed -= OnTicksChanged;
     }
 }

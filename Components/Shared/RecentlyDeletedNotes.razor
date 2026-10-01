@@ -1,0 +1,194 @@
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Logging
+@inject NotesStore Notes
+@inject NoteChecklists NoteChecklists
+@inject Offload Offload
+@inject ILogger<RecentlyDeletedNotes> Log
+
+@* Notes deleted from one notes tab in the last thirty days, each one a button away from
+   being back — under its own id, so its history and its checklist ticks come back with it. *@
+
+<Modal Title="Recently deleted" Size="lg" OnClose="() => OnClose.InvokeAsync()">
+    <ChildContent>
+        <p class="tile-meta">
+            A deleted note can be brought back for @((int)NotesStore.DeletedFor.TotalDays) days, with its history.
+        </p>
+        @if (!_listed)
+        {
+            <div class="tile-meta">Loading…</div>
+        }
+        else if (_deleted.Count == 0)
+        {
+            <div class="empty-state">Nothing deleted from this tab recently.</div>
+        }
+        else
+        {
+            <ul class="list-group">
+                @foreach (var note in _deleted)
+                {
+                    <li class="list-group-item">
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="flex-grow-1" style="min-width: 0">
+                                <div class="fw-semibold text-truncate">@(note.Title is { Length: > 0 } ? note.Title : "Untitled")</div>
+                                <div class="small tile-meta">
+                                    Deleted @note.KeptAt.ToString("d MMM yyyy HH:mm")@(note.WrittenBy.Length > 0 ? $" by {note.WrittenBy}" : "")
+                                    · @note.Size.ToString("N0") characters
+                                </div>
+                            </div>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleAsync(note)"
+                                    aria-expanded="@(_shown?.Id == note.Id)">
+                                @(_shown?.Id == note.Id ? "Hide" : "Show")
+                            </button>
+                            <button class="btn btn-sm btn-primary" disabled="@_busy" @onclick="() => RestoreAsync(note)">Restore</button>
+                        </div>
+                        @if (_shown?.Id == note.Id)
+                        {
+                            <div class="panel p-3 mt-2 markdown-body">
+                                @if (_shownText is null)
+                                {
+                                    <span class="tile-meta">Loading…</span>
+                                }
+                                else
+                                {
+                                    <LiveMarkdown Content="@_shownText" OwnerId="@note.NoteId" />
+                                }
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+        @if (_error is not null)
+        {
+            <div class="alert alert-danger mt-2 mb-0" role="alert">@_error</div>
+        }
+    </ChildContent>
+    <Footer>
+        <button class="btn btn-secondary btn-sm" @onclick="() => OnClose.InvokeAsync()">Close</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter, EditorRequired] public string TabId { get; set; } = "";
+
+    /// <summary>After a note has been brought back.</summary>
+    [Parameter] public EventCallback OnRestored { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private IReadOnlyList<NotesStore.NoteVersion> _deleted = [];
+    private bool _listed;
+    private bool _busy;
+    private string? _error;
+    private NotesStore.NoteVersion? _shown;
+    private string? _shownText;
+    private string? _loadedFor;
+    private readonly CancellationTokenSource _gone = new();
+
+    protected override void OnParametersSet()
+    {
+        if (_loadedFor == TabId || !RendererInfo.IsInteractive)
+            return;
+        _loadedFor = TabId;
+        _ = ListAsync();
+    }
+
+    private async Task ListAsync()
+    {
+        try
+        {
+            var deleted = await Offload.Run(ct => Notes.RecentlyDeletedAsync(TabId, ct), _gone.Token);
+            await InvokeAsync(() =>
+            {
+                _deleted = deleted;
+                _listed = true;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not list recently deleted notes");
+            await InvokeAsync(() =>
+            {
+                _listed = true;
+                _error = "Could not read what was deleted. Try again in a moment.";
+                StateHasChanged();
+            });
+        }
+    }
+
+    private async Task ToggleAsync(NotesStore.NoteVersion note)
+    {
+        if (_shown?.Id == note.Id)
+        {
+            _shown = null;
+            return;
+        }
+        _shown = note;
+        _shownText = null;
+        try
+        {
+            var full = await Offload.Run(ct => Notes.VersionAsync(note.Id, ct), _gone.Token);
+            if (_shown?.Id == note.Id)
+                _shownText = full?.Content ?? "";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not read a deleted note");
+            _error = "Could not read that note. Try again in a moment.";
+        }
+    }
+
+    private async Task RestoreAsync(NotesStore.NoteVersion note)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var by = "";
+            if (Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name })
+                by = name;
+            var back = await Offload.Run(async ct =>
+            {
+                var restored = await Notes.RestoreVersionAsync(note.Id, by, ct);
+                if (restored is not null)
+                    await NoteChecklists.ReconcileAsync(restored.NoteId, restored.Content, ct);
+                return restored;
+            });
+            if (back is null)
+            {
+                _error = "That note has just been tidied away — it was deleted too long ago.";
+                return;
+            }
+            _deleted = [.. _deleted.Where(d => d.NoteId != note.NoteId)];
+            await OnRestored.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not restore a deleted note");
+            _error = "Could not bring that note back. Nothing was changed.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _gone.Cancel();
+        _gone.Dispose();
+    }
+}
