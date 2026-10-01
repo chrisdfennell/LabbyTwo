@@ -52,6 +52,14 @@ public sealed record MonitorStatus(
     /// <summary>Whether LabbyTwo can see the lab, as of the last sweep. Not positional, so a test that builds one without it still does.</summary>
     public Blindness Blindness { get; init; } = Blindness.Clear;
 
+    /// <summary>
+    /// How long each of the last few sweeps took, oldest first — up to
+    /// <see cref="HealthMonitor.SweepsRemembered"/>. One slow sweep is a slow host; half of
+    /// them running past the period is the monitor falling behind, and only a run of them
+    /// can tell the two apart.
+    /// </summary>
+    public IReadOnlyList<TimeSpan> RecentSweeps { get; init; } = [];
+
     /// <summary>How long the sweep in progress has been going, or null if none is.</summary>
     public TimeSpan? RunningFor(DateTimeOffset now) => CurrentSweepStarted is { } started ? now - started : null;
 
@@ -84,6 +92,10 @@ public sealed partial class HealthMonitor
     private int _pendingProbed;
     private int _lastSweepProbed;
     private string? _lastSweepError;
+    private readonly Queue<TimeSpan> _recentSweeps = new();
+
+    /// <summary>How many sweep durations <see cref="MonitorStatus.RecentSweeps"/> keeps.</summary>
+    public const int SweepsRemembered = 10;
 
     /// <summary>
     /// What the monitor has been doing. Built from memory only, so it is safe to read on
@@ -117,7 +129,11 @@ public sealed partial class HealthMonitor
                     _restore == RestoreOutcome.Running && _restoreStarted is { } began ? now - began : _restoreDuration,
                     _restoreError,
                     _sweeps, _currentSweep, _lastSweepStarted, _lastSweepFinished, _lastSweepDuration,
-                    _lastSweepProbed, _lastSweepError, inFlight, slowest) { Blindness = Blindness };
+                    _lastSweepProbed, _lastSweepError, inFlight, slowest)
+                {
+                    Blindness = Blindness,
+                    RecentSweeps = [.. _recentSweeps],
+                };
             }
         }
     }
@@ -179,6 +195,9 @@ public sealed partial class HealthMonitor
                 _lastSweepProbed = Volatile.Read(ref _pendingProbed);
                 _lastSweepError = error;
                 _sweeps++;
+                _recentSweeps.Enqueue(finished - started);
+                while (_recentSweeps.Count > SweepsRemembered)
+                    _recentSweeps.Dequeue();
             }
         }
     }

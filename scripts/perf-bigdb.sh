@@ -452,6 +452,18 @@ if [ -n "$browser_said" ]; then
   record "Dashboard query, by the health page's clock" "$(printf '%s' "$browser_said" | sed -n 's/^query_ms=\([0-9]*\).*/\1/p')" 1000
 fi
 
+# The storage page reads the database's header and nothing else when it opens; what takes
+# the space comes from the survey, which the job runs twice a day and the button runs now.
+# Timed from navigating to the survey's table being drawn, button press included.
+timed_get "GET /settings/storage" /settings/storage "What takes the space" 5000
+timed_browser "Storage page: survey run and listed" /settings/storage 15000 \
+  --click-text "Survey now" \
+  --until "(() => {
+    const rows = document.querySelectorAll('table tbody tr').length;
+    const said = [...document.querySelectorAll('p')].map(p => p.textContent.replace(/\\s+/g, ' ')).find(t => /^\\s*Surveyed /.test(t));
+    return rows > 0 && said ? rows + ' connections listed; ' + said.trim().slice(0, 90) : '';
+  })()"
+
 # ---- The log ---------------------------------------------------------------------------
 #
 # A big database is also where a busy timeout or a job that gives up shows first, and
@@ -497,6 +509,16 @@ while IFS='|' read -r key took detail; do
     restore)      name="Query: what restore reads at startup"; budget=1000 ;;
     rollup)       name="Rollup: a day behind, folded"; budget=120000 ;;
     rollup-batch) name="Rollup: longest hold on the write lock"; budget=2000 ;;
+    # The storage page's header reads, on every visit.
+    storage-facts) name="Storage: the file's facts"; budget=200 ;;
+    # A few seeks per series, for every series; the detail says how many MB it read and how
+    # far its estimate was from the exact count below.
+    survey)       name="Storage: survey what takes the space"; budget=5000 ;;
+    # Every row of every series, one by one — what the survey is measured against, never
+    # run by the app. Informational; the budget only catches a hang.
+    survey-exact) name="Storage: count every series exactly (not in the app)"; budget=300000 ;;
+    # On a runner's SSD. The NAS figure is minutes; the page says so.
+    compact)      name="Storage: compact (VACUUM) after the rollup"; budget=300000 ;;
     *)            name="$key"; budget=1000 ;;
   esac
   say "$name — $detail"

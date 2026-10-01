@@ -744,12 +744,46 @@ While it cannot see:
   container — this is not your services*;
 - **What changed** gets one line when it starts and one when it ends;
 - if it lasts more than 15 minutes, you get **one** notification saying so — a monitor that
-  has quietly stopped seeing is worth knowing about.
+  has quietly stopped seeing is worth knowing about — and one more when it ends (see below).
 
 A check that succeeds is always recorded — an answer is proof. It ends after two clean
 sweeps in a row, and anything that really went down meanwhile is then reported by the next
 checks in the usual way. Giving LabbyTwo's container a DNS server with `dns:` in
 docker-compose.yml makes it independent of Docker's own resolver, which is the usual cause.
+
+### When LabbyTwo itself is struggling
+
+LabbyTwo also tells you, through your ordinary alert channels, when it is the thing that
+needs attention. Every 30 seconds it looks at what it already knows about itself — the
+monitor's own timings, the background jobs' last runs, whether readings are being saved, how
+fast the database grows and how much disk is left — and never asks the database to find out,
+so it can still say so when the database is what is stuck.
+
+| It tells you when | Starts | Ends |
+|---|---|---|
+| Checks keep running late | 5 of the last 10 rounds took longer than the probe interval | 3 or fewer, for 5 minutes |
+| A round of checks is stuck, or the monitor has stopped | a round running for two intervals, or none started for three | a round finishes |
+| LabbyTwo can't see the lab | 15 minutes of it (see above) | two clean rounds |
+| A background job keeps failing | 3 runs in a row (2 for a job that runs hourly or less often) | a run that works |
+| Readings can't be saved ("database is locked") | failures in 3 of the last 10 minutes | 10 minutes without one |
+| The database grows much faster than usual | over 50 MB in a day *and* 3× its usual day, for an hour | under 2× usual for an hour |
+| The disk the database is on is nearly full | under 1 GB or 5% free, for 5 minutes | over 1.5 GB and 7.5%, for 10 minutes |
+| Too many slow database statements | 50 over `Labby__SlowQueryMs`, or a minute spent in them, in 10 minutes | half that, for 10 minutes |
+
+Each is **one** notification when it starts, saying what it measured and what usually fixes
+it, and one when it ends — never a stream: a number hovering at the line is still one alert,
+because it has to fall further than it rose, and stay there, before it counts as over. "Usual"
+growth is the median day of the week before, from the database's size noted once an hour
+(and kept across restarts); until three days are known that check waits. The slow-statement
+budget only exists while the slow-query log is on.
+
+They are held like any other alert: by maintenance, by a mute window that covers everything,
+and by quiet hours in either mode — LabbyTwo's own trouble is worth knowing about at
+breakfast — then sent when the hold lifts, if it is still true. A problem that ends before
+anyone was told is never announced as over. What has been announced is kept in the database,
+so a restart neither repeats it nor forgets to say when it ends. The **health** page lists what
+is current as findings, and **Tell me when LabbyTwo itself is struggling** there turns each one
+on or off.
 
 ### What changed, and incidents
 
@@ -1939,6 +1973,55 @@ range is ignored with a warning in the log.
 
 `GET /healthz` answers `200 ok` without authentication, and the image has a matching
 `HEALTHCHECK`.
+
+### Storage: what takes the space, and keeping less
+
+**Settings → Storage** (also linked from the health page) shows what the database holds:
+its size on disk and how much of that is free space inside the file, the free space on the
+disk, how much it grew in the last day against its usual day, and — per connection, and per
+metric within each — how many readings and hourly summaries it keeps, how many megabytes
+that is, and how much it writes a day.
+
+Those figures come from a **survey**, not a count. Counting every series row by row means
+reading the whole history index — on a 6.2-million-row database, 266 MB of it — which on NAS
+disks is exactly the load that made pages slow in 1.10.0. The survey instead finds each
+series' first and last reading and counts a few short windows spread across it (six of three
+hours each, a couple of index pages apiece), then scales up: readings arrive at a steady
+rate, so that is the count to within a few per cent even across a gap when something was off.
+On that database it read 12 MB instead of 266 and was within 0.1% for every series. Bytes are
+worked out from how SQLite lays out each row and how full LabbyTwo's way of writing leaves
+the pages. A background job surveys twice a day, a series at a time with pauses in between,
+and the page shows the last result; **Survey again** runs it on request. Opening the page
+reads nothing but the database's header.
+
+**Keeping less, per connection.** Each connection can keep its own number of days of raw
+readings — a week for a weather station that reports thirty numbers every thirty seconds, a
+month for the NAS — instead of `LABBY_RETENTION_DAYS`; leave it empty for the default. Older
+readings are folded into hourly summaries as usual, so charts further back still draw, one
+point an hour: a chart longer than a connection's raw window is drawn by the hour all the way
+across.
+
+**Not recording a metric.** Expand a connection and turn **Record history** off for a reading
+nobody charts. Its live value still shows on every card and still drives alert rules on the
+live value; only history stops. What it already recorded is folded into hourly summaries, so
+its past still charts. (A rule that compares a metric with its usual level needs its history,
+so leave those on.)
+
+Before you save, the page says what it would do — *about 310 MB would be freed*, or how much
+more a longer window will take once it fills up. Saving changes nothing on disk by itself:
+the ordinary tidy-up that runs every 15 minutes applies it, in the same short batches as
+always (an hour of every series per transaction, pausing as long as each took), so the
+monitor's writes are never held up. **Tidy up now** runs it straight away and reports what it
+freed. Freed space stays inside the file and is reused for new readings before the file
+grows; the log says how much each tidy-up freed.
+
+**Compact now** gives that free space back to the disk. The first time it rewrites the whole
+file (SQLite's `VACUUM`): minutes on NAS disks, about twice the database's size free while it
+runs, and no readings recorded until it has finished — the charts get a gap; pages, checks and
+alerts carry on. The dialog says all of this with your numbers, and refuses if the disk has
+not the room. Leave **Set the database up so that later compactions are quick** ticked and
+every compaction after that hands free pages back a few megabytes at a time, with nothing
+waiting. It never runs by itself.
 
 ## When a connection times out
 

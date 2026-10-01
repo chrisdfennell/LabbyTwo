@@ -264,4 +264,31 @@ public sealed class QueryPlanTests
             Assert.DoesNotContain(counts, step => step.StartsWith("SCAN changes", StringComparison.Ordinal));
         }
     }
+
+    [Fact]
+    public void The_storage_survey_seeks_and_counts_short_ranges_in_the_covering_index()
+    {
+        // The survey the storage page shows is built from these, per series, twice a day.
+        // Listing the series hops through the index; each series' ends are two seeks — not
+        // MIN and MAX side by side, which reads the whole range — and each sample window is
+        // a range count that never leaves the index.
+        AssertIndexOnly(Plan(HistoryStore.SeriesSql));
+
+        var ends = Plan(HistoryStore.SurveyRawEndsSql);
+        AssertIndexOnly(ends);
+        Assert.Equal(2, ends.Count(step => step.StartsWith("SEARCH samples", StringComparison.Ordinal)));
+
+        AssertIndexOnly(Plan(HistoryStore.SurveyRawCountSql));
+    }
+
+    [Fact]
+    public void The_storage_survey_reads_the_summaries_by_their_key_too()
+    {
+        foreach (var sql in new[] { HistoryStore.HourlySeriesSql, HistoryStore.SurveyHourlyEndsSql, HistoryStore.SurveyHourlyCountSql })
+        {
+            var plan = Plan(sql);
+            Assert.DoesNotContain(plan, step => step.StartsWith("SCAN samples_hourly", StringComparison.Ordinal));
+            Assert.Contains(plan, step => step.StartsWith("SEARCH samples_hourly USING PRIMARY KEY", StringComparison.Ordinal));
+        }
+    }
 }

@@ -5,6 +5,7 @@
 @inject HealthMonitor Monitor
 @inject DnsCheck DnsChecker
 @inject ConfigStore Config
+@inject SelfWatch Watch
 
 <PageTitle>LabbyTwo health · LabbyTwo</PageTitle>
 
@@ -18,7 +19,7 @@
         <h1>🩺 LabbyTwo health</h1>
         <p class="subtitle">
             Whether LabbyTwo itself is working — not the things it watches.
-            <a href="settings">Back to Settings</a> · <a href="api/health/details" target="_blank">as JSON</a>
+            <a href="settings">Back to Settings</a> · <a href="settings/storage">Storage</a> · <a href="api/health/details" target="_blank">as JSON</a>
         </p>
     </div>
 </div>
@@ -296,6 +297,7 @@
                 <div class="form-text">
                     Counting reads the whole table. The timing runs the query every live card makes while a
                     dashboard draws, once per connection — anything over a second there is felt on every page load.
+                    <a href="settings/storage">Storage</a> shows what takes the space, and keeps less of it.
                 </div>
             </div>
         </div>
@@ -377,6 +379,44 @@
             </div>
         </div>
     </div>
+
+    <div class="col-12">
+        <div class="widget">
+            <div class="widget-head"><h2 class="widget-title">Tell me when LabbyTwo itself is struggling</h2></div>
+            <div class="widget-body">
+                <p class="tile-meta small">
+                    Sent through your alert channels once when it starts and once when it clears, and held by maintenance, a
+                    mute window covering everything and quiet hours like any other alert — then sent when they end, if it is
+                    still true. Checked every 30 seconds from what LabbyTwo already knows, without asking the database.
+                </p>
+                @if (_off is null)
+                {
+                    <p class="tile-meta mb-0">Reading…</p>
+                }
+                else
+                {
+                    <ul class="list-unstyled mb-2">
+                        @foreach (var check in Enum.GetValues<SelfCheck>())
+                        {
+                            var on = !_off.Contains(check);
+                            var (state, css) = CheckState(check, on);
+                            <li class="d-flex align-items-start gap-2 mb-1" @key="check">
+                                <div class="form-check mb-0 flex-grow-1">
+                                    <input class="form-check-input" type="checkbox" id="@($"self-{check}")" checked="@on"
+                                           @onchange="e => SetCheck(check, e.Value is true)" />
+                                    <label class="form-check-label small" for="@($"self-{check}")">@SelfWatchRules.Describe(check)</label>
+                                </div>
+                                <span class="small @css text-nowrap">@state</span>
+                            </li>
+                        }
+                    </ul>
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@(!_offChanged || _savingOff)" @onclick="SaveChecksAsync">
+                        @(_savingOff ? "Saving…" : "Save")
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
 </div>
 
 @code {
@@ -393,6 +433,10 @@
     private bool _counting;
     private SystemHealth.QueryTiming? _timing;
     private bool _timingQuery;
+
+    private HashSet<SelfCheck>? _off;
+    private bool _offChanged;
+    private bool _savingOff;
 
     private Timer? _clock;
     private readonly CancellationTokenSource _gone = new();
@@ -425,6 +469,9 @@
         try
         {
             _names = await Health.NamesAsync(_gone.Token);
+            // The settings are cached, so this is memory — but on the pool all the same, since
+            // after a restart the first read of them is a query.
+            _off = [.. await Task.Run(() => Watch.DisabledAsync(_gone.Token), _gone.Token)];
             _db = await Health.DatabaseAsync(_gone.Token);
             await InvokeAsync(StateHasChanged);
         }
@@ -463,6 +510,7 @@
     private IReadOnlyList<SystemHealth.Finding> Findings()
     {
         var findings = SystemHealth.Assess(_live, _dns, Monitor.RestoreDeadline).ToList();
+        findings.AddRange(SelfFindings(findings, _live.At));
         if (_db?.Error is { } dbError)
             findings.Add(new(SystemHealth.Level.Bad, "Database", $"Could not read the database: {dbError}"));
         if (_timing is { Error: { } timingError })
@@ -474,6 +522,87 @@
                 "but a query this small taking that long usually means the disk is busy with something else. " +
                 "Setting Labby__SlowQueryMs=200 makes the log say what."));
         return findings;
+    }
+
+    /// <summary>
+    /// What LabbyTwo's watch on itself has noticed, as findings. A stuck sweep and a blind
+    /// spell are already findings of their own above, with the live numbers, so only the
+    /// others are added; a job the watch says keeps failing replaces the plainer "failed last
+    /// time" for the same job.
+    /// </summary>
+    private IEnumerable<SystemHealth.Finding> SelfFindings(List<SystemHealth.Finding> findings, DateTimeOffset now)
+    {
+        foreach (var alert in Watch.Current.OrderBy(a => a.FirstSeen))
+        {
+            if (alert.Check is SelfCheck.SweepStuck or SelfCheck.Blind || _off?.Contains(alert.Check) == true)
+                continue;
+            if (alert.Check == SelfCheck.JobFailing && alert.Key.StartsWith("job:", StringComparison.Ordinal))
+            {
+                var job = $"\"{alert.Key[4..]}\"";
+                findings.RemoveAll(f => f.Area == "Jobs" && f.Text.Contains(job, StringComparison.Ordinal));
+            }
+
+            var note = !alert.Firing
+                ? $" (Noticed {Ago.Since(alert.FirstSeen, now)}; reported if it lasts {SelfWatchRules.Words(SelfWatchRules.Sustain(alert.Check))}.)"
+                : alert.Notified
+                    ? $" A notification went out {Ago.Since(alert.Since!.Value, now)}."
+                    : " The notification is waiting — for quiet hours, maintenance or a mute window to end, or for an alert channel.";
+            yield return new SystemHealth.Finding(alert.Firing ? alert.Level : SystemHealth.Level.Warn, "Watching itself",
+                $"{alert.Title}. {alert.Body}{note}");
+        }
+    }
+
+    /// <summary>How one check stands, for the list of them: off, reported, being watched, fine, or not judged yet.</summary>
+    private (string Text, string? Css) CheckState(SelfCheck check, bool on)
+    {
+        if (!on)
+            return ("off", "tile-meta");
+        var current = Watch.Current.Where(a => a.Check == check).ToList();
+        if (current.Any(a => a.Firing))
+            return (current.Any(a => a.Notified) ? "reported" : "reported, notice waiting", "text-danger");
+        if (current.Count > 0)
+            return ("watching", "text-warning");
+        var readings = Watch.Readings.Where(r => r.Check == check).ToList();
+        if (readings.Count == 0 || readings.All(r => r.State == SelfState.Unknown))
+            return (check switch
+            {
+                SelfCheck.SlowQueries => "slow-query log is off",
+                SelfCheck.DatabaseGrowth => "learning the usual rate",
+                SelfCheck.JobFailing when readings.Count == 0 => "no jobs",
+                _ => "not judged yet",
+            }, "tile-meta");
+        return ("fine", "text-success");
+    }
+
+    private void SetCheck(SelfCheck check, bool on)
+    {
+        if (_off is null)
+            return;
+        if (on)
+            _off.Remove(check);
+        else
+            _off.Add(check);
+        _offChanged = true;
+    }
+
+    private async Task SaveChecksAsync()
+    {
+        if (_off is null)
+            return;
+        _savingOff = true;
+        try
+        {
+            var off = _off.ToList();
+            await Task.Run(() => Watch.SaveDisabledAsync(off, _gone.Token), _gone.Token);
+            _offChanged = false;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            _savingOff = false;
+        }
     }
 
     private async Task CheckDnsAsync()

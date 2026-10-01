@@ -159,6 +159,7 @@ public sealed class ConfigStore(Db db, IDataProtectionProvider protection, IServ
             DELETE FROM samples WHERE connection_id = $id;
             DELETE FROM samples_hourly WHERE connection_id = $id;
             DELETE FROM status_events WHERE connection_id = $id;
+            DELETE FROM history_policy WHERE connection_id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id);
         await cmd.ExecuteNonQueryAsync(ct);

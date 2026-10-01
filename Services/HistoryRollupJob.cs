@@ -38,9 +38,12 @@ public sealed class HistoryRollupJob(HistoryStore history, ILogger<HistoryRollup
 
         if (result.Batches > 0)
         {
+            // What it freed is inside the file: SQLite reuses the pages for new readings rather
+            // than shrinking the file, which is what "Compact now" on the storage page is for.
             log.LogInformation(
-                "Summarised old samples into {Hours} hourly row(s) and removed {Rows} raw row(s) in {Batches} batch(es){More}",
-                result.HoursWritten, result.RowsDeleted, result.Batches,
+                "Summarised old samples into {Hours} hourly row(s) and removed {Rows} raw row(s) in {Batches} batch(es), " +
+                "freeing {Freed} inside the database{More}",
+                result.HoursWritten, result.RowsDeleted, result.Batches, StorageFormat.Bytes(result.FreedBytes),
                 result.Finished ? "" : "; more remain for the next run");
         }
     }

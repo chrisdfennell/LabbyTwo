@@ -24,6 +24,12 @@ public sealed record JobRun(string Name, DateTimeOffset? At, TimeSpan Duration, 
     public string? LastError { get; init; }
 
     public DateTimeOffset? LastErrorAt { get; init; }
+
+    /// <summary>
+    /// Runs in a row that have failed, back to zero on the first that works. What tells a job
+    /// that is broken from one that met a network blip once.
+    /// </summary>
+    public int ConsecutiveFailures { get; init; }
 }
 
 /// <summary>
@@ -127,6 +133,7 @@ public sealed class BackgroundJobRunner(
             Update(job, run => run with
             {
                 At = DateTimeOffset.Now, Duration = stopwatch.Elapsed, Ok = true, Message = "OK", RunningSince = null,
+                ConsecutiveFailures = 0,
             });
             log.LogDebug("Job {Job} ran in {Ms} ms", job.Name, stopwatch.ElapsedMilliseconds);
         }
@@ -143,7 +150,7 @@ public sealed class BackgroundJobRunner(
             Update(job, run => run with
             {
                 At = now, Duration = stopwatch.Elapsed, Ok = false, Message = message, RunningSince = null,
-                LastError = message, LastErrorAt = now,
+                LastError = message, LastErrorAt = now, ConsecutiveFailures = run.ConsecutiveFailures + 1,
             });
             log.LogError(ex, "Background job {Job} failed", job.Name);
         }

@@ -256,6 +256,15 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<BackgroundJobRunne
 builder.Services.AddSingleton<SystemHealth>();
 builder.Services.AddSingleton<DnsCheck>();
 
+// What takes the space, per connection and metric, and the tidy-up and compaction the
+// storage page starts. The survey that fills it is an IBackgroundJob and is discovered.
+builder.Services.AddSingleton<StorageManager>();
+
+// LabbyTwo telling you when it is the one in trouble — sweeps running late or stuck, jobs
+// failing, the database refusing writes or filling the disk — from what it keeps in memory.
+builder.Services.AddSingleton<SelfWatch>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SelfWatch>());
+
 // Login is opt-in: setting a password turns it on, otherwise LabbyTwo stays open on a
 // trusted LAN, which is how most home labs actually run.
 var authEnabled = options.Auth.Enabled;

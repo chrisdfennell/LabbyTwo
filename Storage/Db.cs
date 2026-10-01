@@ -184,6 +184,25 @@ public sealed class Db
     }
 
     /// <summary>
+    /// A connection of its own, closed for good when disposed rather than returned to the
+    /// pool, and never hooked by the query log. For the two jobs that want a connection to
+    /// themselves: the storage survey, which counts the pages its own statements read (the
+    /// query log resets that counter after every statement it sees), and a compaction, whose
+    /// VACUUM should not leave a connection in the pool that has just held the whole file.
+    /// </summary>
+    public async Task<SqliteConnection> OpenPrivateAsync(CancellationToken ct = default)
+    {
+        await EnsureSchemaAsync(ct);
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder(ConnectionString) { Pooling = false }.ToString());
+        await connection.OpenAsync(ct);
+        Prepare(connection);
+        return connection;
+    }
+
+    /// <summary>The slow-query log, when <see cref="LabbyOptions.SlowQueryMs"/> has switched it on; otherwise null.</summary>
+    public QueryLog? Queries => _queries;
+
+    /// <summary>
     /// What every connection needs and SQLite does not remember between them: both settings
     /// below belong to the connection, not the file, so setting them once when the schema is
     /// made (as busy_timeout used to be) covered that one connection and nothing else. Done
@@ -737,6 +756,20 @@ public sealed class Db
             message     TEXT    NOT NULL DEFAULT '',
             duration_ms INTEGER NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS ix_scheduled_runs_action ON scheduled_runs (action_id, id);
+        """,
+
+        // 33 — what history is kept where it differs from the global settings: a
+        // connection's own raw retention (metric '' — the whole connection), and metrics
+        // that are not recorded at all. A handful of rows, read whole once and held in
+        // memory, since every sweep's write consults them; the key is the only lookup.
+        // Self-contained, so it can sit before or after another branch's migration.
+        """
+        CREATE TABLE IF NOT EXISTS history_policy (
+            connection_id TEXT    NOT NULL,
+            metric        TEXT    NOT NULL DEFAULT '',
+            raw_days      INTEGER,
+            record        INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (connection_id, metric)) WITHOUT ROWID
         """,
     ];
 
