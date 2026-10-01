@@ -1,0 +1,181 @@
+@implements IDisposable
+@using System.Globalization
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject Registry Registry
+@inject DisplayUnits DisplayUnits
+@inject AlertRuleStore Rules
+@inject Offload Offload
+
+@* {{gauge: "QNAP NAS" / disk_percent}}: one reading as a ring or a bar the size of a word,
+   inside a sentence or a table cell. The reading is from memory, like {{metric}}; the lines
+   it is coloured against come from what is written, else the connection's alert rules,
+   else the metric's own hint (see MetricBands). The rules are cached by their store but
+   may be a database read the first time, so they are loaded off the render thread — the
+   gauge draws straight away, uncoloured, and takes its colour when they land.
+
+   It is a meter to assistive technology (role="meter" with aria-valuenow, -min, -max and a
+   value text that says the level in words), and the level is in the tooltip too, so the
+   colour is never the only thing saying it. Written on as few lines as possible, because
+   whitespace here lands in somebody's sentence. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_text is null)
+{
+    <span class="sc-value is-waiting" title="@(_title ?? "Loading…")">…</span>
+}
+else if (_value is null)
+{
+    <span class="sc-value is-waiting" title="@_title">—</span>
+}
+else if (_spec!.Style == GaugeStyle.Bar)
+{
+    <span class="md-gauge is-bar @(_spec.Medium ? "is-medium" : "is-small") @_level" role="meter" tabindex="0" aria-valuenow="@Num(_now)" aria-valuemin="@Num(_min)" aria-valuemax="@Num(_max)" aria-valuetext="@_valueText" aria-label="@_about" title="@_title"><span class="md-gauge-bar" aria-hidden="true"><span class="md-gauge-fill" style="width: @Pct(_fraction)%"></span>@foreach (var mark in _marks){<span class="md-gauge-mark" style="left: @Pct(mark)%"></span>}</span><span class="md-gauge-text" aria-hidden="true">@_text</span>@if (_label is not null){<span class="md-gauge-label" aria-hidden="true">@_label</span>}</span>
+}
+else
+{
+    <span class="md-gauge is-ring @(_spec.Medium ? "is-medium" : "is-small") @_level" role="meter" tabindex="0" aria-valuenow="@Num(_now)" aria-valuemin="@Num(_min)" aria-valuemax="@Num(_max)" aria-valuetext="@_valueText" aria-label="@_about" title="@_title"><svg class="md-gauge-ring" viewBox="0 0 36 36" aria-hidden="true" focusable="false"><circle class="md-gauge-track" cx="18" cy="18" r="14" pathLength="100" /><circle class="md-gauge-arc" cx="18" cy="18" r="14" pathLength="100" stroke-dasharray="@($"{Pct(_fraction)} 100")" transform="rotate(-90 18 18)" /></svg><span class="md-gauge-text" aria-hidden="true">@_text</span>@if (_label is not null){<span class="md-gauge-label" aria-hidden="true">@_label</span>}</span>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>What names can refer to. Null while it is being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private BackgroundLoad _load = default!;
+    private IReadOnlyList<AlertRule>? _rules;
+
+    private GaugeSpec? _spec;
+    private string? _problem;
+    private string? _text;
+    private string? _title;
+    private string? _about;
+    private string? _valueText;
+    private string? _label;
+    private string _level = "";
+    private double? _value;
+    private double _now, _min, _max, _fraction;
+    private IReadOnlyList<double> _marks = [];
+    private string? _connectionId;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnUpdated;
+        Latest.Changed += OnLatestChanged;
+        DisplayUnits.Changed += OnUpdated;
+        Rules.Changed += OnRulesChanged;
+        _load.Load("rules", ct => Offload.Run(c => Rules.AllAsync(c), ct), rules =>
+        {
+            _rules = rules;
+            Show();
+        });
+    }
+
+    protected override void OnParametersSet() => Show();
+
+    private void Show()
+    {
+        _problem = _text = _title = _about = _valueText = _label = null;
+        _value = null;
+        _level = "";
+        _marks = [];
+
+        if (GaugeShortcode.Read(Code, out var problem) is not { } spec)
+        {
+            _problem = $"{problem} ({Code.Source})";
+            return;
+        }
+        _spec = spec;
+        if (Scope is null)
+            return;
+
+        if (ShortcodeLookup.Connection(Scope.Connections, spec.Connection) is not { } connection)
+        {
+            _problem = $"No connection called “{spec.Connection}”. ({Code.Source})";
+            return;
+        }
+        _connectionId = connection.Id;
+        if (ShortcodeLookup.MetricKey(Registry, connection, spec.Metric, LiveReading.Reported(Health, Latest, connection.Id)) is not { } key)
+        {
+            _problem = $"{connection.Name} has not reported a metric called “{spec.Metric}”. ({Code.Source})";
+            return;
+        }
+
+        var metric = Registry.Metric(connection, key);
+        var units = DisplayUnits.Current;
+        _label = spec.Label;
+        _about = spec.Label ?? $"{connection.Name} · {metric.Label}";
+        _text = "";
+        _value = LiveReading.Value(Health, Latest, connection.Id, key);
+        if (_value is not { } value)
+        {
+            _title = $"{connection.Name} · {metric.Label}: no reading in the last {LiveReading.StoredWindow.TotalHours:0} hours";
+            return;
+        }
+
+        // Until the rules are in, only lines written in the shortcode colour it: guessing
+        // from the hint and then turning a different colour a moment later would be worse.
+        var bands = _rules is null && spec.Warn is null && spec.Crit is null
+            ? MetricBands.None
+            : MetricBands.For(_rules, connection.Id, key, metric, spec.Warn, spec.Crit);
+        var (min, max) = GaugeShortcode.Scale(spec, metric, bands);
+
+        string Format(double stored) => Units.Format(metric, stored, units);
+        _text = Format(value);
+        _level = bands.Level(value);
+        _fraction = GaugeShortcode.Fraction(value, min, max);
+        _marks = [.. new[] { bands.Warn, bands.Crit }
+            .Where(m => m is { } line && line > min && line < max)
+            .Select(m => GaugeShortcode.Fraction(m!.Value, min, max))];
+
+        // The meter's numbers in the units it is read in, so a screen reader hears what the
+        // page shows. The conversions are linear, so the proportions do not move.
+        _now = Units.Display(value, metric.Unit, units).Value;
+        _min = Units.Display(min, metric.Unit, units).Value;
+        _max = Units.Display(max, metric.Unit, units).Value;
+
+        var word = MetricBands.Word(_level);
+        _valueText = word.Length > 0 ? $"{_text}, {word}" : _text;
+        var lines = bands.Describe(Format);
+        _title = $"{connection.Name} · {metric.Label}: {_text} of {Format(max)}"
+                 + (word.Length > 0 ? $" — {word}" : "")
+                 + (lines.Length > 0 ? $" ({lines})" : "");
+    }
+
+    private static string Num(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static string Pct(double fraction) => (fraction * 100).ToString("0.#", CultureInfo.InvariantCulture);
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Show();
+        StateHasChanged();
+    });
+
+    private void OnLatestChanged(string connectionId)
+    {
+        if (connectionId == _connectionId || _connectionId is null)
+            OnUpdated();
+    }
+
+    private void OnRulesChanged() =>
+        _ = _load.Refresh("rules", ct => Offload.Run(c => Rules.AllAsync(c), ct), rules =>
+        {
+            _rules = rules;
+            Show();
+        });
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnLatestChanged;
+        DisplayUnits.Changed -= OnUpdated;
+        Rules.Changed -= OnRulesChanged;
+        _load.Dispose();
+    }
+}

@@ -86,6 +86,9 @@
                             <option value="uptime">Uptime, last 30 days</option>
                             <option value="since">Time since it changed</option>
                             <option value="gauge">A gauge card</option>
+                            <option value="gauge-inline">A small gauge in the sentence</option>
+                            <option value="table">A live table of readings</option>
+                            <option value="diagram">A diagram of how things connect</option>
                             <option value="widget">An existing card</option>
                             <option value="down">What’s down right now</option>
                             <option value="if-down">A section shown while it’s down</option>
@@ -317,7 +320,7 @@
                                 </select>
                             </div>
                         }
-                        @if (_kind is "metric" or "gauge" or "forecast" or "sparkline" or "chart")
+                        @if (_kind is "metric" or "gauge" or "gauge-inline" or "table" or "forecast" or "sparkline" or "chart")
                         {
                             <div class="col-sm-4">
                                 <label class="form-label small mb-1" for="@Id("metric")">Metric</label>
@@ -415,6 +418,8 @@
             : null,
         "details" => Details(_title.Trim().Length > 0 ? _title.Trim() : "More"),
         "callout" => $"> [!{_callout.ToUpperInvariant()}]\n> Write it here.",
+        // A starting sketch to edit: the connection, if one is chosen, behind a router.
+        "diagram" => $"```diagram\nInternet -> Router -> \"{(_connectionName.Length > 0 ? _connectionName.Replace("\"", "") : "NAS")}\"\n```",
         _ when _connectionName.Length == 0 => null,
         "sparkline" => _metric.Trim().Length > 0
             ? Shortcodes.Write("sparkline", [_connectionName, $"{_metric.Trim()} {_window}"])
@@ -432,8 +437,15 @@
         "gauge" => _metric.Trim().Length > 0
             ? Shortcodes.Write("card", ["gauge"], [new("connection", _connectionName), new("metric", _metric.Trim())])
             : null,
+        "gauge-inline" => _metric.Trim().Length > 0 ? Shortcodes.Write("gauge", [_connectionName, _metric.Trim()]) : null,
+        // One row to start from; more connections go before the slash, more columns after it.
+        "table" => $"{{{{table: {TableName(_connectionName)} / status{(_metric.Trim().Length > 0 ? ", " + TableName(_metric.Trim()) : "")}}}}}",
         _ => Shortcodes.Write(_kind, [_connectionName]),
     };
+
+    /// <summary>A name in a {{table}}'s list, quoted when it has a comma in it, since commas separate the rows.</summary>
+    private static string TableName(string name) =>
+        name.Contains(',') ? "\"" + name.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"" : Shortcodes.QuoteTarget(name);
 
     /// <summary>
     /// The skeleton of a section for when one connection is down: a heading to fill in, a

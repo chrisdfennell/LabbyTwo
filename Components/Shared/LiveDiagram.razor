@@ -1,0 +1,229 @@
+@implements IDisposable
+@using System.Globalization
+@inject HealthMonitor Health
+@inject Registry Registry
+
+@* A ```diagram block (or the Mermaid flowchart subset), drawn as an SVG on the server — no
+   script, nothing fetched from anywhere, since LabbyTwo promises not to phone home and a
+   diagram library from a CDN would do exactly that on every page load.
+
+   The text is read and laid out once per change of the text (DiagramParser, DiagramLayout);
+   what changes with the lab is only each box's colour, worked out from memory — the
+   connections the page already read and the monitor's last verdicts — on every sweep. A box
+   whose label is a connection's name (or id) takes that connection's status and links to
+   it; anything else, "Internet", is drawn plain.
+
+   {{diagram: auto}} is not drawn here: it is the dependency map, from what each connection
+   sits behind, drawn by the map's own component so the two cannot drift apart.
+
+   Every label is text in the render tree, so a name with markup in it is that markup shown
+   as characters, never parsed. *@
+
+@if (_problem is not null)
+{
+    <div class="md-embed is-problem" role="note">
+        <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+        <span class="tile-meta">@_problem</span>
+    </div>
+}
+else if (_auto)
+{
+    @if (Scope is null)
+    {
+        <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+    }
+    else
+    {
+        var nodes = DependencyMapModel.From(Scope.Connections, Health, Registry, DateTimeOffset.Now);
+        <figure class="md-embed md-diagram is-auto" role="group" aria-label="@(_title ?? "What sits behind what")">
+            @if (_title is not null)
+            {
+                <figcaption class="md-diagram-title">@_title</figcaption>
+            }
+            @if (!nodes.Any(n => n.ParentId is not null))
+            {
+                <p class="tile-meta mb-0">
+                    Nothing sits behind anything yet. Set <em>Sits behind</em> on a connection in
+                    <a href="settings/connections">Connections</a> to draw the map.
+                </p>
+            }
+            else
+            {
+                <DependencyMapView Nodes="nodes" RootId="@_root" ShowStandAlone="_standAlone" />
+            }
+        </figure>
+    }
+}
+else if (_layout is { } layout)
+{
+    var statuses = Statuses();
+    <figure class="md-embed md-diagram" role="group" aria-label="@(_title ?? "Diagram")">
+        @if (_title is not null)
+        {
+            <figcaption class="md-diagram-title">@_title</figcaption>
+        }
+        <div class="md-diagram-scroll">
+            <svg class="md-diagram-svg" viewBox="0 0 @Num(layout.Width) @Num(layout.Height)"
+                 style="width:100%;max-width:@(Num(layout.Width))px;min-width:@(Num(Math.Min(layout.Width, 320)))px"
+                 role="img" aria-labelledby="@($"{_id}-desc")" xmlns="http://www.w3.org/2000/svg">
+                <desc id="@($"{_id}-desc")">@Describe(layout, statuses)</desc>
+                <defs>
+                    <marker id="@($"{_id}-arrow")" class="md-diagram-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                        <path d="M0,0 L10,5 L0,10 z" />
+                    </marker>
+                </defs>
+                @foreach (var link in layout.Links)
+                {
+                    <path class="md-diagram-edge @EdgeClass(link.Edge.Style)" d="@link.Path"
+                          marker-end="@(link.Edge.Style == EdgeStyle.Line ? null : $"url(#{_id}-arrow)")" />
+                }
+                @foreach (var link in layout.Links.Where(l => l.Edge.Label.Length > 0))
+                {
+                    @* In a <g> so Razor does not take the SVG text element for its own <text> directive. *@
+                    <g class="md-diagram-edge-label"><text x="@Num(link.LabelX)" y="@Num(link.LabelY)" text-anchor="middle">@DiagramLayout.Clip(link.Edge.Label, 24)</text></g>
+                }
+                @foreach (var box in layout.Boxes)
+                {
+                    var (connection, status) = statuses[box.Node.Key];
+                    var chars = (int)((box.Width - 22) / DiagramLayout.CharWidth);
+                    var tooltip = Tooltip(box.Node, connection, status);
+                    if (connection is not null)
+                    {
+                        <a class="md-diagram-node @DiagramStatus.CssClass(status)" href="@Link(connection)" aria-label="@tooltip">
+                            <title>@tooltip</title>
+                            @Box(box, status, chars)
+                        </a>
+                    }
+                    else
+                    {
+                        <g class="md-diagram-node is-neutral">
+                            <title>@tooltip</title>
+                            @Box(box, status, chars)
+                        </g>
+                    }
+                }
+            </svg>
+        </div>
+    </figure>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which leaves every box plain for that moment.</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>Unique on the page, so two diagrams' arrowheads do not borrow each other's marker.</summary>
+    private readonly string _id = "md-diagram-" + Guid.NewGuid().ToString("n")[..8];
+
+    private string? _source;
+    private DiagramLayoutResult? _layout;
+    private string? _problem;
+    private string? _title;
+    private bool _auto;
+    private string? _root;
+    private bool _standAlone;
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override void OnParametersSet()
+    {
+        _title = Code.Option("title") is { Length: > 0 } title ? title : null;
+        var body = Code.Option(Markdown.DiagramBody);
+        _auto = body.Length == 0 && string.Equals(Code.Part(0), "auto", StringComparison.OrdinalIgnoreCase);
+        if (_auto)
+        {
+            _problem = null;
+            _standAlone = Code.Option("standalone") is { Length: > 0 } shown && shown.ToLowerInvariant() is "true" or "yes" or "on";
+            _root = null;
+            if (Code.Option("root") is { Length: > 0 } rootName && Scope is not null)
+            {
+                if (ShortcodeLookup.Connection(Scope.Connections, rootName) is { } root)
+                    _root = root.Id;
+                else
+                    _problem = $"No connection called “{rootName}”. ({Code.Source})";
+            }
+            return;
+        }
+        if (body.Length == 0)
+        {
+            _problem = $"{{{{diagram: auto}}}} draws the dependency map; anything else is a ```diagram block, one node and arrow per line. ({Code.Source})";
+            return;
+        }
+
+        // Laid out only when the text changes: the page redraws on every sweep, and the
+        // layout is the same picture every time.
+        if (body == _source)
+            return;
+        _source = body;
+        _problem = null;
+        _layout = null;
+        if (DiagramParser.Parse(body, out var problem) is not { } graph)
+        {
+            _problem = problem;
+            return;
+        }
+        _layout = DiagramLayout.Layout(graph);
+    }
+
+    /// <summary>Each box's connection and status, from memory. A label matches a connection's name (any case) or id.</summary>
+    private Dictionary<string, (Connection? Connection, NodeStatus Status)> Statuses()
+    {
+        var now = DateTimeOffset.Now;
+        var result = new Dictionary<string, (Connection?, NodeStatus)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var box in _layout!.Boxes)
+        {
+            var connection = Scope is null ? null
+                : ShortcodeLookup.Connection(Scope.Connections, box.Node.Label)
+                  ?? ShortcodeLookup.Connection(Scope.Connections, box.Node.Key);
+            result[box.Node.Key] = connection is null
+                ? (null, NodeStatus.Neutral)
+                : (connection, DiagramStatus.Of(connection, Health.State(connection.Id), Health.IsMonitored(connection), now));
+        }
+        return result;
+    }
+
+    private RenderFragment Box(PlacedBox box, NodeStatus status, int chars) => __builder =>
+    {
+        var glyph = DiagramStatus.Glyph(status);
+        <g>
+            <rect class="md-diagram-box" x="@Num(box.X)" y="@Num(box.Y)" width="@Num(box.Width)" height="@Num(box.Height)" rx="8" />
+            @if (status != NodeStatus.Neutral)
+            {
+                <rect class="md-diagram-bar" x="@Num(box.X + 4)" y="@Num(box.Y + 8)" width="4" height="@Num(box.Height - 16)" rx="2" />
+            }
+            <text class="md-diagram-label" x="@Num(box.X + box.Width / 2 + (glyph.Length > 0 ? 4 : 0))" y="@Num(box.Y + box.Height / 2)"
+                  text-anchor="middle" dominant-baseline="central">@(glyph.Length > 0 ? glyph + " " : "")@DiagramLayout.Clip(box.Node.Label, glyph.Length > 0 ? chars - 2 : chars)</text>
+        </g>
+    };
+
+    private static string Tooltip(DiagramNode node, Connection? connection, NodeStatus status) =>
+        connection is null ? node.Label : $"{node.Label} — {DiagramStatus.Word(status)}. Click to edit.";
+
+    /// <summary>The picture in words, for a screen reader: every box with its status, then every arrow.</summary>
+    private static string Describe(DiagramLayoutResult layout, Dictionary<string, (Connection? Connection, NodeStatus Status)> statuses)
+    {
+        var boxes = layout.Boxes.Select(b => statuses[b.Node.Key].Status == NodeStatus.Neutral
+            ? b.Node.Label
+            : $"{b.Node.Label} ({DiagramStatus.Word(statuses[b.Node.Key].Status)})");
+        var labels = layout.Boxes.ToDictionary(b => b.Node.Key, b => b.Node.Label, StringComparer.OrdinalIgnoreCase);
+        var arrows = layout.Links.Select(l => $"{labels[l.Edge.From]} to {labels[l.Edge.To]}" + (l.Edge.Label.Length > 0 ? $" ({l.Edge.Label})" : ""));
+        return $"Diagram of {string.Join(", ", boxes)}. Links: {string.Join("; ", arrows)}.";
+    }
+
+    private static string EdgeClass(EdgeStyle style) => style switch
+    {
+        EdgeStyle.Dotted => "is-dotted",
+        EdgeStyle.Thick => "is-thick",
+        _ => "",
+    };
+
+    private static string Link(Connection connection) => $"settings/connections?edit={Uri.EscapeDataString(connection.Id)}";
+
+    private static string Num(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
+
+    private void OnUpdated() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}
