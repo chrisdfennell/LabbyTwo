@@ -85,6 +85,9 @@ public static class ChangeKinds
     /// </summary>
     public const string Monitor = "monitor";
 
+    /// <summary>A scheduled action ran, failed, was skipped or was missed — see <see cref="ScheduledAction"/>.</summary>
+    public const string Scheduled = "scheduled";
+
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
     public static readonly IReadOnlyList<(string Key, string Label)> All =
     [
@@ -99,6 +102,7 @@ public static class ChangeKinds
         (Remediation, "Self-healing"),
         (Backup, "Backups and restore tests"),
         (Monitor, "LabbyTwo losing sight of the lab"),
+        (Scheduled, "Scheduled actions"),
     ];
 
     /// <summary>
@@ -122,6 +126,7 @@ public static class ChangeKinds
             "remediation" or "remediations" or "self-healing" or "selfhealing" or "healing" or "fixes" => Remediation,
             "backup" or "backups" or "restore" or "restores" => Backup,
             "monitor" or "monitoring" or "blind" or "sight" => Monitor,
+            "scheduled" or "schedule" or "schedules" => Scheduled,
             _ => null,
         };
     }

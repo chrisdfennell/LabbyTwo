@@ -229,9 +229,17 @@ builder.Services.AddSingleton<FamilyThrottle>();
 // Runs after every alert pass, off the same ledger escalation reads, and writes every run
 // to the change feed above — which is how it lands on an incident's timeline.
 builder.Services.AddSingleton<RemediationStore>();
-builder.Services.AddSingleton<IRemediationActions, RemediationActions>();
+builder.Services.AddSingleton<RemediationActions>();
+builder.Services.AddSingleton<IRemediationActions>(sp => sp.GetRequiredService<RemediationActions>());
 builder.Services.AddSingleton<RemediationService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RemediationService>());
+
+// Scheduled actions: an action button pressed on a timetable. Prepared by the same code as
+// self-healing, so the same guardrails apply; the job that ticks them once a minute is an
+// IBackgroundJob and is discovered.
+builder.Services.AddSingleton<ScheduledActionStore>();
+builder.Services.AddSingleton<IScheduledActionPlans, ScheduledActionPlans>();
+builder.Services.AddSingleton<ScheduledActions>();
 
 // Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
 // plugin's nightly tidy-up cannot hang startup or take the process down with it.

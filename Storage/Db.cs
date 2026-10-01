@@ -700,6 +700,44 @@ public sealed class Db
         // to keep a few dozen. The rowid rides along in the index, so the ORDER BY ts, rowid
         // it is read with is the index's own order and the read stops at the limit.
         "CREATE INDEX IF NOT EXISTS ix_status_ts ON status_events (ts)",
+
+        // 32 — scheduled actions: an action button pressed on a timetable. One row per
+        // action, read whole into memory once, so the job that ticks every minute touches
+        // the database only when something is due. covered_until is the instant up to which
+        // every scheduled run has been dealt with, which is what lets a restart know what it
+        // missed without ever running a burst. Runs keep a short history per action — the
+        // last twenty — read and trimmed through (action_id, id), which is also time order.
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_actions (
+            id                   TEXT    PRIMARY KEY,
+            name                 TEXT    NOT NULL,
+            enabled              INTEGER NOT NULL DEFAULT 1,
+            target               TEXT    NOT NULL DEFAULT 'container',
+            target_connection_id TEXT    NOT NULL DEFAULT '',
+            container            TEXT    NOT NULL DEFAULT '',
+            verb                 TEXT    NOT NULL DEFAULT 'restart',
+            action_id            TEXT    NOT NULL DEFAULT '',
+            schedule_kind        TEXT    NOT NULL DEFAULT 'weekly',
+            days                 TEXT    NOT NULL DEFAULT '',
+            times                TEXT    NOT NULL DEFAULT '',
+            interval_minutes     INTEGER NOT NULL DEFAULT 60,
+            day_of_month         INTEGER NOT NULL DEFAULT 1,
+            cron                 TEXT    NOT NULL DEFAULT '',
+            run_in_maintenance   INTEGER NOT NULL DEFAULT 0,
+            allow_protected      INTEGER NOT NULL DEFAULT 0,
+            notify_on_failure    INTEGER NOT NULL DEFAULT 1,
+            channel_id           TEXT    NOT NULL DEFAULT '',
+            covered_until        INTEGER) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS scheduled_runs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_id   TEXT    NOT NULL,
+            ts          INTEGER NOT NULL,
+            trigger     TEXT    NOT NULL,
+            outcome     TEXT    NOT NULL,
+            message     TEXT    NOT NULL DEFAULT '',
+            duration_ms INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS ix_scheduled_runs_action ON scheduled_runs (action_id, id);
+        """,
     ];
 
     /// <summary>

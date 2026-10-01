@@ -49,12 +49,24 @@ public static class RemediationGuards
     /// reverse proxy — needs the remediation to say so explicitly, because restarting one
     /// from outside the house is how you lose the way back in.
     /// </summary>
-    public static string? ContainerRefusal(ContainerRow row, string selfHint, IReadOnlyList<string> protectedList, bool allowProtected)
+    public static string? ContainerRefusal(ContainerRow row, string selfHint, IReadOnlyList<string> protectedList, bool allowProtected) =>
+        ContainerRefusal(row, selfHint, protectedList, allowProtected, "restarts", "restarted", "this remediation");
+
+    /// <summary>
+    /// The same refusal for any verb and any owner — a scheduled action that stops or starts
+    /// a container is held to exactly the rules a remediation that restarts one is, and says
+    /// so in its own words.
+    /// </summary>
+    /// <param name="verbs">"restarts", "stops" — what LabbyTwo never does to itself.</param>
+    /// <param name="done">"restarted", "stopped" — for "if you really want it … automatically".</param>
+    /// <param name="owner">"this remediation", "this scheduled action".</param>
+    public static string? ContainerRefusal(ContainerRow row, string selfHint, IReadOnlyList<string> protectedList, bool allowProtected,
+        string verbs, string done, string owner)
     {
         if (ContainerSafety.IsSelf(row, selfHint))
-            return $"“{row.Name}” is the container LabbyTwo itself runs in, which it never restarts by itself.";
+            return $"“{row.Name}” is the container LabbyTwo itself runs in, which it never {verbs} by itself.";
         if (!allowProtected && ContainerSafety.IsListed(row, protectedList))
-            return $"“{row.Name}” is on a Containers page's protected list. Tick “Allow protected containers” on this remediation if you really want it restarted automatically.";
+            return $"“{row.Name}” is on a Containers page's protected list. Tick “Allow protected containers” on {owner} if you really want it {done} automatically.";
         return null;
     }
 
@@ -126,14 +138,28 @@ public sealed class RemediationActions(ConfigStore config, ActionRunner runner, 
             ? await PrepareRestartAsync(remediation, ct)
             : await PrepareActionAsync(remediation, ct);
 
-    private async Task<RemediationPlan> PrepareRestartAsync(Remediation remediation, CancellationToken ct)
-    {
-        var name = remediation.Container;
-        var doing = $"restart {name}";
-        var did = $"Restarted {name}";
+    private Task<RemediationPlan> PrepareRestartAsync(Remediation remediation, CancellationToken ct) =>
+        PrepareContainerAsync(remediation.TargetConnectionId, remediation.Container, ContainerAction.Restart,
+            remediation.AllowProtected, "this remediation", "Self-healing", ct);
 
-        if (await config.ConnectionAsync(remediation.TargetConnectionId, ct) is not { Provider: "docker" } docker)
-            return RemediationPlan.Refuse(doing, did, "The Docker connection it restarts through no longer exists.");
+    /// <summary>
+    /// Looks a container up on a Docker connection, checks it may be acted on, and hands back
+    /// the call that restarts, starts or stops it. Shared by self-healing and scheduled
+    /// actions, so the two can never disagree about which containers are off limits.
+    /// </summary>
+    /// <param name="owner">"this remediation" — what the protected-list refusal tells you to tick the box on.</param>
+    /// <param name="why">"Self-healing" — the log line's prefix, so the log says who did it.</param>
+    public async Task<RemediationPlan> PrepareContainerAsync(
+        string dockerConnectionId, string container, ContainerAction verb, bool allowProtected, string owner, string why,
+        CancellationToken ct)
+    {
+        var name = container.Trim();
+        var (present, verbs, past, done) = Words(verb);
+        var doing = $"{present} {name}";
+        var did = $"{past} {name}";
+
+        if (await config.ConnectionAsync(dockerConnectionId, ct) is not { Provider: "docker" } docker)
+            return RemediationPlan.Refuse(doing, did, $"The Docker connection it {verbs} through no longer exists.");
 
         var endpoint = docker.Settings.Get("endpoint", DockerSocket.DefaultEndpoint);
         IReadOnlyList<ContainerRow> rows;
@@ -150,19 +176,19 @@ public sealed class RemediationActions(ConfigStore config, ActionRunner runner, 
             return RemediationPlan.Refuse(doing, did, $"There is no container called “{name}” on {docker.Name}.");
 
         var protectedList = RemediationGuards.ProtectedList(await config.TabsAsync(ct));
-        if (RemediationGuards.ContainerRefusal(row, SelfContainer.Hint, protectedList, remediation.AllowProtected) is { } why)
-            return RemediationPlan.Refuse(doing, did, why);
+        if (RemediationGuards.ContainerRefusal(row, SelfContainer.Hint, protectedList, allowProtected, verbs, done, owner) is { } refused)
+            return RemediationPlan.Refuse(doing, did, refused);
 
         return new RemediationPlan(doing, did, null, async token =>
         {
             try
             {
-                log.LogWarning("Self-healing: restarting container {Container} on {Docker}", row.Name, docker.Name);
-                await DockerContainers.RunAsync(endpoint, ContainerAction.Restart, row.Id, token);
+                log.LogWarning("{Why}: {Verb} container {Container} on {Docker}", why, present, row.Name, docker.Name);
+                await DockerContainers.RunAsync(endpoint, verb, row.Id, token);
                 // A runbook listing containers should not keep showing the old state for
                 // the few seconds a shared list is otherwise reused.
                 DockerContainers.ForgetSharedLists();
-                return ActionResult.Done($"Restarted {row.Name}.");
+                return ActionResult.Done($"{past} {row.Name}.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
             {
@@ -171,18 +197,35 @@ public sealed class RemediationActions(ConfigStore config, ActionRunner runner, 
         });
     }
 
-    private async Task<RemediationPlan> PrepareActionAsync(Remediation remediation, CancellationToken ct)
+    /// <summary>The verb in the four shapes the sentences need: restart, restarts, Restarted, restarted.</summary>
+    private static (string Present, string Verbs, string Past, string Done) Words(ContainerAction verb) => verb switch
     {
-        var connection = await config.ConnectionAsync(remediation.TargetConnectionId, ct);
-        var action = connection is null ? null : runner.ActionsFor(connection).FirstOrDefault(a => Is(a, remediation.ActionId));
-        var doing = Doing(action?.Label ?? remediation.ActionId, connection?.Name ?? "a deleted connection");
-        var did = $"Ran “{action?.Label ?? remediation.ActionId}” on {connection?.Name ?? "a deleted connection"}";
+        ContainerAction.Start => ("start", "starts", "Started", "started"),
+        ContainerAction.Stop => ("stop", "stops", "Stopped", "stopped"),
+        _ => ("restart", "restarts", "Restarted", "restarted"),
+    };
+
+    private Task<RemediationPlan> PrepareActionAsync(Remediation remediation, CancellationToken ct) =>
+        PrepareProviderActionAsync(remediation.TargetConnectionId, remediation.ActionId, remediation.AllowProtected, ct);
+
+    /// <summary>
+    /// Finds a connection's action, checks it may run with nobody there — no questions to
+    /// answer, and nothing dangerous without the opt-in — and hands back the call through
+    /// <see cref="ActionRunner"/>. Shared by self-healing and scheduled actions.
+    /// </summary>
+    public async Task<RemediationPlan> PrepareProviderActionAsync(
+        string connectionId, string actionId, bool allowProtected, CancellationToken ct)
+    {
+        var connection = await config.ConnectionAsync(connectionId, ct);
+        var action = connection is null ? null : runner.ActionsFor(connection).FirstOrDefault(a => Is(a, actionId));
+        var doing = Doing(action?.Label ?? actionId, connection?.Name ?? "a deleted connection");
+        var did = $"Ran “{action?.Label ?? actionId}” on {connection?.Name ?? "a deleted connection"}";
 
         if (connection is null)
             return RemediationPlan.Refuse(doing, did, "The connection whose action it runs no longer exists.");
         if (action is null)
-            return RemediationPlan.Refuse(doing, did, $"{connection.Name} does not offer “{remediation.ActionId}” with its current settings.");
-        if (RemediationGuards.ActionRefusal(action, connection.Name, remediation.AllowProtected) is { } why)
+            return RemediationPlan.Refuse(doing, did, $"{connection.Name} does not offer “{actionId}” with its current settings.");
+        if (RemediationGuards.ActionRefusal(action, connection.Name, allowProtected) is { } why)
             return RemediationPlan.Refuse(doing, did, why);
 
         return new RemediationPlan(doing, did, null, token => runner.RunAsync(connection, action, new SettingsBag(), token), action.Disrupts);
