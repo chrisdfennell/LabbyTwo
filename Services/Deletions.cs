@@ -14,13 +14,20 @@ namespace LabbyTwo.Services;
 /// </summary>
 public sealed class Deletions(ConfigStore config, NotesStore notes, UndoService undo)
 {
-    public async Task WidgetAsync(Widget widget, CancellationToken ct = default)
+    public Task WidgetAsync(Widget widget, CancellationToken ct = default) => WidgetAsync(widget, "", ct);
+
+    /// <summary>
+    /// Deletes a card or block, with an undo. A Markdown one is also kept for "Recently
+    /// deleted" (see <see cref="WidgetHistoryStore"/>), under <paramref name="by"/>, for
+    /// when the undo has long gone.
+    /// </summary>
+    public async Task WidgetAsync(Widget widget, string by, CancellationToken ct = default)
     {
         // A section on a custom page can hold notes of its own, kept under the block's id
         // (see PageBlocks.SectionTab). They go with it, and come back with it.
         var written = widget.Type == PageBlocks.Section ? await notes.ForTabAsync(widget.Id, ct) : [];
 
-        await config.DeleteWidgetAsync(widget.Id, ct);
+        await config.DeleteWidgetAsync(widget.Id, by, ct);
         foreach (var note in written)
             await notes.DeleteAsync(note.Id, ct);
 

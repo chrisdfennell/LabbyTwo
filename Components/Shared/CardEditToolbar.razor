@@ -68,6 +68,14 @@
                 @onclick="OnEdit">
             <span aria-hidden="true">✎</span><span class="tool-text"> Edit</span>
         </button>
+        @if (OnHistory.HasDelegate)
+        {
+            @* Only on a card whose text is kept as versions — a Markdown card or block. *@
+            <button type="button" class="tool-btn" title="Earlier versions of this @Noun's text, and putting one back"
+                    aria-label="History of @Name" @onclick="OnHistory">
+                <span aria-hidden="true">🕘</span><span class="tool-text"> History</span>
+            </button>
+        }
         <button type="button" class="tool-btn" title="Another one like this, on this page" aria-label="Duplicate @Name"
                 @onclick="OnDuplicate">
             <span aria-hidden="true">⧉</span><span class="tool-text"> Duplicate</span>
@@ -106,6 +114,9 @@
     [Parameter] public EventCallback<int> OnHeightStep { get; set; }
     [Parameter] public EventCallback OnEdit { get; set; }
     [Parameter] public EventCallback OnDuplicate { get; set; }
+
+    /// <summary>Set for a card with version history (a Markdown one); no History button otherwise.</summary>
+    [Parameter] public EventCallback OnHistory { get; set; }
     [Parameter] public EventCallback OnDelete { get; set; }
 
     private int _span;

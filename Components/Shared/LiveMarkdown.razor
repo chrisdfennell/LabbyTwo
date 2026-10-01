@@ -33,8 +33,21 @@
     /// <summary>The widget or note this Markdown belongs to, for the recursion guard.</summary>
     [Parameter] public string? OwnerId { get; set; }
 
+    /// <summary>
+    /// Set, task-list boxes can be ticked, and the ticks are remembered under this owner key
+    /// for everyone (see <see cref="ChecklistOwners"/> and Core/Checklists.cs). A note's own
+    /// view, a Markdown card and a custom page's Markdown block set it; an editor's preview,
+    /// history and the recently-deleted list leave it off, and their boxes are display-only
+    /// — ticking a box in a version that is not the text any more would mean nothing.
+    ///
+    /// A key rather than "use <see cref="OwnerId"/>", because OwnerId is the recursion
+    /// guard's id and is bare, and ticks need to know whether that id is a note or a card.
+    /// </summary>
+    [Parameter] public string? ChecklistOwner { get; set; }
+
     [CascadingParameter] public EmbedChain? Chain { get; set; }
 
+    private string? _checklist;
     private string? _content;
     private LivePage _page = LivePage.Empty;
     private bool _live;
@@ -97,10 +110,12 @@
 
     protected override void OnParametersSet()
     {
-        if (_content != Content)
+        var checklist = ChecklistOwner is { Length: > 0 } owner ? owner : null;
+        if (_content != Content || _checklist != checklist)
         {
             _content = Content;
-            _page = Markdown.PreparePage(Content);
+            _checklist = checklist;
+            _page = Markdown.PreparePage(Content, checklist is not null);
             // Anything but one plain piece of Markdown needs drawing part by part, and
             // names looked up: a shortcode in any piece, a section, a note about a mistake.
             _live = _page.Parts is not ([] or [LiveSection { Document.Shortcodes.Count: 0 }]);
@@ -382,6 +397,15 @@
     /// </summary>
     private void RenderText(RenderTreeBuilder builder, LiveDocument document, string html, bool blockAllowed)
     {
+        // A task-list box leads its item's words, and is not what stops a card after it
+        // being "on a line of its own": "- [ ] {{containers: stopped}}" is still a list.
+        if (Markdown.Placeholders.Match(html) is { Success: true } lead && html[..lead.Index].Trim().Length == 0
+            && Index(document, lead) is { } box && document.Shortcodes[box].Kind == Checklists.Kind)
+        {
+            RenderShortcode(builder, document, box);
+            html = html[(lead.Index + lead.Length)..];
+        }
+
         // A card only where it is all the text there is: "- {{widget: CPU}}" is a card in a
         // list, "- see {{widget: CPU}}" is a card in a sentence.
         var alone = blockAllowed && Markdown.Placeholders.Match(html.Trim()) is { Success: true } only
@@ -456,6 +480,15 @@
             builder.SetKey(index);
             builder.AddComponentParameter(71, nameof(RunbookButton.Code), code);
             builder.AddComponentParameter(72, nameof(RunbookButton.Scope), _scope);
+            builder.CloseComponent();
+        }
+        else if (code.Kind == Checklists.Kind)
+        {
+            // A task-list box that remembers being ticked, under this note's or card's key.
+            builder.OpenComponent<LiveChecklistItem>(110);
+            builder.SetKey(index);
+            builder.AddComponentParameter(111, nameof(LiveChecklistItem.Code), code);
+            builder.AddComponentParameter(112, nameof(LiveChecklistItem.Owner), _checklist);
             builder.CloseComponent();
         }
         else if (code.Kind == "down" && blockAllowed)

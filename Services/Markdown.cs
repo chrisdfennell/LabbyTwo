@@ -53,11 +53,27 @@ public sealed partial class Markdown
     /// it — plus the list the placeholders index into, so the component drawing it can put
     /// a live component where each one stands.
     /// </summary>
-    public LiveDocument Prepare(string? markdown)
+    public LiveDocument Prepare(string? markdown) => Prepare(markdown, null);
+
+    /// <summary>
+    /// <see cref="Prepare(string?)"/>, with each task-list box also swapped for a
+    /// placeholder when <paramref name="tasks"/> is given — see <see cref="WithCheckboxes"/>.
+    /// </summary>
+    private LiveDocument Prepare(string? markdown, ChecklistCounter? tasks)
     {
         if (string.IsNullOrWhiteSpace(markdown))
             return LiveDocument.Empty;
+        var document = PrepareShortcodes(markdown);
+        return tasks is null ? document : WithCheckboxes(markdown, document, tasks);
+    }
 
+    /// <summary>
+    /// The shortcodes, the <c>[[note links]]</c> and the diagram fences of one piece of
+    /// Markdown, each swapped for a placeholder word — but not the task-list boxes, which
+    /// <see cref="WithCheckboxes"/> finds in the HTML this makes.
+    /// </summary>
+    private LiveDocument PrepareShortcodes(string markdown)
+    {
         var found = WithNoteLinks(Shortcodes.Find(markdown), markdown);
         var diagrams = DiagramBlocks(markdown);
         if (found.Count == 0 && diagrams.Count == 0)
@@ -102,12 +118,15 @@ public sealed partial class Markdown
     /// <see cref="Prepare"/> would have made of it, so nothing changes for a note that has
     /// never heard of them.
     /// </summary>
-    public LivePage PreparePage(string? markdown)
+    /// <param name="checklists">Draw task-list boxes as tickable items (a note's own view);
+    /// otherwise they are the renderer's display-only boxes, as they always were.</param>
+    public LivePage PreparePage(string? markdown, bool checklists = false)
     {
         if (string.IsNullOrWhiteSpace(markdown))
             return LivePage.Empty;
+        var tasks = checklists ? new ChecklistCounter() : null;
         if (!Runbook.MayHaveSections(markdown))
-            return new LivePage([Section(Prepare(markdown), 0)]);
+            return new LivePage([Section(Prepare(markdown, tasks), 0)]);
 
         var parts = Runbook.Parse(markdown, CodeRanges(markdown));
         var ordinal = 0;
@@ -122,7 +141,7 @@ public sealed partial class Markdown
                 switch (piece)
                 {
                     case RunbookText text:
-                        var document = Prepare(text.Markdown);
+                        var document = Prepare(text.Markdown, tasks);
                         // Each piece is its own document to the renderer, so two pieces with
                         // a "Steps" heading would both call it #steps. Later ones are
                         // numbered on, as the renderer does within one document, so every
@@ -161,6 +180,122 @@ public sealed partial class Markdown
         if (links.Count == 0)
             return found;
         return [.. found.Concat(links.Select(l => new Shortcodes.Found(l.Index, l.Length, l.ToShortcode()))).OrderBy(f => f.Index)];
+    }
+
+    /// <summary>
+    /// Every task-list item in a note, keyed exactly as its rendered view keys them — the
+    /// list a save reconciles the stored ticks against (see <see cref="Checklists.Reconcile"/>).
+    /// </summary>
+    public IReadOnlyList<ChecklistItem> ChecklistItems(string? markdown)
+    {
+        if (!Checklists.MayHaveItems(markdown))
+            return [];
+        var items = new List<ChecklistItem>();
+        Collect(PreparePage(markdown, checklists: true).Parts);
+        return items;
+
+        void Collect(IEnumerable<LivePart> parts)
+        {
+            foreach (var part in parts)
+            {
+                switch (part)
+                {
+                    case LiveSection section:
+                        items.AddRange(section.Document.Shortcodes.Select(Checklists.FromShortcode).OfType<ChecklistItem>());
+                        break;
+                    case LiveIf branch:
+                        Collect(branch.Then);
+                        Collect(branch.Else);
+                        break;
+                    case LiveDetails fold:
+                        Collect(fold.Body);
+                        break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The renderer's own HTML with each task-list box swapped for a placeholder standing
+    /// for a <see cref="Checklists.Kind"/> stand-in, so the component drawing the note can
+    /// put a box there that remembers being ticked.
+    ///
+    /// The boxes are found in the HTML because only the renderer writes an input element —
+    /// raw HTML is off, so a person typing an input tag gets the text they typed. The words
+    /// each box belongs to come from the source, read with the same syntax, in the same
+    /// order. If the two counts ever disagree the boxes are left exactly as the renderer
+    /// drew them — display-only, as they were before checklists remembered — rather than
+    /// risk a tick landing on the wrong step. The items are still counted, so the keys of
+    /// every later piece of the note do not shift.
+    /// </summary>
+    private LiveDocument WithCheckboxes(string markdown, LiveDocument document, ChecklistCounter tasks)
+    {
+        if (!Checklists.MayHaveItems(markdown))
+            return document;
+        var written = TaskItems(markdown);
+        if (written.Count == 0)
+            return document;
+        var items = written.Select(w => tasks.Next(w.Text, w.Ticked)).ToList();
+        var boxes = Checkbox().Matches(document.Html);
+        if (boxes.Count != items.Count)
+            return document;
+
+        var codes = document.Shortcodes.ToList();
+        var html = new StringBuilder(document.Html.Length);
+        var at = 0;
+        for (var i = 0; i < boxes.Count; i++)
+        {
+            html.Append(document.Html, at, boxes[i].Index - at);
+            html.Append(Placeholder(codes.Count));
+            codes.Add(Checklists.ToShortcode(items[i]));
+            at = boxes[i].Index + boxes[i].Length;
+        }
+        html.Append(document.Html, at, document.Html.Length - at);
+        return new LiveDocument(html.ToString(), codes);
+    }
+
+    /// <summary>The box the task-list extension writes; nothing else in the output is an input.</summary>
+    [GeneratedRegex("""<input [^<>]*type="checkbox"[^<>]*/?>""")]
+    private static partial Regex Checkbox();
+
+    /// <summary>
+    /// The task-list items in a piece of Markdown, in the order the renderer draws their
+    /// boxes, each with the rest of its first line as its words.
+    /// </summary>
+    private List<(string Text, bool Ticked)> TaskItems(string markdown)
+    {
+        var found = new List<(string, bool)>();
+        Walk(Markdig.Markdown.Parse(markdown, _positions));
+        return found;
+
+        void Walk(Block block)
+        {
+            switch (block)
+            {
+                case ContainerBlock container:
+                    foreach (var child in container)
+                        Walk(child);
+                    break;
+                case LeafBlock { Inline: { } inline }:
+                    WalkInline(inline);
+                    break;
+            }
+        }
+
+        void WalkInline(Inline inline)
+        {
+            if (inline is Markdig.Extensions.TaskLists.TaskList task)
+            {
+                var start = Math.Min(task.Span.End + 1, markdown.Length);
+                var end = markdown.IndexOf('\n', start);
+                found.Add((markdown[start..(end < 0 ? markdown.Length : end)], task.Checked));
+            }
+            if (inline is ContainerInline container)
+            {
+                foreach (var child in container)
+                    WalkInline(child);
+            }
+        }
     }
 
     private static LiveSection Section(LiveDocument document, int ordinal) =>

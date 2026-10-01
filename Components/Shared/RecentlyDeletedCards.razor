@@ -1,0 +1,190 @@
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Logging
+@inject WidgetHistoryStore History
+@inject Offload Offload
+@inject ILogger<RecentlyDeletedCards> Log
+
+@* Markdown cards (or a custom page's Markdown blocks) deleted from one tab in the last
+   thirty days, each a button away from being back — under its own id, in the place it
+   was, so its history and its checklist ticks come back with it. The undo after a delete
+   is for the next few seconds; this is for next week. Only Markdown ones, because those
+   are what people write and would miss; any other card is a few clicks to make again. *@
+
+<Modal Title="Recently deleted" Size="lg" OnClose="() => OnClose.InvokeAsync()">
+    <ChildContent>
+        <p class="tile-meta">
+            A deleted Markdown @Noun can be brought back for @((int)WidgetHistoryStore.DeletedFor.TotalDays) days, with its history.
+        </p>
+        @if (!_listed)
+        {
+            <div class="tile-meta">Loading…</div>
+        }
+        else if (_deleted.Count == 0)
+        {
+            <div class="empty-state">No Markdown @(Noun)s deleted from this page recently.</div>
+        }
+        else
+        {
+            <ul class="list-group">
+                @foreach (var card in _deleted)
+                {
+                    <li class="list-group-item">
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="flex-grow-1" style="min-width: 0">
+                                <div class="fw-semibold text-truncate">@(card.Title is { Length: > 0 } ? card.Title : $"Untitled Markdown {Noun}")</div>
+                                <div class="small tile-meta">
+                                    Deleted @card.KeptAt.ToString("d MMM yyyy HH:mm")@(card.KeptBy.Length > 0 ? $" by {card.KeptBy}" : "")
+                                    · @card.Size.ToString("N0") characters
+                                </div>
+                            </div>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleAsync(card)"
+                                    aria-expanded="@(_shown?.Id == card.Id)">
+                                @(_shown?.Id == card.Id ? "Hide" : "Show")
+                            </button>
+                            <button class="btn btn-sm btn-primary" disabled="@_busy" @onclick="() => RestoreAsync(card)">Restore</button>
+                        </div>
+                        @if (_shown?.Id == card.Id)
+                        {
+                            <div class="panel p-3 mt-2 markdown-body">
+                                @if (_shownText is null)
+                                {
+                                    <span class="tile-meta">Loading…</span>
+                                }
+                                else
+                                {
+                                    <LiveMarkdown Content="@_shownText" OwnerId="@card.WidgetId" />
+                                }
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+        @if (_error is not null)
+        {
+            <div class="alert alert-danger mt-2 mb-0" role="alert">@_error</div>
+        }
+    </ChildContent>
+    <Footer>
+        <button class="btn btn-secondary btn-sm" @onclick="() => OnClose.InvokeAsync()">Close</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter, EditorRequired] public string TabId { get; set; } = "";
+
+    /// <summary>"card" on a dashboard, "block" on a custom page.</summary>
+    [Parameter] public string Noun { get; set; } = "card";
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private IReadOnlyList<WidgetHistoryStore.WidgetVersion> _deleted = [];
+    private bool _listed;
+    private bool _busy;
+    private string? _error;
+    private WidgetHistoryStore.WidgetVersion? _shown;
+    private string? _shownText;
+    private string? _loadedFor;
+    private readonly CancellationTokenSource _gone = new();
+
+    protected override void OnParametersSet()
+    {
+        if (_loadedFor == TabId || !RendererInfo.IsInteractive)
+            return;
+        _loadedFor = TabId;
+        _ = ListAsync();
+    }
+
+    private async Task ListAsync()
+    {
+        try
+        {
+            var deleted = await Offload.Run(ct => History.RecentlyDeletedAsync(TabId, ct), _gone.Token);
+            await InvokeAsync(() =>
+            {
+                _deleted = deleted;
+                _listed = true;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not list recently deleted cards");
+            await InvokeAsync(() =>
+            {
+                _listed = true;
+                _error = "Could not read what was deleted. Try again in a moment.";
+                StateHasChanged();
+            });
+        }
+    }
+
+    private async Task ToggleAsync(WidgetHistoryStore.WidgetVersion card)
+    {
+        if (_shown?.Id == card.Id)
+        {
+            _shown = null;
+            return;
+        }
+        _shown = card;
+        _shownText = null;
+        try
+        {
+            var full = await Offload.Run(ct => History.VersionAsync(card.Id, ct), _gone.Token);
+            if (_shown?.Id == card.Id)
+                _shownText = full?.Content ?? "";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not read a deleted card");
+            _error = $"Could not read that {Noun}. Try again in a moment.";
+        }
+    }
+
+    private async Task RestoreAsync(WidgetHistoryStore.WidgetVersion card)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var by = "";
+            if (Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name })
+                by = name;
+            var back = await Offload.Run(ct => History.RestoreVersionAsync(card.Id, by, ct));
+            if (back is null)
+            {
+                _error = $"That {Noun} has just been tidied away — it was deleted too long ago.";
+                return;
+            }
+            // The page hears about it through ConfigStore.Changed, like any other save.
+            _deleted = [.. _deleted.Where(d => d.WidgetId != card.WidgetId)];
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Could not restore a deleted card");
+            _error = $"Could not bring that {Noun} back. Nothing was changed.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _gone.Cancel();
+        _gone.Dispose();
+    }
+}

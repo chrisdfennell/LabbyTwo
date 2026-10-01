@@ -1,0 +1,40 @@
+@inject NotesStore Notes
+@inject MarkdownChecklists MarkdownChecklists
+
+@* A note's earlier versions, in the history view every kind of Markdown shares
+   (TextHistory). This only says where a note's versions come from, and that restoring one
+   is a save of the note that carries its checklist ticks over to the restored text. *@
+
+<TextHistory Name="@(Note.Title is { Length: > 0 } ? Note.Title : "Untitled")" Noun="note" OwnerId="@Note.Id"
+             CurrentTitle="@Note.Title" CurrentContent="@Note.Content"
+             CurrentSavedAt="Note.UpdatedAt" CurrentSavedBy="@Note.UpdatedBy"
+             List="ListAsync" Load="LoadAsync" Restore="RestoreAsync"
+             OnRestored="OnRestored" OnClose="OnClose" />
+
+@code {
+    [Parameter, EditorRequired] public NotesStore.Note Note { get; set; } = default!;
+
+    /// <summary>After a version has been made the note's text again.</summary>
+    [Parameter] public EventCallback OnRestored { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private static TextVersion Shown(NotesStore.NoteVersion version) => new(
+        version.Id, version.Title, version.Content, version.Size, version.WrittenAt, version.WrittenBy,
+        version.KeptAt, "", version.IsDeletion);
+
+    private async Task<IReadOnlyList<TextVersion>> ListAsync(CancellationToken ct) =>
+        [.. (await Notes.VersionsAsync(Note.Id, ct)).Select(Shown)];
+
+    private async Task<TextVersion?> LoadAsync(long id, CancellationToken ct) =>
+        await Notes.VersionAsync(id, ct) is { } version ? Shown(version) : null;
+
+    private async Task<bool> RestoreAsync(long id, string by, CancellationToken ct)
+    {
+        var back = await Notes.RestoreVersionAsync(id, by, ct);
+        if (back is null)
+            return false;
+        await MarkdownChecklists.ReconcileAsync(ChecklistOwners.Note(back.NoteId), back.Content, ct);
+        return true;
+    }
+}

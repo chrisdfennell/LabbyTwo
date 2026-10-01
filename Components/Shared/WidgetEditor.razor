@@ -3,6 +3,7 @@
 @inject ConfigStore Config
 @inject HistoryStore History
 @inject Offload Offload
+@using Microsoft.AspNetCore.Components.Authorization
 
 <Modal Title="@($"Edit {_type?.DisplayName ?? "widget"}")" OnClose="OnClose">
     <ChildContent>
@@ -192,15 +193,28 @@
     private string ProviderName(Connection connection) =>
         Registry.Provider(connection.Provider)?.DisplayName ?? connection.Provider;
 
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    /// <summary>
+    /// Saves the card, as whoever is signed in — a Markdown card's history names them as
+    /// the one who wrote this text. On the pool: for a Markdown card the save also keeps a
+    /// version and carries its checklist ticks over to the new text.
+    /// </summary>
     private async Task SaveAsync()
     {
-        await Config.SaveWidgetAsync(Widget with
+        var by = Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name } ? name : "";
+        var saved = Widget with
         {
             Title = _title,
             ConnectionId = _connectionId.Length > 0 ? _connectionId : null,
             Width = _width,
             Height = _height,
             Settings = _settings,
+        };
+        await Offload.Run(async ct =>
+        {
+            await Config.SaveWidgetAsync(saved, by, ct);
+            return true;
         });
         await OnClose.InvokeAsync();
     }

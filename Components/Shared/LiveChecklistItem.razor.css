@@ -1,0 +1,8 @@
+/* A box that can be ticked looks like one: the pointer, and the theme's accent when ticked. */
+.md-check {
+    cursor: pointer;
+    accent-color: var(--accent);
+    margin-right: .15rem;
+}
+
+.md-check:disabled { cursor: default; }

@@ -1178,7 +1178,7 @@ CommonMark with Markdig's advanced extensions. Raw HTML is switched off: `<b>` o
 | `==marked==`, `++inserted++` | highlighted and underlined text |
 | `H~2~O`, `2^10^` | subscript and superscript |
 | `- item`, `1. item`, indented for nesting | lists |
-| `- [ ] to do`, `- [x] done` | task lists — shown ticked or not, but display only: clicking does not save |
+| `- [ ] to do`, `- [x] done` | task lists; in a note, a Text / Markdown card and a custom page's Markdown block the boxes can be ticked and are remembered (see [Checklists](#checklists)) — in previews and history they are display only |
 | `> quoted` | a quote |
 | `` `code` ``, a fenced ```` ``` ```` block (with a language) or four-space indent | code, in a monospace box; not syntax-highlighted. Each has a **copy** button — in a block's corner, and a small icon after a code span (shown on hover, always on a phone). It copies the code exactly, and on plain http, where browsers refuse the clipboard, it selects the code for you to copy instead |
 | `[text](https://…)`, `<https://…>`, a bare `https://…` or `www.…` | links |
@@ -1213,6 +1213,75 @@ The marker is case-blind and must be the quote's whole first line. Anything insi
 callout works as it does elsewhere — lists, code, live values, buttons. Any other word in
 the brackets (`> [!FOO]`) leaves an ordinary quote, brackets and all. Callouts are
 top-level blocks, as on GitHub: a marker inside a list or inside another quote stays text.
+
+#### Checklists
+
+A task list is a checklist that remembers — in a **note**, in a **Text / Markdown card** on a
+dashboard, and in a **custom page's Markdown block** (a runbook page like "Home Lab Roundup").
+Write it as usual:
+
+```markdown
+## Before restarting the NAS
+
+- [ ] Stopped Plex
+- [ ] Paused the nightly backup
+- [x] Snapshot taken (always ticked — it says so in the text)
+```
+
+Each `[ ]` is a real box. Tick it and it stays ticked — for everyone: the wall display and
+your phone see it a moment later without reloading. Hover a ticked box for who ticked it
+and when. When the job is done, **Reset checklist** under the note, card or block unticks
+every box in it and writes "Checklist in “…” reset" into What changed (filter: Checklists
+reset). Each note, card and block has its own ticks; the same card shown on two pages, or
+embedded with `{{widget: …}}`, is one set of ticks.
+
+- **Ticking never edits the text.** The ticks are kept beside the note or card, not
+  written into its Markdown, so ticking is not a save, does not make a version, and never
+  collides with somebody who has the editor open. The text keeps its `[ ]`; the editor's
+  preview shows the boxes as written. An `[x]` in the text is ticked for good and cannot be
+  unticked by a click — edit the text to change it.
+- **Ticks stay on their items.** Each item is known by its words (and, for two items with
+  the same words, which one it is), so adding, removing or reordering *other* lines keeps
+  every tick where it was. Rewording an item keeps its tick as long as it is still in the
+  same place in the list; an item that is removed takes its tick with it.
+- **Anywhere** a list item can go: nested, numbered (`1. [ ] …`), inside `{{if …}}` and
+  `{{details: …}}` sections, with live values in the words (`- [ ] {{status: Plex}} stopped`).
+- **Not in previews or history.** In the editor's preview, in History, in Recently deleted
+  and in the monthly report's preview the boxes are drawn but cannot be ticked — none of
+  those is the text people are working from.
+- **Kept with the card.** A card's or block's ticks survive moving, resizing and retitling
+  it, an edit to its text (as above), and a delete that is undone or restored from
+  Recently deleted.
+
+#### Note history
+
+Notes, **Text / Markdown cards** and **custom page Markdown blocks** all keep their history.
+
+Every save of a note keeps the text it replaced. **History** on a note lists the earlier
+versions — when each was written, by whom and how long it was — and shows any of them as
+the note, as its Markdown, or as **Changes since**: a line-by-line diff from that version
+to the note as it is now (green added, red removed). **Restore this version** makes it
+the note's text again; that is a save like any other, so what it replaced is kept too and
+a restore can be undone the same way.
+
+Deleting a note keeps it as well. **Recently deleted** on the Notes tab lists what was
+deleted from that tab in the last 30 days, with who deleted it; **Restore** brings the note
+back under its own id, with its history and its checklist ticks.
+
+The last 50 versions of each note are kept, for up to 180 days; a deleted note's history
+goes 30 days after it was deleted. Versions are in the database, so they are in every
+backup; they are not part of a config export. Saving a note without changing it does not
+make a version.
+
+**Cards and blocks.** On a dashboard or a custom page, **✎ Edit layout** puts a **History**
+button on every Text / Markdown card or block: the same list, the same three views and the
+same **Restore this version**, which puts back the *text* only — the card keeps the title,
+size and place it has now. Only a change to the text is a version; moving, resizing and
+retitling are not. "Now" says when the text was last saved and by whom, once it has been
+saved since history began. Deleting a Markdown card or block keeps it whole, and
+**Recently deleted** (next to **+ Add** while editing the layout) brings it back for 30 days
+in the place it was, with its history and its checklist ticks. The same limits apply: 50
+versions a card, 180 days, 30 days after a delete.
 
 #### Shortcodes
 

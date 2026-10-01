@@ -63,6 +63,9 @@ public sealed class NotesTabLinkTests : IAsyncDisposable
         services.AddSingleton<NotesStore>();
         services.AddSingleton<NoteDirectory>();
         services.AddSingleton<NoteTemplateStore>();
+        services.AddSingleton<ChangeStore>();
+        services.AddSingleton<ChecklistStore>();
+        services.AddSingleton<MarkdownChecklists>();
         services.AddSingleton<IJSRuntime, NoScript>();
         services.AddSingleton<NavigationManager>(new TestNavigation(address));
         _services = services.BuildServiceProvider();
