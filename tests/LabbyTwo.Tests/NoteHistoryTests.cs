@@ -135,6 +135,38 @@ public sealed class NoteHistoryTests : IDisposable
     }
 
     [Fact]
+    public async Task ASaveKeepsAVersionAndRewritesTheLinkIndexTogether()
+    {
+        var changed = 0;
+        Notes.Changed += () => changed++;
+        var router = await Notes.SaveAsync(null, "tab", "Router", "the box", "alice");
+        var id = await Notes.SaveAsync(null, "tab", "Restart", "See [[Router]].", "alice");
+        await Notes.SaveAsync(id, "tab", "Restart", "See [[Switch]] and [[DNS#Zones]].", "bob");
+
+        // The edit kept what it replaced, and the index now holds the new links, not the old.
+        var version = Assert.Single(await Notes.VersionsAsync(id));
+        Assert.Equal("See [[Router]].", (await Notes.VersionAsync(version.Id))!.Content);
+        Assert.Equal(["dns#zones", "switch"], await TargetsAsync(id));
+        Assert.Equal(3, changed);
+
+        // Deleting keeps a version for Recently deleted and drops the note's own links, so
+        // nothing reads as linked from a note that is gone.
+        await Notes.DeleteAsync(id, "chris");
+        Assert.Empty(await TargetsAsync(id));
+        var deleted = Assert.Single(await Notes.RecentlyDeletedAsync("tab"));
+
+        // Bringing it back is a save, and indexes its links again.
+        await Notes.RestoreVersionAsync(deleted.Id, "chris");
+        Assert.Equal(["dns#zones", "switch"], await TargetsAsync(id));
+        Assert.Equal(5, changed);
+        Assert.Equal(0, await Notes.IndexMissingAsync());
+        Assert.Empty(await TargetsAsync(router));
+
+        async Task<string[]> TargetsAsync(string from) =>
+            [.. (await Notes.DirectoryAsync()).Links.Where(l => l.FromId == from).Select(l => l.Target).Order(StringComparer.Ordinal)];
+    }
+
+    [Fact]
     public async Task RecentlyDeletedOffersEachNoteOnceAndOnlyForAMonth()
     {
         var id = await Notes.SaveAsync(null, "tab", "Twice", "x");

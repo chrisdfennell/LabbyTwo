@@ -12,6 +12,29 @@ public sealed record ConditionResult(bool Holds, string? Problem = null)
     public static ConditionResult Broken(string problem) => new(false, problem);
 }
 
+/// <summary>
+/// Everything a condition may ask about beyond one connection's verdict, as the page holds
+/// it right now: the names (connections, tabs, cards, alert rules) read once off the render
+/// thread, and the state the app already keeps in memory — the evaluator's breaches, the
+/// maintenance window, whether LabbyTwo can see, the backups as last judged, the open
+/// incidents. A snapshot, built per decision, so one decision never sees two states.
+///
+/// Every part beyond the connections may be missing: null while it has not been read yet,
+/// or on a page drawn by something that does not run that part of the app. A test whose
+/// part is missing is false — "nothing to go on yet", like a connection still checking —
+/// never a problem, since nothing about what was written is wrong.
+/// </summary>
+public sealed record RunbookContext(
+    IReadOnlyList<Connection> Connections,
+    IReadOnlyList<Tab>? Tabs = null,
+    IReadOnlyList<Widget>? Widgets = null,
+    IReadOnlyList<AlertRule>? Rules = null,
+    IReadOnlyCollection<MetricAlertService.Breach>? Firing = null,
+    bool Maintenance = false,
+    bool Blind = false,
+    IReadOnlyList<BackupRow>? Backups = null,
+    IReadOnlyList<Incident>? Incidents = null);
+
 /// <summary>One line of <c>{{down}}</c>.</summary>
 /// <param name="State">Null for a connection not checked yet, listed only with <c>include="checking"</c>.</param>
 /// <param name="Silenced">Its alerts are held until then — shown, since it is still down, but marked.</param>
@@ -50,10 +73,53 @@ public sealed class RunbookFacts(
     /// nor down, so <c>down:</c> and <c>up:</c> are both false for it: a runbook should not
     /// tell you to go and power-cycle the NAS because the app restarted a second ago.
     /// </summary>
-    public ConditionResult Evaluate(RunbookCondition condition, IReadOnlyList<Connection> connections)
+    public ConditionResult Evaluate(RunbookCondition condition, IReadOnlyList<Connection> connections) =>
+        Evaluate(condition, new RunbookContext(connections));
+
+    /// <summary>
+    /// Whether a whole condition holds — tests joined with and, or and not — against what
+    /// <paramref name="context"/> holds. Every test is asked (see <see cref="RunbookExpr.Decide"/>),
+    /// so a test naming nothing is a problem whatever the others say.
+    /// </summary>
+    public ConditionResult Evaluate(RunbookExpr expression, RunbookContext context)
     {
+        if (expression is RunbookAtom atom)
+            return Evaluate(atom.Condition, context);
+        var (holds, problem) = expression.Decide(test =>
+        {
+            var result = Evaluate(test, context);
+            return (result.Holds, result.Problem);
+        });
+        return problem is not null ? ConditionResult.Broken(problem) : holds ? ConditionResult.Yes : ConditionResult.No;
+    }
+
+    /// <summary>One test, against what <paramref name="context"/> holds.</summary>
+    public ConditionResult Evaluate(RunbookCondition condition, RunbookContext context)
+    {
+        var connections = context.Connections;
         switch (condition.Test)
         {
+            case RunbookTest.Maintenance:
+                return context.Maintenance ? ConditionResult.Yes : ConditionResult.No;
+
+            case RunbookTest.Blind:
+                return context.Blind ? ConditionResult.Yes : ConditionResult.No;
+
+            case RunbookTest.IncidentOpen:
+                return context.Incidents?.Any(i => i.IsOpen) == true ? ConditionResult.Yes : ConditionResult.No;
+
+            case RunbookTest.AnyAlert:
+                return context.Firing?.Any(b => b.Firing) == true ? ConditionResult.Yes : ConditionResult.No;
+
+            case RunbookTest.Alert:
+                return AlertFiring(condition.Connection, context);
+
+            case RunbookTest.BackupLate:
+                return BackupLate(condition.Connection, context);
+
+            case RunbookTest.DownTab or RunbookTest.UpTab:
+                return TabState(condition, context);
+
             case RunbookTest.AnyDown:
                 return connections.Where(isMonitored).Any(c => state(c.Id)?.IsUp == false) ? ConditionResult.Yes : ConditionResult.No;
 
@@ -75,6 +141,10 @@ public sealed class RunbookFacts(
                 return current?.IsUp == false ? ConditionResult.Yes : ConditionResult.No;
             case RunbookTest.Up:
                 return current?.IsUp == true ? ConditionResult.Yes : ConditionResult.No;
+            case RunbookTest.AlertOn:
+                return context.Firing?.Any(b => b.Firing && b.ConnectionId == connection.Id) == true
+                    ? ConditionResult.Yes
+                    : ConditionResult.No;
         }
 
         // The live probe first, then the newest stored reading — the order {{metric: …}}
@@ -94,9 +164,10 @@ public sealed class RunbookFacts(
             // same condition, and a runbook means the same thing whichever units the person
             // reading it has chosen. A bare number is still in the stored unit, as before.
             if (Units.ConvertsTo(spec.Unit, condition.Unit)
-                && Units.Convert(condition.Value, Units.Parse(condition.Unit)!, spec.Unit) is { } stored)
+                && Units.Convert(condition.Value, Units.Parse(condition.Unit)!, spec.Unit) is { } stored
+                && Units.Convert(condition.High, Units.Parse(condition.Unit)!, spec.Unit) is { } storedHigh)
             {
-                condition = condition with { Value = stored };
+                condition = condition with { Value = stored, High = storedHigh };
             }
             else
             {
@@ -113,6 +184,94 @@ public sealed class RunbookFacts(
             : null;
         // No reading is not a problem with what was written, just nothing to go on yet.
         return value is { } v && condition.Compare(v) ? ConditionResult.Yes : ConditionResult.No;
+    }
+
+    /// <summary>
+    /// An alert rule by the name it was given — or, for a rule nobody named, the name the
+    /// Alerts page makes up for it ("NAS · Disk used above 90") — firing on any connection.
+    /// A name no rule has is a problem, so a renamed rule is pointed out rather than
+    /// quietly never firing; while the rules are still being read it is simply false.
+    /// </summary>
+    private ConditionResult AlertFiring(string name, RunbookContext context)
+    {
+        if (context.Rules is not { } rules)
+            return ConditionResult.No;
+        var wanted = name.Trim();
+        var byId = context.Connections.ToDictionary(c => c.Id, StringComparer.Ordinal);
+
+        bool Named(AlertRule rule, Connection? on)
+        {
+            if (string.Equals(rule.Name.Trim(), wanted, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (rule.Name.Trim().Length > 0)
+                return false;
+            var label = on is null ? rule.Metric : registry.Metric(on, rule.Metric).Label;
+            return string.Equals(rule.Describe(label, on?.Name), wanted, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var matching = rules
+            .Where(r => Named(r, r.ConnectionId is { } id ? byId.GetValueOrDefault(id) : null))
+            .Select(r => r.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        // A rule on "any connection" is named after the connection it fires on.
+        foreach (var breach in context.Firing ?? [])
+        {
+            if (breach.Firing && rules.FirstOrDefault(r => r.Id == breach.RuleId) is { } rule
+                && byId.GetValueOrDefault(breach.ConnectionId) is { } on && Named(rule, on))
+            {
+                matching.Add(rule.Id);
+            }
+        }
+        if (matching.Count == 0)
+            return ConditionResult.Broken($"No alert rule called “{wanted}”. Give the rule that name on the Alerts page, or copy its name from there.");
+        return context.Firing?.Any(b => b.Firing && matching.Contains(b.RuleId)) == true ? ConditionResult.Yes : ConditionResult.No;
+    }
+
+    /// <summary>
+    /// Whether a backup — the one named, or any — is late, as the Backups page last judged
+    /// it: overdue, or a source answering that there has never been one. One that cannot be
+    /// checked at all is not "late", since nothing says it is; the Backups page lists it.
+    /// </summary>
+    private static ConditionResult BackupLate(string name, RunbookContext context)
+    {
+        if (context.Backups is not { } rows)
+            return ConditionResult.No;
+        static bool Late(BackupRow row) => row.Status.State is BackupState.Late or BackupState.Never;
+        if (name.Trim().Length == 0)
+            return rows.Any(Late) ? ConditionResult.Yes : ConditionResult.No;
+
+        var wanted = name.Trim();
+        var row = rows.FirstOrDefault(r => string.Equals(r.Item.Id, wanted, StringComparison.Ordinal))
+                  ?? rows.FirstOrDefault(r => string.Equals(r.Item.Name.Trim(), wanted, StringComparison.OrdinalIgnoreCase));
+        if (row is null)
+            return ConditionResult.Broken($"No backup called “{wanted}” on the Backups page.");
+        return Late(row) ? ConditionResult.Yes : ConditionResult.No;
+    }
+
+    /// <summary>
+    /// <c>down: tab "Media"</c> and <c>up: tab "Media"</c>: the monitored connections whose
+    /// cards are on that tab, judged as <c>any down</c> and <c>all up</c> judge the lab.
+    /// </summary>
+    private ConditionResult TabState(RunbookCondition condition, RunbookContext context)
+    {
+        if (LabStatus.FindTab(context.Tabs ?? [], condition.Connection) is not { } tab)
+        {
+            // Before tabs could be named here, "down: tab Media" meant a connection called
+            // "tab Media". If there is one, that is still what it means.
+            if (ShortcodeLookup.Connection(context.Connections, "tab " + condition.Connection) is { } old)
+            {
+                var test = condition.Test == RunbookTest.DownTab ? RunbookTest.Down : RunbookTest.Up;
+                return Evaluate(condition with { Test = test, Connection = old.Id }, context);
+            }
+            return context.Tabs is null
+                ? ConditionResult.No
+                : ConditionResult.Broken($"No tab called “{condition.Connection}”.");
+        }
+
+        var on = LabStatus.OnTab(tab, context.Widgets ?? [], context.Connections).Where(isMonitored).ToList();
+        if (condition.Test == RunbookTest.DownTab)
+            return on.Any(c => state(c.Id)?.IsUp == false) ? ConditionResult.Yes : ConditionResult.No;
+        return on.All(c => state(c.Id)?.IsUp == true) ? ConditionResult.Yes : ConditionResult.No;
     }
 
     private static bool SameUnit(string written, string unit) =>

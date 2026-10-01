@@ -1,0 +1,84 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject Registry Registry
+
+@* {{who: home}} — who is in, from the Who's home plugin's last sweep — and {{who: watching}}
+   — what Plex is playing, from the sessions the Plex and Tautulli probes already read.
+   Neither asks anything itself: both are what the monitor holds in memory, drawn again on
+   every sweep. Which devices and streams, and the words for them, are LabStatus, where
+   they are tested. Something not set up is said in plain words rather than as a "?", since
+   a household without the plugin has not made a mistake. *@
+
+@switch (_what)
+{
+    case "home" or "watching" when Scope is null:
+        <span class="sc-value is-waiting" title="Loading…">…</span>
+        break;
+    case "home" when _home is { Problem: { } why }:
+        <span class="sc-value tile-meta" title="@why">presence isn't set up</span>
+        break;
+    case "home" when _home is { Waiting: true }:
+        <span class="sc-value is-waiting" title="Waiting for the first check…">…</span>
+        break;
+    case "home" when _home is not null:
+        <span class="sc-value md-who-home" title="@($"{_home.Home.Count} of {_home.Watched} device{(_home.Watched == 1 ? "" : "s")} home")"><span class="status-dot @(_home.Home.Count > 0 ? "status-up" : "status-unknown")" aria-hidden="true"></span>@(_home.Home.Count == 0 ? "nobody" : LabStatus.Join(_home.Home))</span>
+        break;
+    case "watching" when _watching is { Problem: { } why }:
+        <span class="sc-value tile-meta" title="@why">nothing to watch on</span>
+        break;
+    case "watching" when _watching is { Waiting: true }:
+        <span class="sc-value is-waiting" title="Waiting for the first check…">…</span>
+        break;
+    case "watching" when _watching is { Streams.Count: 0 }:
+        <span class="sc-value md-who-idle">nothing playing</span>
+        break;
+    case "watching" when _watching is not null:
+        <span class="md-who-streams" role="list" aria-label="Playing now">@foreach (var stream in _watching.Streams)
+        {
+            <span class="md-who-stream" role="listitem"><span class="status-dot @(stream.Transcoding == true ? "status-flapping" : "status-up")" aria-hidden="true"></span>@LabStatus.Describe(stream)<span class="md-who-progress" aria-hidden="true"><span style="width:@stream.Percent.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span></span></span>
+        }</span>
+        break;
+    default:
+        <span class="sc-problem" tabindex="0" role="note" title="@Wrong" aria-label="@Wrong">?</span>
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>Not used: neither question names anything. Taken so it can be drawn like every other live value.</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private string _what = "";
+    private WhoHome? _home;
+    private WhoWatching? _watching;
+
+    private string Wrong => $"Ask {{{{who: home}}}} or {{{{who: watching}}}}. ({Code.Source})";
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override void OnParametersSet() => Show();
+
+    private void Show()
+    {
+        _what = Code.Target is [var only] ? only.Trim().ToLowerInvariant() : "";
+        _home = null;
+        _watching = null;
+        if (Scope is null)
+            return;
+        var connections = Scope.Connections;
+        if (_what == "home")
+            _home = LabStatus.Home(connections, Registry, Health.State, id => Latest.Get(id, RunbookFacts.StoredWindow));
+        else if (_what == "watching")
+            _watching = LabStatus.Watching(connections, Health.State);
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Show();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

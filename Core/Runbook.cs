@@ -19,29 +19,65 @@ public enum RunbookTest
     /// <summary><c>all up</c> — every monitored connection is up, none still checking.</summary>
     AllUp,
 
-    /// <summary><c>metric: NAS / disk_percent &gt; 90</c> — a reading compared with a number.</summary>
+    /// <summary><c>metric: NAS / disk_percent &gt; 90</c> — a reading compared with a number, or <c>between 40 and 60</c>.</summary>
     Metric,
+
+    /// <summary><c>down: tab "Media"</c> — at least one monitored connection on that tab is down.</summary>
+    DownTab,
+
+    /// <summary><c>up: tab "Media"</c> — every monitored connection on that tab is up, none still checking.</summary>
+    UpTab,
+
+    /// <summary><c>alert: "Disk almost full"</c> — that alert rule is firing, on any connection.</summary>
+    Alert,
+
+    /// <summary><c>any alert</c> — any alert rule is firing.</summary>
+    AnyAlert,
+
+    /// <summary><c>alert on: NAS</c> — any alert rule is firing on that connection.</summary>
+    AlertOn,
+
+    /// <summary><c>maintenance</c> — every alert is being held because somebody said they are working on the lab.</summary>
+    Maintenance,
+
+    /// <summary><c>blind</c> — LabbyTwo cannot see the lab (its own DNS, Docker or database), so failures are held.</summary>
+    Blind,
+
+    /// <summary><c>backup late</c>, or <c>backup late: Photos</c> for one — a backup is late or has never been made.</summary>
+    BackupLate,
+
+    /// <summary><c>incident open</c> — an incident is still going on.</summary>
+    IncidentOpen,
 }
 
 /// <summary>
 /// The condition of one <c>{{if …}}</c>, as written. Reading it is text work and lives here;
 /// deciding whether it holds needs the monitor and lives in <c>RunbookFacts</c>.
 /// </summary>
-/// <param name="Connection">The connection named, for everything except the two whole-lab tests.</param>
+/// <param name="Connection">
+/// The connection named — or, for the tests that name something else, the tab
+/// (<see cref="RunbookTest.DownTab"/>), the alert rule (<see cref="RunbookTest.Alert"/>) or
+/// the backup (<see cref="RunbookTest.BackupLate"/>, empty for "any"). Empty for the
+/// whole-lab tests. One field rather than four, because each test names exactly one thing
+/// and every message about it says "No … called “that”".
+/// </param>
 /// <param name="Metric">The metric's key or label, for <see cref="RunbookTest.Metric"/>.</param>
-/// <param name="Operator">One of <c>&gt; &gt;= &lt; &lt;= == !=</c>.</param>
+/// <param name="Operator">One of <c>&gt; &gt;= &lt; &lt;= == !=</c>, or <c>between</c>. A single <c>=</c> is read as <c>==</c>.</param>
 /// <param name="Value">The number compared against, as written — in <paramref name="Unit"/> when there is one, otherwise the metric's stored unit.</param>
 /// <param name="Unit">
 /// A unit written after the number, if any: the metric's own, or another of the same kind
 /// (°F for a metric stored in °C), which the number is converted from before comparing.
+/// For <c>between</c>, the unit of both ends.
 /// </param>
+/// <param name="High">The upper end of <c>between</c>; <paramref name="Value"/> is the lower. Both are included.</param>
 public sealed record RunbookCondition(
     RunbookTest Test,
     string Connection = "",
     string Metric = "",
     string Operator = "",
     double Value = 0,
-    string Unit = "")
+    string Unit = "",
+    double High = 0)
 {
     /// <summary>Whether <paramref name="reading"/> passes the comparison.</summary>
     public bool Compare(double reading) => Operator switch
@@ -54,6 +90,8 @@ public sealed record RunbookCondition(
         // count must not fail over the last bit of a float.
         "==" => Math.Abs(reading - Value) < 1e-9,
         "!=" => Math.Abs(reading - Value) >= 1e-9,
+        // Inclusive at both ends, the way people say it: "between 40 and 60" includes 60.
+        "between" => reading >= Value - 1e-9 && reading <= High + 1e-9,
         _ => false,
     };
 }
@@ -68,10 +106,12 @@ public sealed record RunbookText(string Markdown) : RunbookPart;
 public sealed record RunbookProblem(string Message) : RunbookPart;
 
 /// <summary>
-/// <c>{{if …}}</c> … <c>{{else}}</c> … <c>{{end}}</c>.
+/// <c>{{if …}}</c> … <c>{{else}}</c> … <c>{{end}}</c>. An <c>{{elif …}}</c> is read as an
+/// <c>{{if}}</c> that is the whole of the one before's "otherwise" part, which is what it
+/// means, so nothing after the parser has to know else-if exists.
 /// </summary>
-/// <param name="Source">The <c>{{if …}}</c> line as written, for messages.</param>
-/// <param name="Condition">Null when it could not be read; <paramref name="Problem"/> says why.</param>
+/// <param name="Source">The <c>{{if …}}</c> (or <c>{{elif …}}</c>) line as written, for messages.</param>
+/// <param name="Expression">Null when it could not be read; <paramref name="Problem"/> says why.</param>
 /// <param name="Problem">Why neither branch can be shown. Drawn as a "?" in their place.</param>
 /// <param name="Notes">
 /// Mistakes inside the section (a second <c>{{else}}</c>) that must be visible whichever
@@ -79,11 +119,15 @@ public sealed record RunbookProblem(string Message) : RunbookPart;
 /// </param>
 public sealed record RunbookIf(
     string Source,
-    RunbookCondition? Condition,
+    RunbookExpr? Expression,
     string? Problem,
     IReadOnlyList<RunbookPart> Then,
     IReadOnlyList<RunbookPart> Else,
-    IReadOnlyList<string> Notes) : RunbookPart;
+    IReadOnlyList<string> Notes) : RunbookPart
+{
+    /// <summary>The single test, when the condition is one test and not a combination of them.</summary>
+    public RunbookCondition? Condition => (Expression as RunbookAtom)?.Condition;
+}
 
 /// <summary>
 /// <c>{{details: Title}}</c> … <c>{{end}}</c>: a part folded away under a title until
@@ -124,7 +168,7 @@ public static partial class Runbook
     public const int MaxDepth = 8;
 
     /// <summary>The conditions, in the words the "?" notes and the editor use.</summary>
-    public const string Forms = "down: NAS, up: NAS, any down, all up, or metric: NAS / disk_percent > 90";
+    public const string Forms = "down: NAS, up: NAS, any down, all up, metric: NAS / disk_percent > 90, down: tab \"Media\", alert: \"Disk almost full\", any alert, alert on: NAS, maintenance, blind, backup late, incident open — joined with and, or, not and brackets";
 
     // Up to three spaces, as Markdown allows before a heading; four would be code.
     [GeneratedRegex(@"^ {0,3}\{\{")]
@@ -148,7 +192,7 @@ public static partial class Runbook
     public static bool MayHaveSections(string? markdown) =>
         markdown is not null && markdown.Contains("{{", StringComparison.Ordinal) && SectionWord().IsMatch(markdown);
 
-    [GeneratedRegex(@"\{\{\s*(?:if\s|details\s*:|else\s*\}\}|end\s*\}\})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\{\{\s*(?:if\s|elif\s|details\s*:|else\s*\}\}|end\s*\}\})", RegexOptions.IgnoreCase)]
     private static partial Regex SectionWord();
 
     /// <summary>
@@ -249,19 +293,59 @@ public static partial class Runbook
                     {
                         var source = directive.Source.Trim();
                         string? problem;
-                        RunbookCondition? condition;
-                        if (open.Count >= MaxDepth)
+                        RunbookExpr? condition;
+                        if (Depth(open) >= MaxDepth)
                         {
                             condition = null;
                             problem = $"Sections nested more than {MaxDepth} deep are not shown. ({source})";
                         }
                         else
                         {
-                            condition = ParseCondition(directive.Part(0), out problem);
+                            condition = ParseExpression(directive.Part(0), out problem);
                             if (problem is not null)
                                 problem += $" ({source})";
                         }
                         open.Push(Section.If(source, condition, problem, lineNumber));
+                        break;
+                    }
+
+                    case "elif":
+                    {
+                        // "Otherwise, if …": the section so far takes everything from here as
+                        // its otherwise part, and that part is a new section of its own —
+                        // marked as a link in the chain, so the one {{end}} closes them all.
+                        var source = directive.Source.Trim();
+                        if (open.Count == 0)
+                        {
+                            root.Add(new RunbookProblem($"{source} on line {lineNumber} has no {{{{if …}}}} above it."));
+                            break;
+                        }
+                        var owner = open.Peek();
+                        if (owner.IsDetails)
+                        {
+                            Current().Add(new RunbookProblem(
+                                $"{source} on line {lineNumber} is inside {owner.Source}, which has no “otherwise” — close the fold with {{{{end}}}} first."));
+                            break;
+                        }
+                        if (owner.InElse)
+                        {
+                            // After the {{else}} there is no "otherwise" left to narrow. Said on
+                            // the section, which shows whichever part is drawn.
+                            owner.Notes.Add($"{source} on line {lineNumber} comes after {{{{else}}}}, so it is ignored; put it before the {{{{else}}}}.");
+                            break;
+                        }
+                        if (owner.Links >= MaxChain)
+                        {
+                            owner.Notes.Add($"More than {MaxChain} {{{{elif}}}}s in one section; {source} on line {lineNumber} and everything after it are the “otherwise” part.");
+                            owner.InElse = true;
+                            break;
+                        }
+
+                        var condition = ParseExpression(directive.Part(0), out var problem);
+                        if (problem is not null)
+                            problem += $" ({source})";
+                        owner.InElse = true;
+                        open.Push(Section.If(source, condition, problem, lineNumber, chained: true, links: owner.Links + 1));
                         break;
                     }
 
@@ -271,7 +355,7 @@ public static partial class Runbook
                         var title = string.Join(" / ", directive.Target);
                         // Too deep is not a reason to hide anything: a fold is only a
                         // convenience, so its contents are shown unfolded with a note.
-                        var problem = open.Count >= MaxDepth
+                        var problem = Depth(open) >= MaxDepth
                             ? $"Sections nested more than {MaxDepth} deep are not folded. ({source})"
                             : null;
                         open.Push(Section.Details(source, title.Length > 0 ? title : "Details",
@@ -303,6 +387,13 @@ public static partial class Runbook
                         {
                             var closed = open.Pop();
                             Current().AddRange(closed.ToParts());
+                            // An {{elif}} is closed by the same {{end}} as the {{if}} it
+                            // continues, so the whole chain is closed here, innermost first.
+                            while (closed.Chained && open.Count > 0)
+                            {
+                                closed = open.Pop();
+                                Current().AddRange(closed.ToParts());
+                            }
                         }
                         break;
                 }
@@ -321,14 +412,29 @@ public static partial class Runbook
         {
             var unclosed = open.Pop();
             var parent = Current();
-            parent.Add(new RunbookProblem(
-                $"{unclosed.Source} on line {unclosed.Line} is never closed with {{{{end}}}}, so everything after it is shown."));
+            // A link of an {{elif}} chain is not separately unclosed: the {{if}} that started
+            // the chain says so once, and everything in every link follows it.
+            if (!unclosed.Chained)
+            {
+                parent.Add(new RunbookProblem(
+                    $"{unclosed.Source} on line {unclosed.Line} is never closed with {{{{end}}}}, so everything after it is shown."));
+            }
             parent.AddRange(unclosed.Then);
             parent.AddRange(unclosed.Else);
         }
 
         return root;
     }
+
+    /// <summary>
+    /// How many <c>{{elif}}</c>s one section may have. Each is drawn as a section inside the
+    /// last one's "otherwise", so a chain is a nesting too — but one a person writes on
+    /// purpose, a case per line, so it is not held to <see cref="MaxDepth"/>.
+    /// </summary>
+    public const int MaxChain = 32;
+
+    /// <summary>How deeply nested the next section would be, counting an <c>{{elif}}</c> chain as the one section it is.</summary>
+    private static int Depth(Stack<Section> open) => open.Count(s => !s.Chained);
 
     /// <summary>"true", "yes", "1", "on" or "open", as an option that switches something on.</summary>
     public static bool IsYes(string value) =>
@@ -355,7 +461,7 @@ public static partial class Runbook
     /// <summary>An <c>{{if}}</c> or a <c>{{details}}</c> still waiting for its <c>{{end}}</c>.</summary>
     private sealed class Section
     {
-        private RunbookCondition? _condition;
+        private RunbookExpr? _condition;
         private string? _problem;
         private string _title = "";
         private bool _open;
@@ -367,8 +473,8 @@ public static partial class Runbook
             IsDetails = isDetails;
         }
 
-        public static Section If(string source, RunbookCondition? condition, string? problem, int line) =>
-            new(source, line, isDetails: false) { _condition = condition, _problem = problem };
+        public static Section If(string source, RunbookExpr? condition, string? problem, int line, bool chained = false, int links = 0) =>
+            new(source, line, isDetails: false) { _condition = condition, _problem = problem, Chained = chained, Links = links };
 
         public static Section Details(string source, string title, bool open, string? problem, int line) =>
             new(source, line, isDetails: true) { _title = title, _open = open, _problem = problem };
@@ -376,6 +482,13 @@ public static partial class Runbook
         public string Source { get; }
         public int Line { get; }
         public bool IsDetails { get; }
+
+        /// <summary>Opened by an <c>{{elif}}</c>: the "otherwise" of the section under it, closed by the same <c>{{end}}</c>.</summary>
+        public bool Chained { get; private init; }
+
+        /// <summary>How many <c>{{elif}}</c>s came before this one in its chain.</summary>
+        public int Links { get; private init; }
+
         public List<RunbookPart> Then { get; } = [];
         public List<RunbookPart> Else { get; } = [];
         public List<string> Notes { get; } = [];

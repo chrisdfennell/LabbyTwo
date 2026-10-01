@@ -20,7 +20,24 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
             Help: "In the Plex web app, open any item's XML from the ⋯ menu — the token is in that URL."),
     ];
 
-    public sealed record Session(string Title, string Subtitle, string User, string Player, double PercentDone);
+    public sealed record Session(string Title, string Subtitle, string User, string Player, double PercentDone)
+    {
+        /// <summary>
+        /// Whether the server is converting the video or audio as it plays — Plex says so in
+        /// the session's TranscodeSession, which a direct play does not have at all.
+        /// </summary>
+        public bool Transcoding { get; init; }
+
+        /// <summary>The series, for an episode; null for a film or a track.</summary>
+        public string? Series { get; init; }
+
+        /// <summary>
+        /// As <c>{{who: watching}}</c> and Tautulli say it: the series first and the episode
+        /// second, where this record has always put the episode first for the Plex card.
+        /// </summary>
+        public NowPlayingStream ToStream() =>
+            new(User, Series ?? Title, Series is null ? Subtitle : Title, Player, PercentDone, Transcoding);
+    }
 
     public IReadOnlyList<MetricSpec> Metrics =>
     [
@@ -56,7 +73,13 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
                 1 => "1 stream",
                 _ => $"{sessions.Count} streams",
             };
-            return ProbeResult.Up(stopwatch.Elapsed, message, metrics);
+            // The sessions were read to be counted; keeping who and what is free, and is what
+            // {{who: watching}} draws, so a note never has to ask Plex itself.
+            var details = new Dictionary<string, string>
+            {
+                [NowPlaying.DetailKey] = NowPlaying.Encode(sessions.Select(s => s.ToStream())),
+            };
+            return ProbeResult.Up(stopwatch.Elapsed, message, metrics, details);
         }
         catch (Exception ex)
         {
@@ -68,6 +91,12 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
     public async Task<IReadOnlyList<Session>> SessionsAsync(Connection connection, CancellationToken ct)
     {
         var root = await GetAsync(connection, "/status/sessions", ct);
+        return ReadSessions(root);
+    }
+
+    /// <summary>The sessions in a <c>/status/sessions</c> answer. Separate so a test can hand it Plex's XML.</summary>
+    public static IReadOnlyList<Session> ReadSessions(XElement root)
+    {
         var sessions = new List<Session>();
         foreach (var video in root.Elements().Where(e => e.Name.LocalName is "Video" or "Track"))
         {
@@ -82,7 +111,13 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
                 series ?? video.Attribute("year")?.Value ?? "",
                 video.Element("User")?.Attribute("title")?.Value ?? "",
                 video.Element("Player")?.Attribute("title")?.Value ?? "",
-                duration > 0 ? offset / duration * 100 : 0));
+                duration > 0 ? offset / duration * 100 : 0)
+            {
+                Series = series,
+                Transcoding = video.Element("TranscodeSession") is { } transcode
+                              && (string.Equals(transcode.Attribute("videoDecision")?.Value, "transcode", StringComparison.OrdinalIgnoreCase)
+                                  || string.Equals(transcode.Attribute("audioDecision")?.Value, "transcode", StringComparison.OrdinalIgnoreCase)),
+            });
         }
         return sessions;
     }

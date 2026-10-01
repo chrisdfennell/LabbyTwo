@@ -115,7 +115,9 @@
                somebody is checking that what they set up is what they meant. *@
             @if (result.Details is { Count: > 0 })
             {
-                @foreach (var (label, text) in result.Details)
+                @* The session list Plex and Tautulli keep for {{who: watching}} is JSON for
+                   the page to read, not a fact for a person, so it stays out of this list. *@
+                @foreach (var (label, text) in result.Details.Where(d => d.Key != NowPlaying.DetailKey))
                 {
                     <div class="small">@label: @text</div>
                 }

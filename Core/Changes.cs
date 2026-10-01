@@ -88,6 +88,12 @@ public static class ChangeKinds
     /// <summary>A scheduled action ran, failed, was skipped or was missed — see <see cref="ScheduledAction"/>.</summary>
     public const string Scheduled = "scheduled";
 
+    /// <summary>
+    /// Somebody pressed a <c>{{ssh: …}}</c> button in a note and a command ran on a machine —
+    /// who, what, and how it ended. See <see cref="RunbookCommands"/>.
+    /// </summary>
+    public const string Command = "command";
+
     /// <summary>Somebody reset a checklist in a note, a Markdown card or a custom page's Markdown block — see <see cref="Checklists"/>.</summary>
     public const string Checklist = "checklist";
 
@@ -106,6 +112,7 @@ public static class ChangeKinds
         (Backup, "Backups and restore tests"),
         (Monitor, "LabbyTwo losing sight of the lab"),
         (Scheduled, "Scheduled actions"),
+        (Command, "Commands run from notes"),
         (Checklist, "Checklists reset"),
     ];
 
@@ -131,6 +138,7 @@ public static class ChangeKinds
             "backup" or "backups" or "restore" or "restores" => Backup,
             "monitor" or "monitoring" or "blind" or "sight" => Monitor,
             "scheduled" or "schedule" or "schedules" => Scheduled,
+            "command" or "commands" or "ssh" or "runbook" or "runbooks" => Command,
             "checklist" or "checklists" => Checklist,
             _ => null,
         };

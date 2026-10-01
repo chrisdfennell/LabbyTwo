@@ -118,6 +118,7 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
             services.AddSingleton<Markdown>();
             services.AddSingleton<ActionRunner>();
             services.AddSingleton<NotesStore>();
+            services.AddSingleton<NoteDirectory>();
             services.AddSingleton<ChecklistStore>();
             services.AddSingleton<MarkdownChecklists>();
         });
@@ -271,6 +272,85 @@ public sealed partial class NoteChecklistRenderTests : IAsyncDisposable
         Assert.True(ticks.ContainsKey(now[0].Key));
         Assert.True(ticks.ContainsKey(now[1].Key));
         Assert.Equal("Stop Plex and Sonarr", ticks[now[0].Key].Text);
+    }
+
+    /// <summary>
+    /// Everything the Markdown features added side by side do, in one note: a <c>[[link]]</c>
+    /// (one of them inside a checklist item), a diagram fence, an inline gauge, an
+    /// <c>{{if … and …}}</c>/<c>{{elif}}</c> chain with a checklist in the branch that is
+    /// drawn — and every box still tickable, keyed as the save's reconcile keys them.
+    /// </summary>
+    [Fact]
+    public async Task LinksDiagramsGaugesConditionsAndChecklistsDrawTogether()
+    {
+        var nas = await ConnectionAsync("NAS", "stub", ("url", "http://nas.lan"));
+        await Get<HealthMonitor>().RefreshAsync(nas);
+        var tab = new Tab { Name = "Runbooks", Slug = "runbooks", Kind = TabKinds.Notes };
+        await Get<ConfigStore>().SaveTabAsync(tab);
+        var plex = await Get<NotesStore>().SaveAsync(null, tab.Id, "Plex runbook", "## Restart\nPress it.");
+
+        const string note = """
+            # Disk check
+
+            See [[Plex runbook#Restart|the restart steps]]. Disk: {{gauge: NAS / disk_percent}}
+
+            ```diagram
+            Internet -> NAS
+            ```
+
+            {{if down: NAS and metric: NAS / disk_percent > 10}}
+            Never shown.
+
+            - [ ] Not drawn while the NAS is up
+            {{elif metric: NAS / disk_percent > 40 and metric: NAS / cpu_percent < 50}}
+            Half full and quiet.
+
+            - [ ] Read [[Plex runbook]] first
+            - [x] Took a snapshot
+            {{else}}
+            Fine.
+            {{end}}
+
+            - [ ] Told the family
+            """;
+
+        var owner = await Get<NotesStore>().SaveAsync(null, tab.Id, "Disk check", note);
+        var renderer = Renderer();
+        await RenderNoteAsync(renderer, note, owner);
+        var html = Text(await renderer.WaitForAsync(h =>
+            h.Contains("md-gauge", StringComparison.Ordinal)
+            && h.Contains("md-diagram-node", StringComparison.Ordinal)
+            && h.Contains("the restart steps</a>", StringComparison.Ordinal)
+            && h.Contains("Half full and quiet", StringComparison.Ordinal)
+            && Boxes(h).Count(b => !b.Contains(" disabled", StringComparison.Ordinal)) == 3, TimeSpan.FromSeconds(20)));
+
+        Assert.Empty(_boundary.Errors);
+        Assert.DoesNotContain("{{", html);
+        // Outside the boxes' labels, which name an item by its words as written.
+        Assert.DoesNotContain("[[", Regex.Replace(html, "aria-label=\"[^\"]*\"", ""));
+        Assert.DoesNotContain("sc-problem", html);
+        Assert.DoesNotMatch(@"lt[a-z]{10}q[0-9]+q", html);
+        Assert.Contains($"href=\"t/runbooks?heading=Restart#note-{plex}\"", html);
+        Assert.Contains($"href=\"t/runbooks#note-{plex}\"", html); // the link inside the checklist item
+        Assert.DoesNotContain("Never shown", html);
+        Assert.DoesNotContain("Not drawn while", html);
+        Assert.DoesNotContain("Fine.", html);
+        var boxes = Boxes(html);
+        Assert.Equal(3, boxes.Count);
+        Assert.Contains(" checked", boxes[1]);
+
+        // Ticking the item with the link in it stores it under the key the save reconciles with.
+        await renderer.ChangeAsync(0, true);
+        await renderer.WaitForAsync(h => Boxes(h)[0].Contains(" checked", StringComparison.Ordinal));
+        var tick = Assert.Single((await Get<ChecklistStore>().TicksAsync(ChecklistOwners.Note(owner))).Values);
+        Assert.Equal("Read [[Plex runbook]] first", tick.Text);
+        var items = Get<Markdown>().ChecklistItems(note);
+        Assert.Equal(4, items.Count);
+        Assert.Contains(items, i => i.Text == tick.Text);
+
+        // The save that keeps this note's links indexed also kept them through the checklist.
+        var links = (await Get<NotesStore>().DirectoryAsync()).Links.Where(l => l.FromId == owner).Select(l => l.Target).Order(StringComparer.Ordinal);
+        Assert.Equal(["plex runbook", "plex runbook#restart"], links);
     }
 
     /// <summary>

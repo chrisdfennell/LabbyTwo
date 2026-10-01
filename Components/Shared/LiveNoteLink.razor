@@ -1,0 +1,142 @@
+@implements IDisposable
+@using Microsoft.Extensions.Logging
+@inject NoteDirectory Directory
+@inject ILogger<LiveNoteLink> Log
+
+@* [[Plex runbook]], [[Runbooks / Plex runbook#Restart|the restart steps]]: a link to another
+   note by its title. Resolved against the note directory (NoteDirectory) — one lookup in a
+   graph held in memory, never a query — and drawn again when a note or a page changes, so
+   a link to a note that has just been written stops being "missing" by itself.
+
+   A note that does not exist is a link of its own look ("is-missing") that opens a new note
+   with that title on this page — the way a wiki offers to write the page you just linked.
+   Until the directory has been read the words are shown as plain text, never a guess. *@
+
+@if (_target is null)
+{
+    <span class="note-link is-waiting">@_text</span>
+}
+else if (_target.Note is { } note)
+{
+    <a class="note-link" href="@note.HrefTo(_target.Heading)" title="@Describe(note)">@_text</a>
+}
+else if (_create is not null)
+{
+    <a class="note-link is-missing" href="@_create" title="@($"There is no note called “{_target.Title}” yet. Click to write it.")">@_text</a>
+}
+else
+{
+    <span class="note-link is-missing" title="@($"There is no note called “{_target.Title}”, and no notes page to write it on.")">@_text</span>
+}
+
+@code {
+    /// <summary>The link, as <see cref="NoteLink.ToShortcode"/> carries it.</summary>
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The note (or card) the link is written in.</summary>
+    [Parameter] public string? OwnerId { get; set; }
+
+    private NoteTarget? _target;
+    private NoteGraph? _graph;
+    private string? _create;
+    private string _text = "";
+    private bool _loading;
+    private bool _disposed;
+
+    protected override void OnInitialized() => Directory.Changed += OnDirectoryChanged;
+
+    protected override void OnParametersSet() => Resolve();
+
+    private void Resolve()
+    {
+        var target = Code.Part(0);
+        // While a fresh read is under way the last one still answers, so a page whose notes
+        // just changed does not blink every link back to plain text.
+        if (Directory.Current is { } current)
+            _graph = current;
+        else
+            Load();
+        if (_graph is not { } graph)
+        {
+            _target = null;
+            _text = Code.Option("text", target);
+            return;
+        }
+
+        _target = graph.Resolve(target, OwnerId);
+        _text = Code.Option("text") is { Length: > 0 } text
+            ? text
+            : _target.Heading is { } heading ? $"{_target.Title} › {heading}" : _target.Title;
+
+        // A new note goes on the page the link names, else the page the link is on, else
+        // the first notes page there is.
+        _create = null;
+        if (_target.Note is null)
+        {
+            var place = (_target.Page is { } page ? graph.Places.FirstOrDefault(p => p.Answers(page)) : null)
+                        ?? graph.PlaceOf(OwnerId)
+                        ?? graph.Places.FirstOrDefault();
+            _create = place?.NewNoteHref(_target.Title);
+        }
+    }
+
+    private static string Describe(NoteEntry note) => $"{note.Shown} — {note.Place.Describe()}";
+
+    /// <summary>
+    /// Reads the directory in the background — shared with every other link asking — and
+    /// draws again once it is there. Not while prerendering: that render is thrown away.
+    /// </summary>
+    private void Load()
+    {
+        if (_loading || !RendererInfo.IsInteractive)
+            return;
+        _loading = true;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Directory.GetAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning(ex, "Could not read the notes a link points at");
+            }
+            if (_disposed)
+                return;
+            try
+            {
+                await InvokeAsync(() =>
+                {
+                    _loading = false;
+                    if (_disposed || Directory.Current is null)
+                        return;
+                    Resolve();
+                    StateHasChanged();
+                });
+            }
+            catch (ObjectDisposedException)
+            {
+                // The circuit went while the notes were being read.
+            }
+        });
+    }
+
+    private void OnDirectoryChanged()
+    {
+        if (_disposed)
+            return;
+        _ = InvokeAsync(() =>
+        {
+            if (_disposed)
+                return;
+            Resolve();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Directory.Changed -= OnDirectoryChanged;
+    }
+}

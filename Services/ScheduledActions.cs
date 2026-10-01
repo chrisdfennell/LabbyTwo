@@ -57,6 +57,12 @@ public sealed class ScheduledActions : IDisposable
     /// <summary>The runs in progress, by action id — what stops one action running twice at once.</summary>
     private readonly ConcurrentDictionary<string, Task<ScheduledRun>> _running = new();
 
+    /// <summary>
+    /// Each action's newest run, by action id: set as every run is recorded, and read from the
+    /// store at most once per action otherwise. A null value is "looked, and it has never run".
+    /// </summary>
+    private readonly ConcurrentDictionary<string, ScheduledRun?> _lastRuns = new();
+
     /// <summary>Cancelled when the app stops, so a run in progress is not left holding a socket.</summary>
     private readonly CancellationTokenSource _stopping = new();
 
@@ -367,6 +373,50 @@ public sealed class ScheduledActions : IDisposable
     /// <summary>Whether this action is running right now.</summary>
     public bool IsRunning(string id) => _running.ContainsKey(id);
 
+    /// <summary>
+    /// One action as a note's <c>{{run: …}}</c> shows it: found by id or name, when it is next
+    /// due, and how its last run went.
+    /// </summary>
+    /// <param name="Next">Null when it is off, incomplete, or has no time left to run.</param>
+    /// <param name="Last">Null when it has never run.</param>
+    public sealed record Status(ScheduledAction Action, DateTimeOffset? Next, ScheduledRun? Last, bool Running);
+
+    /// <summary>
+    /// The action a note names, from the in-memory schedule — the same one the minute tick
+    /// reads, so asking costs nothing on a quiet minute. Its last run comes from memory too:
+    /// every run is remembered as it is recorded, and an action not yet seen to run since
+    /// LabbyTwo started has its newest stored run read once and then kept. Null when nothing
+    /// is called that.
+    /// </summary>
+    public async Task<Status?> StatusAsync(string nameOrId, DateTimeOffset now, CancellationToken ct = default)
+    {
+        var wanted = nameOrId.Trim();
+        if (wanted.Length == 0)
+            return null;
+        var slots = await SlotsAsync(now, ct);
+        var slot = slots.TryGetValue(wanted, out var byId) ? byId
+            : slots.Values.Where(s => string.Equals(s.Action.Name.Trim(), wanted, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Action.Id, StringComparer.Ordinal)
+                .FirstOrDefault();
+        if (slot is null)
+            return null;
+
+        var id = slot.Action.Id;
+        if (!_lastRuns.TryGetValue(id, out var last))
+        {
+            var stored = (await _store.RunsAsync(id, 1, ct)).FirstOrDefault();
+            // A run recorded while that read was going is newer than what it found.
+            last = _lastRuns.GetOrAdd(id, stored);
+        }
+        return new Status(slot.Action, slot.Next, last, IsRunning(id));
+    }
+
+    /// <summary>
+    /// Raised after any run is recorded — done, failed, skipped or missed — so a note showing
+    /// "last run" can update without asking. <see cref="Ran"/> is only the ones that ran.
+    /// </summary>
+    public event Action<ScheduledRun>? Recorded;
+
     /// <summary>Waits for every run in progress. For tests, and for a shutdown that wants to be tidy.</summary>
     public async Task WhenIdleAsync()
     {
@@ -478,14 +528,24 @@ public sealed class ScheduledActions : IDisposable
     {
         try
         {
-            return await _store.RecordRunAsync(run, ct);
+            run = await _store.RecordRunAsync(run, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The history is the record, not the mechanism: losing a row must not lose the run.
             _log.LogWarning(ex, "Could not record a run of scheduled action {Id}", run.ActionId);
-            return run;
         }
+
+        _lastRuns[run.ActionId] = run;
+        try
+        {
+            Recorded?.Invoke(run);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "A listener for scheduled runs failed");
+        }
+        return run;
     }
 
     private async Task FeedAsync(Change change, CancellationToken ct)

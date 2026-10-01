@@ -1180,7 +1180,7 @@ CommonMark with Markdig's advanced extensions. Raw HTML is switched off: `<b>` o
 | `- item`, `1. item`, indented for nesting | lists |
 | `- [ ] to do`, `- [x] done` | task lists; in a note, a Text / Markdown card and a custom page's Markdown block the boxes can be ticked and are remembered (see [Checklists](#checklists)) — in previews and history they are display only |
 | `> quoted` | a quote |
-| `` `code` ``, a fenced ```` ``` ```` block (with a language) or four-space indent | code, in a monospace box; not syntax-highlighted |
+| `` `code` ``, a fenced ```` ``` ```` block (with a language) or four-space indent | code, in a monospace box; not syntax-highlighted. Each has a **copy** button — in a block's corner, and a small icon after a code span (shown on hover, always on a phone). It copies the code exactly, and on plain http, where browsers refuse the clipboard, it selects the code for you to copy instead |
 | `[text](https://…)`, `<https://…>`, a bare `https://…` or `www.…` | links |
 | `![alt](https://…/picture.png)` | an image, loaded by the viewer's browser; `![](https://www.youtube.com/watch?v=…)` embeds the video |
 | pipe tables, with `:---:` alignment | tables |
@@ -1295,6 +1295,9 @@ their own; a few mark the edges of a section.
 | Shortcode | Shows |
 |---|---|
 | `{{status: NAS}}` | up / down / checking / paused, with the service tile's coloured dot |
+| `{{status: tab "Media"}}` | one line for a tab's connections — those its cards are bound to — "Media: 7 fine, 1 down (Plex), 1 checking", with a red dot while anything is down. `{{status: all}}` for the whole lab ("Everything: …"); add `full` (`{{status: tab Media full}}`, or `full=true`) to list each connection after it with its dot; `label="TV"` renames it. A connection actually called "all" or "tab Media" is still that connection |
+| `{{who: home}}` | who is in — "Chris and Sam", or "nobody" — from the [Who's home plugin](#plugins)'s last sweep; "presence isn't set up" without it |
+| `{{who: watching}}` | what Plex is playing, one stream a line: "Chris — The Office (Dinner Party) on Living room TV, 42%, transcoding", with a progress bar; or "nothing playing". From the sessions the Plex and Tautulli connections already read on every sweep — a stream both report is listed once, with Tautulli's word on transcoding |
 | `{{metric: NAS / cpu_percent}}` | the latest reading as the metric tile formats it, in the units chosen in Settings → Appearance; `decimals=2` and `unit=` override (below) |
 | `{{forecast: NAS}}` | when it fills up — "in about 6 weeks", "now", "not at the current rate": the soonest to fill, or `{{forecast: NAS / disk_percent}}` for one |
 | `{{uptime: NAS}}` | uptime over the last 30 days, `99.8%`; `days=7` for another window (1–90) |
@@ -1370,11 +1373,60 @@ installed or not. `{{updates}}` only shows what the last check found — pressed
 Containers tab or in Settings, or run on the schedule if you chose one — so a runbook open
 on a wall all day never becomes a stream of calls to Docker Hub.
 
+**Doing things** — commands, logs and scheduled actions:
+
+| Shortcode | Does |
+|---|---|
+| `{{ssh: "NAS" / docker restart plex}}` | a button showing the exact command. Pressing it asks first — naming the machine and its address and showing the command — then runs it on that machine and shows the exit code and the last 50 lines of output under the button. Inline or on a line of its own |
+| `{{logs: plex last=15m errors}}` | the last few lines of one container's log: `plex` is a container's name or a Compose service's; `last=` from `5m` to `24h` (15 minutes if left off); `errors` keeps only lines saying error, exception, fatal or failed; `match="database is locked"` only lines containing that; `lines=20` (1–50, default 10); `connection="Docker"` which Docker connection. With nothing matching it says so — "No errors in the last 15 minutes" — and **Open in Logs** opens the [Logs page](#searching-every-containers-logs) with the same search. On a line of its own |
+| `{{run: "Weekly Plex restart"}}` | a [scheduled action](#scheduled-actions) by name or id: when it runs next ("next run in 3 days, Sun 4 Oct 04:00"), how its last run went ("last ok 2d ago", failed, skipped) and **Run now** |
+
+`{{ssh}}` reads the machine up to the first `/` and takes **everything after it as the
+command, exactly as written** — slashes, quotes, `|` and `=` need no quoting. A machine
+whose name has a slash in it is quoted, `{{ssh: "Rack / Pi" / uptime}}`. Options go before
+the slash: `timeout=120` (seconds, or `2m`; 5 seconds to 10 minutes, a minute if left off)
+and `label="Restart Plex"` for words on the button instead of the command. A command
+containing `}}` is wrapped whole in quotes: `{{ssh: NAS / "docker ps --format '{{.Names}}'"}}`.
+One line, up to 1,000 characters.
+
+What keeps `{{ssh}}` safe:
+
+- **It runs through an SSH host connection** from the [Terminal plugin](examples/LabbyTwo.TerminalPlugin),
+  with that connection's own login, key and pinned host key. Any other connection — or one
+  whose plugin is not installed — draws the button disabled, saying why.
+- **Off until you say so, per machine.** The SSH host connection has an **Allow runbook
+  commands** setting, off by default. Until it is ticked the button is drawn disabled with
+  the reason beside it.
+- **Only with a login.** Like the Terminal, it refuses to run anything while LabbyTwo has no
+  password set (`LABBY_AUTH_PASSWORD`), since anybody who can reach the page could press it.
+- **It always asks.** A command that looks destructive — `rm -r`/`-rf`, `mkfs`, `dd`,
+  writing to `/dev/sd…`, `shutdown`/`reboot`/`poweroff`, a fork bomb, `zfs destroy`,
+  `docker … prune` and a few more — also needs the machine's name typed before **Run it**
+  will press. That list is a speed bump, not a sandbox.
+- **One at a time.** The same command on the same machine never runs twice at once — a
+  double tap, or two people with the note open, gets "already running".
+- **A timeout**, the shortcode's or a minute, after which it is stopped and reported.
+- **Written down.** Every run goes into the [change feed](#what-changed-and-incidents) as
+  "chris ran “docker restart plex” on NAS", with the exit code and how long it took — filter
+  by *Commands run from notes*.
+- **Output is text.** Terminal colour codes are stripped and secret-looking values
+  (`PASSWORD=…`, `token: …`, `Bearer …`, a password in a URL) are masked the way the Logs
+  page masks them. Nothing a command prints can become HTML.
+
+`{{logs}}` is read when somebody is looking at the note — never during a sweep and never
+on a page nobody has open — and again at most once a minute while it stays on screen (not
+while the tab is in the background or the box is inside a closed fold). Each read asks
+Docker for the window's newest 5,000 lines and stops at 2 MB, every line is masked before it
+is matched, and the read is cancelled when the note closes. `{{run}}` reads from the
+scheduler's own memory; its **Run now** is the Scheduled page's — the same guardrails, never
+on top of a run still going, recorded in the history and the feed — after a confirmation.
+
 **Sections and folds** — each marker on a line of its own:
 
 | Shortcode | Does |
 |---|---|
 | `{{if …}}` … `{{else}}` … `{{end}}` | shows what is between them only while the condition holds; `{{else}}` is optional |
+| `{{if …}}` … `{{elif …}}` … `{{elif …}}` … `{{else}}` … `{{end}}` | the first part whose condition holds, else the `{{else}}` part; one `{{end}}` closes the lot |
 | `{{details: Full restart procedure}}` … `{{end}}` | folds what is between them under that title until clicked open; `open=true` starts it open |
 
 | Condition | Holds while |
@@ -1383,7 +1435,149 @@ on a wall all day never becomes a stream of calls to Docker Hub.
 | `up: NAS` | its last verdict is up |
 | `any down` | anything monitored is down |
 | `all up` | everything monitored is up, and nothing is still being checked |
-| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
+| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `=` (or `==`) `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
+| `metric: Office / temp_c between 18 and 24` | the reading is in the range, both ends included; a unit after either number is the unit of both, `between 64°F and 75°F` |
+| `down: tab "Media"` | anything monitored on that tab (its cards' connections) is down |
+| `up: tab "Media"` | everything monitored on that tab is up |
+| `alert: "Disk almost full"` | that alert rule is firing, on any connection — the rule's name, or for a rule you never named, the name the Alerts page shows for it |
+| `any alert` | any alert rule is firing |
+| `alert on: "QNAP NAS"` | any alert rule is firing on that connection |
+| `maintenance` | **Silence all** (maintenance) is holding every alert |
+| `blind` | LabbyTwo cannot see the lab — its own DNS, Docker or database is failing — so failures are being held |
+| `backup late` | a backup on the Backups page is overdue, or its source says there has never been one; `backup late: "Photos"` for one. One that cannot be checked is not "late" |
+| `incident open` | an incident is still going on |
+
+Join them with `and`, `or` and `not`, and brackets: `{{if metric: QNAP NAS / disk_percent > 85 and not maintenance}}`,
+`{{if (down: NAS or down: Plex) and not blind}}`. `not` binds tightest, then `and`, then
+`or`, so `a or b and c` means `a or (b and c)` — use brackets when you mean the other. The
+words are any case. A name runs to the next `and`, `or` or closing bracket, so a name with
+one of those in it goes in quotes when it is joined to something: `down: "Sonarr and Radarr" or maintenance`
+(on its own, `down: Sonarr and Radarr` still means the one connection, as it always did).
+Every test in a condition is checked, not only as many as decide it, so a misspelt name is
+a **?** whatever the rest says.
+
+```markdown
+{{if down: tab "Media"}}
+Something on the Media tab is down: {{status: tab "Media" full}}
+{{elif metric: QNAP NAS / disk_percent > 85 and not maintenance}}
+> [!WARNING]
+> The NAS is filling up — {{metric: QNAP NAS / disk_percent}}.
+{{elif any alert or backup late}}
+{{alerts}}
+{{else}}
+All quiet. Home: {{who: home}}. Playing: {{who: watching}}
+{{end}}
+```
+
+#### Tables, gauges and diagrams
+
+**`{{table}}`** — on a line of its own. Connections down the side, readings across the top,
+every cell live:
+
+```markdown
+{{table: "QNAP NAS", Pi, PC / status, cpu_percent, ram_percent, temp_c}}
+{{table: "QNAP NAS", Pi / disk_percent, temp_c sparkline=24h title="Storage and heat"}}
+{{table: tab "Media" / status, uptime}}
+```
+
+- Before the slash, the rows: connections by name or id, separated by commas (a name with a
+  comma in it goes in quotes, `"Home, office"`). Or `tab "Media"` (also `tab="Media"`) for
+  every connection a card on that tab is bound to, in the cards' order — plus a Containers
+  or Git tab's own connection. Up to 40 rows.
+- After it, the columns: metrics by key or label (`temp_c`, `Temperature`), headed by the
+  metric's label. Three words are not metrics: `status` (as `{{status}}`), `uptime` (the
+  30-day availability, as `{{uptime}}` — write `uptime_days` for the metric of that name) and
+  `since` (as `{{since}}`). Up to 12.
+- Readings are the metric tile's, in the units chosen in **Settings → Appearance**. A
+  connection that does not report a column shows **—**, not a **?**: a Pi with no
+  temperature sensor is not a mistake in the note.
+- Each reading is coloured amber or red against the connection's **alert rules** for that
+  metric — its own rules if it has any, otherwise rules for every connection. One rule is the
+  red line; two or more above (or below) make the nearest the amber line and the furthest
+  the red one, so "disk above 85" and "disk above 95" are exactly a warning and an emergency.
+  A reading is past a rule's line the way the rule counts it — strictly above or below. With
+  no rule, a percentage that fills up (disk and volume use) is amber at 80% and red at 95%,
+  as on the gauge card; anything else is left uncoloured. A disabled or "unusual for the
+  time" rule has no fixed line and is ignored. The tooltip says the level and where the
+  lines came from, and a screen reader hears "warning" or "critical" after the number.
+- `sparkline=24h` draws a trend line under each reading (`1h` to `30d`; `sparkline=true` is
+  24h). `title="…"` is the table's caption.
+
+**`{{gauge}}`** — inside a sentence or a table cell, the size of a word:
+
+```markdown
+Storage is {{gauge: "QNAP NAS" / disk_percent}} full.
+| Pi | {{gauge: Pi / temp_c max=90 warn=60 crit=75 style=bar size=medium label="CPU heat"}} |
+```
+
+| Option | Does |
+|---|---|
+| `style=ring` / `style=bar` | a ring (the default) or a short bar with the warning and critical lines marked on it |
+| `size=small` / `size=medium` | the size of the text around it (the default) or twice that |
+| `min=0 max=100` | the ends of the scale. A percentage is 0–100; anything else is 0–100 too, unless a line is past 100, when the scale reaches a quarter beyond it |
+| `warn=80 crit=95` | the amber and red lines, instead of the alert rules'. Written the other way round (`warn=50 crit=20`) they mean lower is worse, for a battery |
+| `label="NAS disk"` | words after the reading, and what a screen reader calls it |
+
+Every number is in the metric's **stored** unit — `°C` for a temperature, like an alert rule
+and the gauge card — so the gauge's proportions and colour do not change when somebody
+reads the dashboard in Fahrenheit; the reading and its tooltip are in the reader's units.
+The gauge is a `role="meter"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and a
+value text that says the level in words, and it can be tabbed to for its tooltip.
+
+**Diagrams** — a fenced block whose language is `diagram`:
+
+````markdown
+```diagram
+Internet -> Router -> "QNAP NAS" -> Plex
+"QNAP NAS" -> Sonarr, Radarr
+Router -> "Domain controller"
+Router ->|over VPN| "Home, office"
+```
+````
+
+- One line per chain: names joined by `->` (`-->` and `=>` work too). Commas fan out and in
+  — `NAS -> Sonarr, Radarr`, `Sonarr, Radarr -> Downloads`. `->|label|` writes words on that
+  arrow. A name on its own on a line is a box with no arrows. `#` starts a comment.
+- Quotes are optional, needed only round a name with a comma, an arrow or a quote in it.
+  Names compare ignoring case, so `Router` and `router` are one box.
+- `direction TD` as the first line draws it top-down; left to right is the default.
+- A box whose name is a connection's name (any case) or id is coloured by its live status
+  — green up, red down, amber checking, a dashed accent outline while the connection is
+  silenced for maintenance, faded when it is paused — shows a glyph as well (▲ ▼ … ◆ ■), and
+  is a link to that connection. Anything else (`Internet`) is a plain box. Colours change as
+  sweeps land, without the note being touched.
+- Up to 80 boxes and 200 arrows. Laid out in layers on the server — no script, nothing
+  fetched from anywhere. An arrow that skips a layer is drawn straight across it; an arrow
+  going back round a loop is drawn as a curve under the boxes.
+
+A `` ```mermaid `` block is drawn the same way when it is a **flowchart** — its first line
+`graph` or `flowchart` and a direction (`TD`, `TB`, `BT`, `LR`, `RL`; top-down if left off).
+This much of Mermaid is understood:
+
+| Mermaid | Read as |
+|---|---|
+| `A`, `A[Label]`, `A(Label)`, `A((Label))`, `A{Label}`, `A([Label])`, `A[[Label]]`, `A[(Label)]`, `A>Label]`, with `"quoted text"` inside | a box; the label (or the id, with none) is what is drawn and matched to a connection. The shape is not drawn — every box is a box |
+| `A --> B`, `A ---> B` | an arrow |
+| `A --- B` | a line with no arrowhead |
+| `A -.-> B`, `A -.- B` | a dotted arrow / line |
+| `A ==> B`, `A === B` | a thick arrow / line |
+| `A -->\|text\| B`, `A -- text --> B`, `A -. text .-> B`, `A == text ==> B` | a labelled arrow |
+| `A --> B --> C`, `A & B --> C & D` | chains and groups |
+| `;` | ends a statement, like a new line |
+| `%% comment`, `subgraph … end`, `classDef`, `class`, `style`, `linkStyle`, `click`, `direction` | read past; a subgraph's own frame is not drawn |
+
+Anything else — `sequenceDiagram`, `pie`, `gantt` — leaves the block as the code it always
+was, so pasting one in loses nothing. A diagram that cannot be read is a **?** saying which
+line and why; the rest of the note draws as usual.
+
+**`{{diagram: auto}}`** — on a line of its own: the dependency map, drawn from
+each connection's **Sits behind** (set in its editor on the Connections page), the same
+drawing as the map page and the dependency map card.
+`root="NAS"` draws only that connection and what sits behind it, `standalone=true` adds the
+connections that sit behind nothing, and `title="…"` names it.
+
+Labels in all three are text, never markup: a connection or box called `<script>` is shown
+as those characters.
 
 #### The rules
 
@@ -1397,7 +1591,7 @@ All of them visible when broken, rather than silently wrong:
 - **Writing a shortcode as text.** `\{{status: NAS}}` shows the braces; so does anything in
   a code span or code block, which is how this README's examples survive being pasted in.
 - **Where each goes.** A value in a card's place is fine; a card or list in a sentence is a
-  **?** saying it goes on a line of its own. `{{if}}`, `{{details}}`, `{{else}}` and `{{end}}`
+  **?** saying it goes on a line of its own. `{{if}}`, `{{elif}}`, `{{details}}`, `{{else}}` and `{{end}}`
   each take a whole line, and wrap whole paragraphs, lists and tables — the Markdown
   between them is rendered on its own, so a list cannot start outside a section and end
   inside it (one cut in two becomes two lists).
@@ -1518,6 +1712,67 @@ the NAS's numbers with a trend line and a month of green cells, and two closed f
 its plug and within a sweep the same note is the NAS-is-down page, with the wake and
 restart buttons, the list of containers to stop and what changed in the two hours before
 — and nothing about disk space.
+
+#### Links between notes
+
+Put a note's title in double square brackets to link to it, from another note or from a
+Markdown card:
+
+| Write | Links to |
+|---|---|
+| `[[Plex runbook]]` | the note called *Plex runbook*, on whichever notes page it is (any case) |
+| `[[Plex runbook\|the Plex steps]]` | the same note, with your words as the link |
+| `[[Plex runbook#Restart]]` | its *Restart* heading — the page opens at the note and scrolls to the heading inside it |
+| `[[Runbooks / Plex runbook]]` | the one on the *Runbooks* page, when two pages have a note of that title. A notes section on a custom page answers to its own title or its page's name |
+| `[[Runbooks / Plex runbook#Restart\|restart it]]` | all of it at once: page, title, heading, words |
+
+(In a table cell the `|` needs no backslash — the link is taken out before the table is
+read. The backslash above is only this README's own table.)
+
+- **A note that does not exist yet** is a dashed, muted link with a **+**. Clicking it opens
+  the editor for a new note with that title, on the page the link names, else the page the
+  link is on, else the first notes page. The moment that note is saved, every link to it
+  becomes an ordinary link — no reload.
+- **"Linked from:"** under each note lists the notes that link to it, each a link back.
+- **Renaming a note** that other notes link to by name offers, above the notes, to change
+  those links to the new title (keeping their heading and words). You can leave them: each
+  link remembers which note it found, so `[[Old title]]` still goes to the renamed note.
+  Delete the note and its links become "missing" links again.
+- **Two notes with the same title:** a link goes to the one on its own page; from elsewhere,
+  to the first by page name — write the page in front to choose.
+- **A title with a slash or a hash** in it still links: the whole thing is tried as a title
+  before anything is split off.
+- **Writing one as text.** `\[[Plex runbook]]` shows the brackets, and so does anything in
+  a code span or code block. `[[ -f file ]]` — a space straight inside the brackets — is
+  never a link, so shell scripts pasted into prose stay as they were. A shortcode wins over
+  a link: `{{status: "[[NAS]]"}}` is a status.
+- **Inserting one.** **Insert live value…** → **A link to another note** lists every note,
+  with an optional heading and words, and writes the link for you (with the page in front
+  only when the title is not unique).
+
+Links are kept in a small index that every save writes, so drawing one is a lookup in
+memory and "Linked from" is a list already made; notes written before this version are
+indexed the first time a notes page, or anything with a link on it, is opened.
+
+#### Note templates
+
+**From a template…** on a notes page starts a new note from one of these, filled in from
+what you choose. It opens in the editor like any new note; nothing is saved until **Save**.
+
+| Template | Asks for | Writes |
+|---|---|---|
+| **Runbook for a connection** | one connection | its live status, since when, 30-day uptime and when it was checked; a 24-hour trend line of its first metric (response time if it has none) and a daily uptime strip; `{{if down: …}}` with a warning, its own action buttons (up to four that need nothing typed in, safest first), `{{down}}` and what changed in the two hours before, `{{else}}` "is up"; a folded *If it won't come back*; a `- [ ]` checklist of steps; a links section with `{{link}}` to its own page |
+| **Incident write-up** | one of the last 90 days' incidents | the same write-up the Incidents page's **Write up** makes, but into this notes page |
+| **Maintenance plan** | a date, and any connections it touches | when (with a countdown), who, what and why; a table of what it touches with each one's status; *Before*, *Steps* and *After* checklists; late backups; a *Rollback* section; "Everything is up" or what is down; what changed in the last 24 hours |
+| **Service overview** | several connections | "Everything is up" or what is down, then a table: each one's name (a link to its page when it has one), status, since, 30-day uptime and 24-hour trend line; then the alerts firing |
+
+Names go in safely: a connection called `NAS}} {{button: Router / reboot` is written as one
+oddly named connection everywhere, never as a button, a section or a table cell of its own.
+
+**Your own templates.** **Save as template** in any note's editor keeps its title and
+Markdown, exactly as written, as a template named after the title. They are listed under
+**Your templates** in the same picker, each with **Use**, **Edit** (its name in the list,
+the title of notes made from it, and the Markdown) and **✕** to delete it.
 
 ### Weather and radar
 

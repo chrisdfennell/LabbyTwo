@@ -772,7 +772,40 @@ public sealed class Db
             PRIMARY KEY (connection_id, metric)) WITHOUT ROWID
         """,
 
-        // 34 — ticks on a note's task-list items, kept apart from the note's text so that
+        // 34 — whether a note's [[links]] are in the link index yet. Every note written
+        // before links existed starts at 0 and is indexed the first time the index is read
+        // (NotesStore.IndexMissingAsync); every save from now on writes its links and a 1 in
+        // the same transaction. A database restored from an older backup comes back with
+        // 0s, and so is indexed again by itself. Must run before the next migration, whose
+        // partial index names this column.
+        "ALTER TABLE notes ADD COLUMN links_indexed INTEGER NOT NULL DEFAULT 0",
+
+        // 35 — links between notes, and note templates.
+        //
+        // note_links is the "what links here" index: one row per note per distinct [[target]]
+        // in it, the target lower-cased as written. to_id is the note it last resolved to,
+        // kept so a link still finds its note after that note is renamed. Keyed by the note
+        // the link is in, which is how a save replaces them; read whole otherwise, since it
+        // is a row per link in a few hundred notes. The partial index holds only the notes
+        // still waiting to be indexed, so the check on every read is empty and instant.
+        //
+        // note_templates are the user's own "New note from template…" entries, read whole.
+        """
+        CREATE TABLE IF NOT EXISTS note_links (
+            from_id TEXT NOT NULL,
+            target  TEXT NOT NULL,
+            to_id   TEXT,
+            PRIMARY KEY (from_id, target)) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS ix_notes_unindexed ON notes (id) WHERE links_indexed = 0;
+        CREATE TABLE IF NOT EXISTS note_templates (
+            id         TEXT    PRIMARY KEY,
+            name       TEXT    NOT NULL,
+            title      TEXT    NOT NULL DEFAULT '',
+            content    TEXT    NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL);
+        """,
+
+        // 36 — ticks on a note's task-list items, kept apart from the note's text so that
         // ticking is not an edit (see Core/Checklists.cs). One row per ticked item; an
         // unticked item has no row. Read a note at a time by the primary key, and held in
         // memory after the first read. Self-contained, like 33.
@@ -787,7 +820,7 @@ public sealed class Db
             PRIMARY KEY (note_id, item_key)) WITHOUT ROWID
         """,
 
-        // 35 — earlier versions of notes: what a note said before each save, and what a
+        // 37 — earlier versions of notes: what a note said before each save, and what a
         // deleted note said when it went (reason 'deleted'). Listed a note at a time
         // newest first (ix_note_versions_note), pruned by age (ix_note_versions_kept), and
         // the "Recently deleted" list reads only the deleted rows of one tab through a
@@ -809,15 +842,15 @@ public sealed class Db
         CREATE INDEX IF NOT EXISTS ix_note_versions_deleted ON note_versions (tab_id, kept_at) WHERE reason = 'deleted';
         """,
 
-        // 36 — who last saved a note, so the version it becomes on the next save can say
+        // 38 — who last saved a note, so the version it becomes on the next save can say
         // who wrote it. Empty for every note written before this existed.
         "ALTER TABLE notes ADD COLUMN updated_by TEXT NOT NULL DEFAULT ''",
 
-        // 37 — checklist ticks for anything with Markdown in it, not only notes: a Markdown
+        // 39 — checklist ticks for anything with Markdown in it, not only notes: a Markdown
         // card on a dashboard and a Markdown block on a custom page tick too. Keyed by an
         // owner ("note:<id>", "widget:<id>" — see ChecklistOwners) instead of a note id, so
         // one table, one cache and one query shape serve all of them. The note ticks made
-        // under 34 move across as "note:<id>" and the old table goes.
+        // under 36 move across as "note:<id>" and the old table goes.
         //
         // Safe to run twice, which matters because migrations are not wrapped in a
         // transaction: an interrupted run that had already dropped note_checks finds it
@@ -844,7 +877,7 @@ public sealed class Db
         DROP TABLE IF EXISTS note_checks;
         """,
 
-        // 38 — earlier versions of Markdown cards and custom-page Markdown blocks (both are
+        // 40 — earlier versions of Markdown cards and custom-page Markdown blocks (both are
         // "markdown" widget rows): what the card's text was before each save that changed
         // it, and what a deleted card held when it went (reason 'deleted', with the whole
         // card in `card` so it can be put back). A sibling of note_versions rather than more
