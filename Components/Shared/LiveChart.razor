@@ -1,0 +1,367 @@
+@implements IDisposable
+@using System.Globalization
+@inject DisplayUnits DisplayUnits
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject SharedSeries Series
+@inject Offload Offload
+@inject Registry Registry
+
+@* {{chart: "NAS" / cpu_percent, "NAS" / mem_percent last=7d}}: a full-size history chart
+   inside a note, on a line of its own.
+
+   The history comes the way every chart card's does — HistoryStore's raw-or-hourly choice,
+   through SharedSeries, off the render thread — with one difference: a chart says how old
+   an answer it will take. One more reading on a week-long line is invisible, so a chart is
+   read again roughly once per point's width of time (ChartShortcode.RefreshEvery) rather
+   than on every sweep, and every chart of the same line over the same span, on any page,
+   shares the one read. A span that has ended — last month, in the monthly report — is read
+   once and never again.
+
+   Nothing written in the shortcode becomes markup: names, titles and units are text in the
+   render tree, and the hover script is handed numbers and plain strings as JSON. *@
+
+@if (_problem is not null)
+{
+    <div class="md-embed is-problem" role="note">
+        <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+        <span class="tile-meta">@_problem</span>
+    </div>
+}
+else if (_spec is null || !_load.Ready)
+{
+    <div class="md-embed md-chart is-waiting" aria-busy="true">
+        <div class="widget-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
+    </div>
+}
+else
+{
+    <figure class="md-embed md-chart" role="group" aria-label="@_about">
+        <div class="md-chart-head">
+            @if (_title is { Length: > 0 })
+            {
+                <span class="md-chart-title">@_title</span>
+            }
+            <span class="tile-meta">@_span</span>
+        </div>
+
+        @if (_lines.Count > 1 || (_lines.Count == 1 && _title is null))
+        {
+            <div class="md-chart-keys">
+                @foreach (var line in _lines)
+                {
+                    <span class="series-key" style="color: @line.Colour">
+                        @line.Name <span class="tile-meta">@line.Now</span>
+                    </span>
+                }
+            </div>
+        }
+        else if (_lines.Count == 1)
+        {
+            <div class="md-chart-keys tile-meta">now @_lines[0].Now</div>
+        }
+
+        @if (_plot is null)
+        {
+            <p class="tile-meta mb-0">Nothing recorded over @_span.</p>
+        }
+        else
+        {
+            <div class="md-chart-plot">
+                <div class="md-chart-scale tile-meta" aria-hidden="true">
+                    <span>@_high</span>
+                    <span>@_low</span>
+                </div>
+                <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="height:@(_spec.Height)px" role="img"
+                     aria-label="@_about" data-chart="@_hover">
+                    @foreach (var fraction in Gridlines)
+                    {
+                        var y = (40 - fraction * 36 - 2).ToString("0.##", CultureInfo.InvariantCulture);
+                        <line x1="0" y1="@y" x2="100" y2="@y" stroke="var(--edge)" stroke-width="0.4" vector-effect="non-scaling-stroke" />
+                    }
+                    @if (_lines.Count == 1)
+                    {
+                        <polygon points="@($"0,40 {_plot.Lines[0].Points} 100,40")" fill="var(--accent)" opacity="0.14" />
+                    }
+                    @for (var i = 0; i < _plot.Lines.Count; i++)
+                    {
+                        <polyline points="@_plot.Lines[i].Points" fill="none" stroke="@_lines[i].Colour" stroke-width="1.5"
+                                  vector-effect="non-scaling-stroke" stroke-linejoin="round" />
+                    }
+                </svg>
+            </div>
+            <div class="md-chart-foot tile-meta">
+                <span>@_fromText</span>
+                <span>@_toText</span>
+            </div>
+        }
+    </figure>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>What names can refer to. Null while it is being read, which shows as a skeleton.</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>The zone fixed spans are counted in. The lab's own, as the rest of the page's dates are.</summary>
+    [Parameter] public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Local;
+
+    /// <summary>With no metric named, the response time — the line a service tile draws.</summary>
+    public const string DefaultMetric = "latency_ms";
+
+    private static readonly double[] Gridlines = [0.25, 0.5, 0.75];
+
+    /// <summary>The compare card's colours, so a line is the same colour in both.</summary>
+    private static readonly string[] Palette =
+    [
+        "var(--accent)", "#ffb84d", "#35d07f", "#c792ea", "#ff8a65", "#4dd0e1", "#f06292", "#aed581",
+    ];
+
+    private sealed record Resolved(string Id, string Connection, string Key, MetricSpec Spec);
+
+    private sealed record Drawn(string Name, string Colour, string Now);
+
+    private BackgroundLoad _load = default!;
+    private string? _source;
+    private ChartSpec? _spec;
+    private string? _problem;
+    private List<Resolved> _resolved = [];
+    private IReadOnlyList<IReadOnlyList<HistoryStore.Sample>>? _samples;
+    private DateTimeOffset _asked;
+    private (DateTimeOffset From, DateTimeOffset To) _window;
+
+    private List<Drawn> _lines = [];
+    private ChartPlot.Plot? _plot;
+    private string? _title;
+    private string _span = "";
+    private string _about = "";
+    private string _low = "", _high = "", _fromText = "", _toText = "";
+    private string? _hover;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnSweep;
+        DisplayUnits.Changed += OnUnitsChanged;
+        Latest.Changed += OnLatestLoaded;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (_source != Code.Source)
+        {
+            _source = Code.Source;
+            _spec = ChartShortcode.Read(Code, out var problem);
+            _problem = problem is null ? null : $"{problem} ({Code.Source})";
+        }
+        if (_spec is null || Scope is null)
+            return;
+        Resolve(_spec, Scope);
+        if (_problem is null)
+            Load(refresh: false);
+    }
+
+    /// <summary>Every line's connection and metric looked up by name. The first that names nothing is the "?".</summary>
+    private void Resolve(ChartSpec spec, ShortcodeScope scope)
+    {
+        var resolved = new List<Resolved>();
+        foreach (var line in spec.Lines)
+        {
+            if (ShortcodeLookup.Connection(scope.Connections, line.Connection) is not { } connection)
+            {
+                _problem = $"No connection called “{line.Connection}”. ({Code.Source})";
+                return;
+            }
+
+            var metric = line.Metric.Length > 0 ? line.Metric : DefaultMetric;
+            var live = Health.State(connection.Id)?.Metrics ?? new Dictionary<string, double>();
+            var stored = Latest.Get(connection.Id, TimeSpan.FromDays(7));
+            var key = ShortcodeLookup.MetricKey(Registry, connection, metric, live.Keys.Concat(stored.Keys));
+            if (key is null)
+            {
+                // A span that has ended may be of a metric nothing reports any more — the
+                // chart of last month's UPS load after the UPS went. Its key is taken as
+                // written, and the chart says there is nothing if there is nothing.
+                if (spec.IsFixed && !spec.IsLive(DateTimeOffset.Now, Zone) && !metric.Contains(' '))
+                {
+                    key = metric;
+                }
+                else
+                {
+                    _problem = $"{connection.Name} has not reported a metric called “{metric}”. ({Code.Source})";
+                    return;
+                }
+            }
+            resolved.Add(new Resolved(connection.Id, connection.Name, key, Registry.Metric(connection, key)));
+        }
+        _problem = null;
+        _resolved = resolved;
+    }
+
+    private void Load(bool refresh)
+    {
+        if (_spec is not { } spec || _resolved.Count == 0)
+            return;
+
+        var lines = _resolved.ToList();
+        var now = DateTimeOffset.Now;
+        var zone = Zone;
+        var live = spec.IsLive(now, zone);
+        var (from, to) = spec.Span(now, zone);
+        if (spec.IsFixed && spec.To is null)
+        {
+            // "Since the 1st" ends now, which is a different span every second: rounded up
+            // to the hour, every chart asking in that hour asks the same thing and shares it.
+            to = new DateTimeOffset(to.UtcTicks - to.UtcTicks % TimeSpan.TicksPerHour, TimeSpan.Zero).AddHours(1);
+        }
+        var fresh = live ? ChartShortcode.RefreshEvery(to - from) : SharedSeries.LongestFresh;
+        var window = (from, spec.IsFixed ? (to > now ? now : to) : now);
+
+        async Task<IReadOnlyList<IReadOnlyList<HistoryStore.Sample>>> Fetch(CancellationToken ct) =>
+            await Task.WhenAll(lines.Select(line => spec.IsFixed
+                ? Series.BetweenAsync(line.Id, line.Key, from, to, fresh, ct)
+                : Series.SamplesAsync(line.Id, line.Key, spec.Window, fresh, ct)));
+
+        // Stamped when an answer lands rather than when asked: a parent redrawing asks again
+        // with the same key, which reads nothing, and must not push the next real read back.
+        void Apply(IReadOnlyList<IReadOnlyList<HistoryStore.Sample>> samples)
+        {
+            _asked = now;
+            _window = window;
+            _samples = samples;
+            Draw();
+        }
+
+        // Names in the key as well as ids, so a renamed connection redraws its legend.
+        var key = $"{Code.Source}|{string.Join(",", lines.Select(l => $"{l.Id}:{l.Key}:{l.Connection}"))}";
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, Apply);
+        else
+            _ = _load.Load(key, Fetch, Apply);
+    }
+
+    /// <summary>
+    /// The lines in the reader's units, on one scale. Converted here, once, so the key, the
+    /// scale, the lines and the hover all say the same number.
+    /// </summary>
+    private void Draw()
+    {
+        if (_spec is not { } spec || _samples is not { } samples || samples.Count != _resolved.Count)
+            return;
+
+        var units = DisplayUnits.Current;
+        var sameConnection = _resolved.Select(r => r.Id).Distinct().Count() == 1;
+        var sameMetric = _resolved.Select(r => r.Spec.Label).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1;
+
+        var shownUnits = _resolved.Select(r => Units.Display(0, r.Spec.Unit, units, spec.Unit).Unit).ToList();
+        var sharedUnit = shownUnits.Distinct(StringComparer.Ordinal).Count() == 1 ? shownUnits[0] : null;
+        var decimals = Math.Max(1, _resolved.Max(r => r.Spec.Decimals));
+
+        var values = new List<IReadOnlyList<double>>();
+        var drawn = new List<Drawn>();
+        var hover = new List<ChartHover.Series>();
+        for (var i = 0; i < _resolved.Count; i++)
+        {
+            var line = _resolved[i];
+            var converted = samples[i].Select(s => Units.Display(s.Value, line.Spec.Unit, units, spec.Unit).Value).ToList();
+            var name = sameConnection ? line.Spec.Label : sameMetric ? line.Connection : $"{line.Connection} · {line.Spec.Label}";
+            var colour = Palette[i % Palette.Length];
+            var now = converted.Count > 0 ? Format(converted[^1], shownUnits[i], decimals) : "—";
+            drawn.Add(new Drawn(name, colour, now));
+
+            if (converted.Count == 0)
+                continue;
+            var thinned = ChartShortcode.Thin(converted);
+            values.Add(thinned);
+            // With mixed units the tooltip carries none of its own, so each name says its unit.
+            var hoverName = _resolved.Count == 1 ? "" : sharedUnit is null && shownUnits[i].Trim().Length > 0
+                ? $"{name} ({shownUnits[i].Trim()})"
+                : name;
+            hover.Add(new ChartHover.Series(hoverName, colour, thinned));
+        }
+
+        _lines = drawn;
+        _title = spec.Title ?? (_resolved.Count == 1 ? $"{_resolved[0].Connection} · {_resolved[0].Spec.Label}"
+            : sameConnection ? _resolved[0].Connection
+            : sameMetric ? _resolved[0].Spec.Label
+            : null);
+        _span = ChartShortcode.Describe(spec);
+        _about = $"{_title ?? string.Join(", ", drawn.Select(d => d.Name))} over {_span}";
+
+        // Lines with nothing in the span are listed with a dash but not drawn, so the colours
+        // of the ones that are drawn still match the key.
+        var withData = Enumerable.Range(0, _resolved.Count).Where(i => samples[i].Count > 0).ToList();
+        if (values.Count == 0 || values.All(v => v.Count < 2))
+        {
+            _plot = null;
+            _hover = null;
+            return;
+        }
+        var plot = ChartPlot.Build(values, spec.Min, spec.Max);
+        _plot = plot;
+        _lines = [.. withData.Select(i => drawn[i]).Concat(Enumerable.Range(0, drawn.Count).Except(withData).Select(i => drawn[i]))];
+        _low = Format(plot.Low, sharedUnit ?? "", decimals);
+        _high = Format(plot.High, sharedUnit ?? "", decimals);
+
+        var first = spec.IsFixed ? _window.From : samples.Where(s => s.Count > 0).Min(s => s[0].At);
+        var last = spec.IsFixed ? _window.To : samples.Where(s => s.Count > 0).Max(s => s[^1].At);
+        var format = last - first > TimeSpan.FromHours(36) ? "d MMM" : "HH:mm";
+        _fromText = TimeZoneInfo.ConvertTime(first, Zone).ToString(format, CultureInfo.InvariantCulture);
+        _toText = spec.IsFixed && spec.To is { } end
+            ? end.AddDays(-1).ToString("d MMM", CultureInfo.InvariantCulture)
+            : TimeZoneInfo.ConvertTime(last, Zone).ToString(format, CultureInfo.InvariantCulture);
+
+        _hover = ChartHover.Attribute(hover, sharedUnit ?? "", decimals, first, last);
+    }
+
+    private static string Format(double value, string unit, int decimals) =>
+        value.ToString($"F{decimals}", CultureInfo.InvariantCulture) + unit;
+
+    /// <summary>
+    /// A sweep landed. Read again only once the chart's own interval has passed — and never
+    /// for a span that has ended — so a month's chart open all day is read once an hour.
+    /// </summary>
+    private void OnSweep() => _ = InvokeAsync(() =>
+    {
+        if (_spec is not { } spec || _problem is not null || !_load.Ready || _load.Loading)
+            return;
+        var now = DateTimeOffset.Now;
+        if (!spec.IsLive(now, Zone))
+            return;
+        var (from, to) = spec.Span(now, Zone);
+        if (now - _asked < ChartShortcode.RefreshEvery(to - from))
+            return;
+        Load(refresh: true);
+    });
+
+    /// <summary>The Units setting changed: the same history drawn again in the new units, without a query.</summary>
+    private void OnUnitsChanged() => _ = InvokeAsync(() =>
+    {
+        Draw();
+        StateHasChanged();
+    });
+
+    /// <summary>
+    /// Just after a restart the latest readings are still loading, so a metric the provider
+    /// does not declare is not known yet and reads as a "?". When they land, look again.
+    /// </summary>
+    private void OnLatestLoaded(string connectionId)
+    {
+        if (_problem is null || _spec is null || Scope is null)
+            return;
+        _ = InvokeAsync(() =>
+        {
+            OnParametersSet();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        Health.Updated -= OnSweep;
+        DisplayUnits.Changed -= OnUnitsChanged;
+        Latest.Changed -= OnLatestLoaded;
+        _load.Dispose();
+    }
+}

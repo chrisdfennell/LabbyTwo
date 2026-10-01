@@ -100,6 +100,38 @@ public sealed class IncidentStore(Db db, IOptions<LabbyOptions> options)
         WHERE started_ts >= $since ORDER BY started_ts DESC LIMIT $limit
         """;
 
+    /// <summary>
+    /// Incidents that overlap a window, oldest first: a range on ix_incidents_started from a
+    /// little before the window (an incident that began on the 30th and ended on the 1st is
+    /// part of both months) to its end, with the ones that had already ended before it
+    /// dropped. Bounded at both ends and by a limit, so the monthly report reads one month of
+    /// the table however many years of incidents it holds.
+    /// </summary>
+    public const string OverlappingSql = """
+        SELECT id, started_ts, ended_ts, last_ts, maintenance, writeup_note FROM incidents
+        WHERE started_ts >= $earliest AND started_ts < $to AND (ended_ts IS NULL OR ended_ts >= $from)
+        ORDER BY started_ts LIMIT $limit
+        """;
+
+    /// <summary>How far before a window an incident that overlaps it may have started, and still be found.</summary>
+    public static readonly TimeSpan OverlapLookback = TimeSpan.FromDays(31);
+
+    /// <summary>
+    /// Incidents that were going on at any time in [<paramref name="from"/>, <paramref name="to"/>),
+    /// oldest first, at most <paramref name="limit"/>. See <see cref="OverlappingSql"/>.
+    /// </summary>
+    public async Task<IReadOnlyList<Incident>> OverlappingAsync(DateTimeOffset from, DateTimeOffset to, int limit, CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        return await ReadAsync(connection, OverlappingSql, cmd =>
+        {
+            cmd.Parameters.AddWithValue("$earliest", (from - OverlapLookback).ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 1000));
+        }, ct);
+    }
+
     /// <summary>One incident's members, by its primary key.</summary>
     public const string MembersSql = """
         SELECT member, kind, connection_id, name, down_ts, up_ts FROM incident_members

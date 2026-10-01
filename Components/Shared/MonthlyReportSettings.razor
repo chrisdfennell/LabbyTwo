@@ -1,0 +1,287 @@
+@inject AppSettingsStore AppSettings
+@inject AlertService Alerts
+@inject MonthlyReports Reports
+@inject MonthlyReportJob Job
+@inject Offload Offload
+
+@* The monthly report. Beside the weekly summary on the Settings page, since both answer
+   "what does LabbyTwo tell me, and when". The preview is drawn with the notes tab's own
+   live Markdown, so it shows what the note will — the chart included. *@
+
+<div class="widget">
+    <div class="widget-head">
+        <h2 class="widget-title">Monthly report</h2>
+        <span class="tile-meta">@StatusText</span>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            Once a month, a note on a <strong>Monthly reports</strong> tab about the month before: each
+            service's uptime, the incidents and what probably caused them, total downtime, the alerts
+            that fired most, backups proven and restores tested, what the electricity cost, container
+            updates and roll-backs, and what self-healing did — with a chart of the month's response
+            times. Sections with nothing to say are left out.
+        </p>
+
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-3">
+                <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" role="switch" id="monthly-enabled"
+                           checked="@_schedule.Enabled" @onchange="e => ToggleAsync(e.Value is true)" />
+                    <label class="form-check-label" for="monthly-enabled">Make it every month</label>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="monthly-day">On the</label>
+                <select id="monthly-day" class="form-select" value="@_schedule.Day.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                        @onchange="e => SaveAsync(_schedule with { Day = int.TryParse(e.Value?.ToString(), out var day) ? day : 1 })">
+                    @for (var day = 1; day <= 28; day++)
+                    {
+                        <option value="@day">@Ordinal(day)</option>
+                    }
+                    <option value="31">last day</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="monthly-time">At</label>
+                <input id="monthly-time" type="time" class="form-control"
+                       value="@_schedule.Time.ToString("HH\\:mm")"
+                       @onchange="e => SaveTimeAsync(e.Value?.ToString())" />
+            </div>
+            <div class="col-12 col-md-3">
+                <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" role="switch" id="monthly-send"
+                           checked="@_schedule.Send" disabled="@(_channels.Count == 0)"
+                           @onchange="e => SaveAsync(_schedule with { Send = e.Value is true })" />
+                    <label class="form-check-label" for="monthly-send">Also send a summary</label>
+                </div>
+            </div>
+        </div>
+
+        @if (_schedule.Send && _channels.Count > 1)
+        {
+            <div class="mt-3">
+                <div class="form-label mb-1">Through</div>
+                <div class="d-flex flex-wrap gap-3">
+                    @foreach (var channel in _channels)
+                    {
+                        var id = $"monthly-channel-{channel.Id}";
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="@id"
+                                   checked="@(_schedule.Channels.Contains(channel.Id))"
+                                   @onchange="e => ToggleChannelAsync(channel.Id, e.Value is true)" />
+                            <label class="form-check-label" for="@id">@channel.Name</label>
+                        </div>
+                    }
+                </div>
+                <div class="form-text">None ticked sends it through every channel.</div>
+            </div>
+        }
+
+        <p class="tile-meta mt-2 mb-0">
+            Each report covers the whole of the month before. If LabbyTwo was not running at the time,
+            it is made once when it next starts. The summary, when sent, waits out quiet hours and is
+            never marked urgent.
+        </p>
+
+        <hr class="my-3" />
+
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            <button class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="PreviewAsync">
+                @(_busy && !_making ? "Working it out…" : "Preview")
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="MakeNowAsync">
+                @(_making ? "Making it…" : $"Make {MonthlySchedule.Name(LastMonth)}’s now")
+            </button>
+            @if (_schedule.Send && _channels.Count > 0)
+            {
+                <button class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="SendPreviewAsync">
+                    Send the summary now
+                </button>
+            }
+            @if (_made is { } made)
+            {
+                <a href="@made.Url">@(made.Replaced ? "Written over" : "Made"): @made.Title</a>
+            }
+            @if (_message is { Length: > 0 })
+            {
+                <span class="tile-meta">@_message</span>
+            }
+        </div>
+        <div class="form-text">
+            The preview covers @MonthlySchedule.Name(LastMonth) and writes nothing. Making it now writes the note —
+            over that month's report, if there already is one.
+        </div>
+
+        @if (_preview is { } preview)
+        {
+            <div class="mt-3">
+                <div class="fw-semibold mb-1">@preview.Title</div>
+                <div class="markdown-body">
+                    <LiveMarkdown Content="@preview.Markdown" OwnerId="monthly-report-preview" />
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private MonthlySchedule _schedule = MonthlySchedule.Default;
+    private AlertPolicy _policy = AlertPolicy.Default;
+    private DateTimeOffset? _covered;
+    private DateTimeOffset? _lastMade;
+    private List<Connection> _channels = [];
+
+    private MonthlyReportNote? _preview;
+    private MonthlyReportLink? _made;
+    private bool _busy;
+    private bool _making;
+    private string _message = "";
+
+    /// <summary>The month a report made now is about.</summary>
+    private static DateOnly LastMonth => MonthlySchedule.ReportedMonth(DateTimeOffset.Now, TimeZoneInfo.Local);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Through the offload like every read a page makes: the settings are cached, but
+        // "cached" is not "never touches SQLite", and the channel list reads connections.
+        _channels = await Offload.Run(async ct =>
+            (List<Connection>)[.. (await Alerts.ChannelsAsync(ct)).Select(pair => pair.Connection).OrderBy(c => c.Name)]);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var bag = await Offload.Run(ct => AppSettings.AllAsync(ct));
+        _schedule = MonthlySchedule.From(bag);
+        _policy = AlertPolicy.From(bag);
+        _covered = WeeklySchedule.ParseInstant(bag.Get(MonthlySchedule.CoveredKey));
+        _lastMade = WeeklySchedule.ParseInstant(bag.Get(MonthlySchedule.LastMadeKey));
+    }
+
+    private static string Ordinal(int day) => day switch
+    {
+        1 or 21 => $"{day}st",
+        2 or 22 => $"{day}nd",
+        3 or 23 => $"{day}rd",
+        _ => $"{day}th",
+    };
+
+    private string StatusText
+    {
+        get
+        {
+            var last = _lastMade is { } made ? $"Last made {made.ToLocalTime():d MMM HH:mm}." : "";
+            if (!_schedule.Enabled)
+                return $"Off. {last}".Trim();
+
+            var decision = _schedule.Decide(_covered ?? DateTimeOffset.Now, _policy, DateTimeOffset.Now, TimeZoneInfo.Local);
+            var next = decision.MakeNow
+                ? "Making it shortly."
+                : decision.NextAt is { } at ? $"Next {at.ToLocalTime():ddd d MMM HH:mm}." : "";
+            return $"{next} {last}".Trim();
+        }
+    }
+
+    private async Task ToggleAsync(bool on)
+    {
+        var values = (_schedule with { Enabled = on }).ToSettings();
+        // Armed from now, so turning it on on the 15th does not make the 1st's straight away.
+        if (on && !_schedule.Enabled)
+            values[MonthlySchedule.CoveredKey] = WeeklySchedule.FormatInstant(DateTimeOffset.Now);
+        await Offload.Run(async ct =>
+        {
+            await AppSettings.SaveAsync(values, ct);
+            return true;
+        });
+        await LoadAsync();
+    }
+
+    private async Task SaveAsync(MonthlySchedule schedule)
+    {
+        await Offload.Run(async ct =>
+        {
+            await AppSettings.SaveAsync(schedule.ToSettings(), ct);
+            return true;
+        });
+        await LoadAsync();
+    }
+
+    private Task SaveTimeAsync(string? value) =>
+        TimeOnly.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var time)
+            ? SaveAsync(_schedule with { Time = time })
+            : Task.CompletedTask;
+
+    private Task ToggleChannelAsync(string id, bool on)
+    {
+        var chosen = _schedule.Channels.Where(c => c != id).ToList();
+        if (on)
+            chosen.Add(id);
+        return SaveAsync(_schedule with { Channels = chosen });
+    }
+
+    private async Task PreviewAsync()
+    {
+        _busy = true;
+        _message = "";
+        try
+        {
+            // Offloaded: a month is a few hundred queries, and awaited here they would run
+            // on the render thread — the "working" state would never even draw.
+            _preview = await Offload.Run(ct => Reports.PreviewAsync(LastMonth, TimeZoneInfo.Local, ct));
+        }
+        catch (Exception ex)
+        {
+            _message = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task MakeNowAsync()
+    {
+        _busy = true;
+        _making = true;
+        _message = "";
+        _made = null;
+        try
+        {
+            var (note, link) = await Offload.Run(ct => Reports.MakeAsync(LastMonth, TimeZoneInfo.Local, replace: true, ct));
+            _made = link;
+            _preview = note;
+        }
+        catch (Exception ex)
+        {
+            _message = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+            _making = false;
+        }
+    }
+
+    private async Task SendPreviewAsync()
+    {
+        _busy = true;
+        _message = "";
+        try
+        {
+            _preview ??= await Offload.Run(ct => Reports.PreviewAsync(LastMonth, TimeZoneInfo.Local, ct));
+            var summary = _preview.Summary;
+            var (sent, attempted, errors) = await Offload.Run(ct => Job.SendAsync(summary, _schedule.Channels, ct));
+            _message = errors.Count == 0
+                ? $"Sent through {sent} channel{(sent == 1 ? "" : "s")}."
+                : $"Sent through {sent} of {attempted}. {string.Join(" ", errors)}";
+        }
+        catch (Exception ex)
+        {
+            _message = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

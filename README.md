@@ -408,6 +408,34 @@ until you turn it on, it waits out quiet hours rather than arriving at 3am, and 
 was not running at the time it is sent once when it next starts — never twice. The page
 shows a preview and can send one on demand.
 
+### A monthly report
+
+Once a month — the 1st at 08:00 unless you pick another day and time in **Settings →
+Monthly report** — LabbyTwo writes up the month before as a note on a **Monthly reports**
+tab: a line saying how the month went, each service's uptime, outages and time down in one
+table, the incidents with how long each lasted and what probably caused it, the total time
+down, the alerts that fired most, backups proven and restores tested, what the electricity
+used and cost, container updates and roll-backs, and what self-healing did. Each section is
+there only if something happened. Under the uptime table is a live
+[`{{chart}}`](#shortcodes) of the least available services' response times, fixed to that
+month's dates, so it draws the same month whenever the note is opened. The note is an
+ordinary one — add to it, move it, delete it.
+
+It is off until you turn it on. It can also send a short summary through your alert
+channels (email, Pushover, ntfy, a webhook…), which waits out quiet hours; the note itself
+is written on time either way. If LabbyTwo was not running on the day, it is made once when
+it next starts. **Preview** shows last month's report without writing anything, and **Make
+September 2026's now** (whichever month was last) writes it — over that month's report if
+there is one. A scheduled run never writes
+over a report that is already there, so anything you added to it stays.
+
+Months are the lab's own time zone's, midnight to midnight, however long the clocks make
+them. The month is read once, in the background, a few services at a time, every read
+bounded by the month and on an index built for it — status changes, incidents and the
+change feed are kept for a long time, and the report reads one month of each. Alerts,
+backups and self-healing come from the change feed, which is kept for 90 days by default;
+a month older than that says so.
+
 Every connection is probed on a timer (30s by default). Whatever numbers a provider
 returns are recorded to SQLite, which is why **any** provider gets uptime tracking and
 charts without a line of chart-specific code. Providers also say how their numbers should
@@ -1184,6 +1212,7 @@ else counts):
 |---|---|
 | `{{widget: CPU chart}}` | an existing card, by title (any case) or id, read-only |
 | `{{card: gauge connection="NAS" metric="Disk used" title="NAS disk"}}` | a card that exists only here: any card type by key or name, its settings as `key=value` |
+| `{{chart: NAS / cpu_percent last=7d}}` | a full-size history chart, the chart card's own: its scale beside it, a key with each line's latest reading, and a value under the pointer. Several lines on one scale with commas between them — `{{chart: NAS / cpu_percent, Plex / cpu_percent}}`; with no metric, the response time. Options below |
 | `{{down}}` | what is down right now — dot, name, "down for 12m" and what the probe said — or "Everything's up" |
 | `{{alerts}}` | the alert rules firing now — threshold, unusual-for-the-time and forecast rules — with the connection, the reading, the limit and how long; or "No alerts firing" |
 | `{{containers: stopped}}` | a Docker host's containers: `stopped`, `unhealthy`, `running`, `paused`, `restarting` or `all` (the default). Dot, name, image, uptime or exit code, health, Compose project. Read-only |
@@ -1205,6 +1234,29 @@ Their options:
 | `days=30` | `renewals` | how far ahead to look; 60 days if left out. Overdue is always shown |
 | `last=7d` | `changes` (default `24h`), `incidents` (default `30d`) | how far back to look, from `5m` to `365d`: `30m`, `24h`, `7d`, `2w`. An incident still open is shown however long ago it started |
 | `kind="containers, alerts"` | `changes` | only those kinds: `services`, `containers`, `alerts`, `certificates`, `dns`, `devices`, `updates`, `backups` (plurals optional). Same as writing it first, `{{changes: containers}}` |
+
+`{{chart}}`'s options:
+
+| Option | Does |
+|---|---|
+| `last=7d` | how far back, from `1h` to `365d` (`90min`, `2w` work too); 24 hours if left off. Also written as the metric's last word, as for a sparkline: `NAS / cpu_percent 7d` |
+| `from=2026-09-01 to=2026-10-01` | a fixed span of days instead, in the lab's time zone — `to=` is the day after the last one drawn, so that is September. A chart of a span that has ended draws the same thing whenever it is opened. `from=` alone runs until now |
+| `height=240` | pixels, 80–600; 200 if left off |
+| `min=0 max=100` | fix the scale, in the units the chart is read in; a reading outside it is drawn at the edge. Either alone is fine |
+| `title="CPU, both hosts"` | the words above it; otherwise the connection and metric, or whatever the lines have in common |
+| `unit=°C` | as for `{{metric}}`: a unit of the same kind converts every line to it, anything else is a label (below) |
+
+A name with a comma in it goes in quotes, `{{chart: "Home, office" / temp_c}}`, since commas
+separate the lines. Lines on one chart share one scale, so they can be compared — a
+percentage and a temperature on one chart is allowed, and the key says each one's unit.
+Up to 8 lines. A span longer than the raw history is kept (a week, by default) is drawn
+one point an hour, whatever it is; a shorter one is every reading, thinned to a few hundred
+points for drawing.
+
+A chart is read again roughly once per point's width of time — every thirty seconds for an
+hour's chart, every seven minutes for a day's, hourly for a week or more — rather than on
+every sweep, and a chart of a span that has ended is read once. Every chart of the same line
+over the same span, on any open page, shares that one read.
 
 `{{containers}}` uses the Containers tab's own calls, so a socket proxy that refuses the
 list shows a **?** naming the flag to set (`CONTAINERS=1`). However many pages show it,
@@ -1251,7 +1303,7 @@ All of them visible when broken, rather than silently wrong:
   fold inside an `{{if}}` both read as written. `{{else}}` belongs to an `{{if}}`: one met
   inside a fold is a **?** there. Headings inside keep their anchors.
 - **What "?" means.** Something written cannot be shown — a connection that does not
-  exist, a metric it has never reported, a date that is not one, a window over 30 days.
+  exist, a metric it has never reported, a date that is not one, a sparkline over 30 days.
   Point at the **?** (or tab to it) and its tooltip says exactly what and why. It never
   takes the rest of the page with it: a condition naming nothing shows a **?** and neither
   part; an `{{end}}` or `{{else}}` with nothing to belong to is a **?** where it stands; an
@@ -1299,7 +1351,7 @@ All of them visible when broken, rather than silently wrong:
   Controls card — and the public status page shows neither. An exported tab or card
   carries its shortcodes as the text they are.
 - **None of it slows the page.** Values come from what the monitor already holds in
-  memory; the few that need history (uptime, the sparkline, the uptime strip) or another
+  memory; the few that need history (uptime, the sparkline, the chart, the uptime strip) or another
   machine (containers) are fetched in the background and show `…` for the moment that
   takes, sharing one query between every card and page asking the same thing.
 

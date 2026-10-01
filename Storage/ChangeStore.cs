@@ -110,6 +110,60 @@ public sealed class ChangeStore(Db db, IOptions<LabbyOptions> options)
         return list;
     }
 
+    /// <summary>
+    /// How often each thing happened in a window: one row per kind, action, connection and
+    /// subject, with a count and the newest title and time. What the monthly report reads to
+    /// say which alerts fired most and how many backups were proven, in one statement rather
+    /// than reading every row back.
+    ///
+    /// A range on ix_changes_ts, the same as the feed's, bounded at both ends; the grouping
+    /// is done over the few thousand rows a month holds. The kinds are checked on the rows
+    /// the range yields, like the feed's own filter.
+    /// </summary>
+    public static string CountsSql(int kinds)
+    {
+        var sql = new StringBuilder("""
+            SELECT kind, action, connection_id, subject, COUNT(*), MAX(ts), MAX(title) FROM changes
+            WHERE ts >= $from AND ts < $to
+            """);
+        if (kinds > 0)
+            sql.Append(" AND kind IN (").Append(string.Join(", ", Enumerable.Range(0, kinds).Select(i => $"$k{i}"))).Append(')');
+        sql.Append(" GROUP BY kind, action, connection_id, subject");
+        return sql.ToString();
+    }
+
+    /// <summary>One group of <see cref="CountsSql"/>: what happened, to what, how often, and the newest time and title.</summary>
+    public sealed record Count(string Kind, string Action, string? ConnectionId, string Subject, int Times, DateTimeOffset Last, string Title);
+
+    /// <summary>The changes in [<paramref name="from"/>, <paramref name="to"/>) of these kinds, counted by what and to what.</summary>
+    public async Task<IReadOnlyList<Count>> CountsAsync(
+        DateTimeOffset from, DateTimeOffset to, IReadOnlyCollection<string> kinds, CancellationToken ct = default)
+    {
+        var wanted = kinds.Where(k => k.Length > 0).Distinct().ToList();
+        await using var connection = await db.OpenAsync(ct);
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = CountsSql(wanted.Count);
+        cmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+        for (var i = 0; i < wanted.Count; i++)
+            cmd.Parameters.AddWithValue($"$k{i}", wanted[i]);
+
+        var list = new List<Count>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new Count(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt32(4),
+                DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)).ToLocalTime(),
+                reader.GetString(6)));
+        }
+        return list;
+    }
+
     /// <summary>What a detector last saw for <paramref name="key"/>, or null if it has never looked.</summary>
     public async Task<string?> BaselineAsync(string key, CancellationToken ct = default)
     {

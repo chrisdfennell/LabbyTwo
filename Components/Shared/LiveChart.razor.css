@@ -1,0 +1,57 @@
+/* A full-size chart in a note: the chart card's drawing, framed like any other embed, with
+   the scale's top and bottom written beside the plot so a level can be read off without
+   pointing at it. The plot takes the width it is given; the height is the shortcode's. */
+
+.md-chart {
+    margin: .75rem 0;
+}
+
+.md-chart.is-waiting {
+    min-height: 6rem;
+}
+
+.md-chart-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: .25rem .75rem;
+    margin-bottom: .25rem;
+}
+
+.md-chart-title {
+    font-weight: 600;
+}
+
+.md-chart-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .25rem .75rem;
+    margin-bottom: .25rem;
+}
+
+.md-chart-plot {
+    display: flex;
+    gap: .4rem;
+    align-items: stretch;
+}
+
+.md-chart-plot svg {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+}
+
+.md-chart-scale {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.md-chart-foot {
+    display: flex;
+    justify-content: space-between;
+}
