@@ -118,14 +118,22 @@ public static partial class ContainerConfigs
     /// <summary>
     /// Names that usually hold a secret. Deliberately broad: a variable hidden that did not
     /// need to be costs nothing, one stored that should not have been is a password in a
-    /// database file that goes into backups and config exports.
+    /// database file that goes into backups and config exports. Public so the log search
+    /// hides the same names in <c>KEY=value</c> lines that the history hides here.
     /// </summary>
-    [GeneratedRegex("PASS|SECRET|TOKEN|KEY|CREDENTIAL|PRIVATE|AUTH|SALT|COOKIE|SESSION|SIGNATURE|CERT|DSN|CONN(ECTION)?_?STR",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    public const string SecretWords = "PASS|SECRET|TOKEN|KEY|CREDENTIAL|PRIVATE|AUTH|SALT|COOKIE|SESSION|SIGNATURE|CERT|DSN|CONN(ECTION)?_?STR";
+
+    /// <summary>
+    /// The pattern of a URL with a password in it, unanchored, for the same reason as
+    /// <see cref="SecretWords"/>.
+    /// </summary>
+    public const string CredentialUrlPattern = @"[a-z][a-z0-9+.-]*://[^/\s:@]*:[^/\s@]+@";
+
+    [GeneratedRegex(SecretWords, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex SecretName();
 
     /// <summary>A URL with a password in it — <c>postgres://user:pass@db/app</c> — whatever the variable is called.</summary>
-    [GeneratedRegex(@"^[a-z][a-z0-9+.-]*://[^/\s:@]*:[^/\s@]+@", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^" + CredentialUrlPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CredentialUrl();
 
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]

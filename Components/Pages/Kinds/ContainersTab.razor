@@ -119,6 +119,17 @@
             </button>
         </div>
 
+        @* A plain GET form, not a Blazor one: it only has to go to the Logs page with the
+           words in the address, which then searches — nothing here needs a round trip. *@
+        <form class="ct-logsearch" method="get" action="logs" role="search">
+            <input type="search" name="q" class="form-control form-control-sm" placeholder="Search every container's logs"
+                   aria-label="Search every container's logs" />
+            <input type="hidden" name="connection" value="@_docker.Id" />
+            <input type="hidden" name="last" value="1h" />
+            <input type="hidden" name="run" value="1" />
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Search logs</button>
+        </form>
+
         @if (RegistryCheck)
         {
             <div class="ct-updates">
@@ -156,6 +167,11 @@
         }
 
         <UpdateHelperNotice Endpoint="@Endpoint" />
+
+        @if (_error is null && _rows.Count > 0)
+        {
+            <DiscoveryHint Docker="_docker" Rows="_rows" />
+        }
 
         @if (_error is { Length: > 0 })
         {

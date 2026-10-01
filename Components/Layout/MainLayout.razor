@@ -11,6 +11,8 @@
         <MaintenanceBanner @rendermode="InteractiveServer" />
         @* Likewise: LabbyTwo saying it cannot see the lab has to be on whatever page is open. *@
         <BlindBanner @rendermode="InteractiveServer" />
+        @* On a narrow screen, once, until dismissed: there is a page made for this. *@
+        <PhoneHint @rendermode="InteractiveServer" />
         @Body
     </main>
 </div>

@@ -302,6 +302,33 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
     }
 
     /// <summary>
+    /// A metric's history between two instants, oldest first — a chart of a span that has
+    /// ended, like last month in the monthly report, which must still say the same thing
+    /// when the note is read in a year.
+    ///
+    /// The same choice as <see cref="SamplesAsync"/>: raw rows while the whole span is still
+    /// inside the raw retention and nothing in it has been summarised, one point per hour
+    /// otherwise. Every read is bounded at both ends, on the same covering index, so a
+    /// month from last year costs what a month from now does.
+    /// </summary>
+    public async Task<IReadOnlyList<Sample>> SamplesBetweenAsync(
+        string connectionId, string metric, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        var since = from.ToUnixTimeSeconds();
+        var until = to.ToUnixTimeSeconds();
+        if (until <= since)
+            return [];
+        await using var connection = await db.OpenAsync(ct);
+
+        var raw = (await PolicyAsync(ct)).RawRetentionFor(connectionId, options.Value.RawRetention);
+        var summaries = await SummariesAsync(connection, connectionId, metric, since, ct, until);
+        if (summaries.Count == 0 && DateTimeOffset.UtcNow - from <= raw)
+            return await RawSamplesAsync(connection, connectionId, metric, since, ct, until);
+
+        return await HourlySamplesAsync(connection, connectionId, metric, since, summaries, ct, until);
+    }
+
+    /// <summary>
     /// One series' raw rows since $since, summarised per hour. Grouped in SQL, so a long
     /// window never brings a week of raw rows into memory — one aggregate per hour, a
     /// hundred and sixty-eight of them for a week. The covering index delivers the range
@@ -324,18 +351,46 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
         ORDER BY ts
         """;
 
+    /// <summary><see cref="HourlyRawSql"/> bounded at both ends, for a span that has ended. Index only.</summary>
+    public const string HourlyRawBetweenSql = """
+        SELECT ts / 3600 * 3600 AS hour, MIN(ts), MAX(ts), MIN(value), MAX(value), AVG(value), COUNT(*)
+        FROM samples
+        WHERE connection_id = $c AND metric = $m AND ts >= $since AND ts < $until
+        GROUP BY hour
+        """;
+
+    /// <summary><see cref="RawSamplesSql"/> bounded at both ends. Index only.</summary>
+    public const string RawSamplesBetweenSql = """
+        SELECT ts, value FROM samples
+        WHERE connection_id = $c AND metric = $m AND ts >= $since AND ts < $until
+        ORDER BY ts
+        """;
+
+    /// <summary>
+    /// One series' stored hourly summaries whose midpoint falls in the span — a range on
+    /// samples_hourly's own key, (connection_id, metric, hour_ts), bounded at both ends.
+    /// </summary>
+    public const string SummariesBetweenSql = """
+        SELECT hour_ts, min, max, avg, count FROM samples_hourly
+        WHERE connection_id = $c AND metric = $m AND hour_ts >= $since - 1800 AND hour_ts < $until - 1800
+        ORDER BY hour_ts
+        """;
+
     /// <summary>
     /// The hourly half of <see cref="SamplesAsync"/>: stored summaries merged with the raw
     /// rows summarised here, one point per hour.
     /// </summary>
     private static async Task<IReadOnlyList<Sample>> HourlySamplesAsync(
-        SqliteConnection connection, string connectionId, string metric, long since, List<Bucket> summaries, CancellationToken ct)
+        SqliteConnection connection, string connectionId, string metric, long since, List<Bucket> summaries, CancellationToken ct,
+        long? until = null)
     {
         var cmd = connection.CreateCommand();
-        cmd.CommandText = HourlyRawSql;
+        cmd.CommandText = until is null ? HourlyRawSql : HourlyRawBetweenSql;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$m", metric);
         cmd.Parameters.AddWithValue("$since", since);
+        if (until is { } end)
+            cmd.Parameters.AddWithValue("$until", end);
 
         var hours = new SortedDictionary<long, Bucket>();
         foreach (var summary in summaries)
@@ -386,11 +441,11 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
     }
 
     private static async Task<List<Bucket>> SummariesAsync(
-        SqliteConnection connection, string connectionId, string metric, long since, CancellationToken ct)
+        SqliteConnection connection, string connectionId, string metric, long since, CancellationToken ct, long? until = null)
     {
         var cmd = connection.CreateCommand();
         // An hour belongs to the window if its midpoint does, since that is where it is drawn.
-        cmd.CommandText = """
+        cmd.CommandText = until is not null ? SummariesBetweenSql : """
             SELECT hour_ts, min, max, avg, count FROM samples_hourly
             WHERE connection_id = $c AND metric = $m AND hour_ts >= $since - 1800
             ORDER BY hour_ts
@@ -398,6 +453,8 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$m", metric);
         cmd.Parameters.AddWithValue("$since", since);
+        if (until is { } end)
+            cmd.Parameters.AddWithValue("$until", end);
         var list = new List<Bucket>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -410,13 +467,15 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
     }
 
     private static async Task<IReadOnlyList<Sample>> RawSamplesAsync(
-        SqliteConnection connection, string connectionId, string metric, long since, CancellationToken ct)
+        SqliteConnection connection, string connectionId, string metric, long since, CancellationToken ct, long? until = null)
     {
         var cmd = connection.CreateCommand();
-        cmd.CommandText = RawSamplesSql;
+        cmd.CommandText = until is null ? RawSamplesSql : RawSamplesBetweenSql;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$m", metric);
         cmd.Parameters.AddWithValue("$since", since);
+        if (until is { } end)
+            cmd.Parameters.AddWithValue("$until", end);
         var list = new List<Sample>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -820,6 +879,27 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
     public sealed record StatusWindow(StatusEvent? Prior, IReadOnlyList<StatusEvent> Events, bool Truncated);
 
     /// <summary>
+    /// The newest transition before a window: one step backwards down ix_status_lookup from
+    /// the window's start. Public, like the other history SQL, for the query-plan test.
+    /// </summary>
+    public const string StatusPriorSql = """
+        SELECT connection_id, ts, is_up, message FROM status_events
+        WHERE connection_id = $c AND ts < $from
+        ORDER BY ts DESC, rowid DESC LIMIT 1
+        """;
+
+    /// <summary>
+    /// One connection's transitions inside a window, oldest first: a range on
+    /// ix_status_lookup, bounded at both ends and by a limit. What the weekly summary and the
+    /// monthly report read for every connection.
+    /// </summary>
+    public const string StatusBetweenSql = """
+        SELECT connection_id, ts, is_up, message FROM status_events
+        WHERE connection_id = $c AND ts >= $from AND ts < $to
+        ORDER BY ts, rowid LIMIT $limit
+        """;
+
+    /// <summary>
     /// The transitions inside [<paramref name="from"/>, <paramref name="to"/>) for one
     /// connection, oldest first, plus the newest one before the window.
     ///
@@ -835,11 +915,7 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
         await using var connection = await db.OpenAsync(ct);
 
         var priorCmd = connection.CreateCommand();
-        priorCmd.CommandText = """
-            SELECT connection_id, ts, is_up, message FROM status_events
-            WHERE connection_id = $c AND ts < $from
-            ORDER BY ts DESC, rowid DESC LIMIT 1
-            """;
+        priorCmd.CommandText = StatusPriorSql;
         priorCmd.Parameters.AddWithValue("$c", connectionId);
         priorCmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
 
@@ -851,11 +927,7 @@ public sealed partial class HistoryStore(Db db, IOptions<LabbyOptions> options)
         }
 
         var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT connection_id, ts, is_up, message FROM status_events
-            WHERE connection_id = $c AND ts >= $from AND ts < $to
-            ORDER BY ts, rowid LIMIT $limit
-            """;
+        cmd.CommandText = StatusBetweenSql;
         cmd.Parameters.AddWithValue("$c", connectionId);
         cmd.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
         cmd.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());

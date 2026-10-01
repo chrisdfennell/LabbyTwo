@@ -75,8 +75,15 @@ const launch = () => new Promise((resolve, reject) => {
 
 // Whatever happens, the browser goes too. A stray Chrome would keep the CI step open.
 let started = Date.now();
+// Where the run had got to, so a timeout says which step never finished: Chrome starting,
+// the tab opening, or the cards drawing.
+const launchedAt = Date.now();
+let phase = 'starting Chrome';
+let lastState = '';
+const mark = next => { phase = next; };
 const finish = (code, message) => {
   if (message) console.log(message);
+  if (code !== 0) console.log(`Stopped while ${phase}, ${Date.now() - launchedAt} ms after launch${lastState ? `; last read: ${lastState}` : ''}.`);
   if (timed && code === 0) console.log(`elapsed_ms=${Date.now() - started}`);
   try { browser?.kill('SIGKILL'); } catch { /* already gone */ }
   process.exit(code);
@@ -88,6 +95,7 @@ const endpoint = await launch().catch(async first => {
   return launch();
 }).catch(error => finish(1, error.message));
 
+mark(`connecting to Chrome (started in ${Date.now() - launchedAt} ms)`);
 const socket = new WebSocket(endpoint);
 await new Promise((resolve, reject) => {
   socket.onopen = resolve;
@@ -160,7 +168,9 @@ const freshTab = async why => {
 
 // The clock starts here rather than with Chrome, whose own start is not the page's time.
 started = Date.now();
+mark('opening the page');
 await openTab().catch(error => finish(1, `Could not open the page: ${error.message}`));
+mark(`waiting for the cards (page opened ${Date.now() - started} ms after asking)`);
 
 const evaluate = async expression => {
   const { result } = await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId);
@@ -208,6 +218,7 @@ while (Date.now() < deadline) {
     if (typeof value === 'string') {
       state = JSON.parse(value);
       lastRead = Date.now();
+      lastState = `${state.cards} cards, ${state.waiting} still loading, after ${lastRead - started} ms`;
     }
     if (until) reached = await evaluate(until);
   } catch (error) {

@@ -29,6 +29,7 @@
     <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary" href="settings/connections">Alert channels</a>
         <a class="btn btn-sm btn-outline-secondary" href="settings/push">📳 Browser push</a>
+        <a class="btn btn-sm btn-outline-secondary" href="settings/scheduled">⏰ Scheduled actions</a>
         <button class="btn btn-sm btn-primary" @onclick="StartNew">+ New rule</button>
     </div>
 </div>
@@ -212,6 +213,8 @@
             connection under “When this is down…”. The alert says what it will try, and you hear
             whether it worked. It never acts during maintenance, a silence or a mute window, never on
             LabbyTwo's own container, and never on a protected container unless that remediation says so.
+            To run an action on a timetable instead — restart a container every Sunday, trigger a backup
+            nightly — use <a href="settings/scheduled">scheduled actions</a>.
         </p>
         <div class="row g-2 align-items-end mb-3">
             <div class="col-12 col-md-6">

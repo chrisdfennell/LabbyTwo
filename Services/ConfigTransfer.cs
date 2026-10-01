@@ -15,7 +15,7 @@ namespace LabbyTwo.Services;
 /// </summary>
 public sealed class ConfigTransfer(
     ConfigStore config, AlertRuleStore rules, Registry registry, TemplateStore? templates = null,
-    MuteWindowStore? mutes = null)
+    MuteWindowStore? mutes = null, ScheduledActionStore? scheduled = null)
 {
     // 2 added alert rules. Version 1 files still import — they simply carry none.
     public const int CurrentVersion = 2;
@@ -69,7 +69,23 @@ public sealed class ConfigTransfer(
 
         /// <summary>Named mute windows. Added without a version bump, like <see cref="Templates"/>.</summary>
         public List<MuteWindowDto> MuteWindows { get; init; } = [];
+
+        /// <summary>
+        /// Scheduled actions. Added without a version bump, like <see cref="Templates"/>. Their
+        /// history and how far each has run are state, not configuration, and stay behind.
+        /// </summary>
+        public List<ScheduledActionDto> ScheduledActions { get; init; } = [];
     }
+
+    /// <summary>
+    /// A scheduled action, with its schedule in the words the database keeps: "weekly",
+    /// "sun", "04:00", "0 4 * * 0". Flat rather than nested so a backup reads as a list of
+    /// settings, the way every other entry in it does.
+    /// </summary>
+    public sealed record ScheduledActionDto(string Id, string Name, bool Enabled, string Target,
+        string ConnectionId, string Container, string Verb, string ActionId,
+        string Schedule, string Days, string Times, int IntervalMinutes, int DayOfMonth, string Cron,
+        bool RunInMaintenance, bool AllowProtected, bool NotifyOnFailure, string ChannelId);
 
     /// <summary>A mute window, with its days and times as they are stored: "sun", "01:00".</summary>
     public sealed record MuteWindowDto(string Id, string Name, string Days, string Start, string End,
@@ -108,7 +124,7 @@ public sealed class ConfigTransfer(
 
     // Templates comes last and defaults to zero so the positional shape callers know stays.
     public sealed record ImportResult(int Connections, int Tabs, int Widgets, int Rules, List<string> Warnings,
-        int Templates = 0);
+        int Templates = 0, int ScheduledActions = 0);
 
     public async Task<string> ExportAsync(bool includeSecrets, CancellationToken ct = default)
     {
@@ -118,6 +134,7 @@ public sealed class ConfigTransfer(
         var alertRules = await rules.AllAsync(ct);
         var savedTemplates = templates is null ? [] : await templates.AllAsync(ct);
         var windows = mutes is null ? [] : await mutes.AllAsync(ct);
+        var timetable = scheduled is null ? [] : await scheduled.AllAsync(ct);
 
         var bundle = new Bundle
         {
@@ -158,6 +175,15 @@ public sealed class ConfigTransfer(
                 .. windows.Select(w => new MuteWindowDto(w.Id, w.Name, MuteWindow.StoredDays(w.Days),
                     MuteWindow.StoredTime(w.Start), MuteWindow.StoredTime(w.End), MuteWindow.StoredScope(w.Scope),
                     [.. w.Targets], w.Enabled))
+            ],
+            ScheduledActions =
+            [
+                .. timetable.Select(a => new ScheduledActionDto(a.Id, a.Name, a.Enabled,
+                    ScheduledAction.StoredTarget(a.Target), a.TargetConnectionId, a.Container,
+                    ScheduledAction.StoredVerb(a.Verb), a.ActionId,
+                    ActionSchedule.StoredKind(a.Schedule.Kind), MuteWindow.StoredDays(a.Schedule.Days),
+                    ActionSchedule.StoredTimes(a.Schedule.Times), a.Schedule.IntervalMinutes, a.Schedule.DayOfMonth,
+                    a.Schedule.Cron, a.RunInMaintenance, a.AllowProtected, a.NotifyOnFailure, a.ChannelId))
             ],
         };
 
@@ -416,7 +442,59 @@ public sealed class ConfigTransfer(
             importedTemplates++;
         }
 
+        // Upserted by id, and started from now: restoring a backup on Wednesday must not run
+        // Monday's restart because the file says it last ran then — it says no such thing,
+        // and "now" is the only moment an import can honestly claim to have dealt with.
+        // One whose connection is not here still imports, off, rather than failing every week.
+        var importedScheduled = 0;
+        if (scheduled is not null)
+        {
+            var here = (await config.ConnectionsAsync(ct)).Select(c => c.Id).ToHashSet();
+            foreach (var dto in bundle.ScheduledActions)
+            {
+                var action = new ScheduledAction
+                {
+                    Id = dto.Id,
+                    Name = dto.Name ?? "",
+                    Enabled = dto.Enabled,
+                    Target = ScheduledAction.ParseTarget(dto.Target),
+                    TargetConnectionId = dto.ConnectionId ?? "",
+                    Container = dto.Container ?? "",
+                    Verb = ScheduledAction.ParseVerb(dto.Verb),
+                    ActionId = dto.ActionId ?? "",
+                    Schedule = new ActionSchedule
+                    {
+                        Kind = ActionSchedule.ParseKind(dto.Schedule),
+                        Days = MuteWindow.ParseDays(dto.Days),
+                        Times = ActionSchedule.ParseTimes(dto.Times),
+                        IntervalMinutes = dto.IntervalMinutes,
+                        DayOfMonth = dto.DayOfMonth,
+                        Cron = dto.Cron ?? "",
+                    },
+                    RunInMaintenance = dto.RunInMaintenance,
+                    AllowProtected = dto.AllowProtected,
+                    NotifyOnFailure = dto.NotifyOnFailure,
+                    ChannelId = dto.ChannelId ?? "",
+                    CoveredUntil = DateTimeOffset.Now,
+                };
+
+                if (action.Problem() is { } problem)
+                {
+                    warnings.Add($"Skipped the scheduled action “{dto.Name}” — {problem}");
+                    continue;
+                }
+                if (!here.Contains(action.TargetConnectionId))
+                {
+                    action = action with { Enabled = false };
+                    warnings.Add($"The scheduled action “{dto.Name}” was imported switched off — the connection it acts on was not in the export.");
+                }
+
+                await scheduled.SaveAsync(action, ct);
+                importedScheduled++;
+            }
+        }
+
         return new ImportResult(bundle.Connections.Count, bundle.Tabs.Count, imported, importedRules, warnings,
-            importedTemplates);
+            importedTemplates, importedScheduled);
     }
 }

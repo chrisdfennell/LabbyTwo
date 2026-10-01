@@ -183,6 +183,89 @@ public sealed class QueryPlanTests
     }
 
     [Fact]
+    public void A_scheduled_actions_history_is_one_range_of_its_index_read_backwards()
+    {
+        // Read for every action each time the page opens.
+        var plan = Plan(ScheduledActionStore.RunsSql);
+        Assert.Contains(plan, step => step.Contains("ix_scheduled_runs_action", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN scheduled_runs", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Trimming_a_scheduled_actions_history_never_scans_the_table()
+    {
+        // After every run, of every action.
+        var plan = Plan(ScheduledActionStore.TrimSql);
+        Assert.Contains(plan, step => step.Contains("ix_scheduled_runs_action", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.StartsWith("SCAN scheduled_runs", StringComparison.Ordinal)
+                                            && !step.Contains("INDEX", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Moving_a_scheduled_action_on_is_a_primary_key_lookup()
+    {
+        // The only write a due action makes before it runs.
+        var plan = Plan(ScheduledActionStore.SetCoveredSql);
+        Assert.Contains(plan, step => step.StartsWith("SEARCH scheduled_actions USING PRIMARY KEY", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_chart_of_a_fixed_span_reads_only_the_index_bounded_at_both_ends()
+    {
+        // {{chart: … from= to=}} — last month in the monthly report. Raw, hourly on the fly,
+        // and the stored summaries: each a range on its own key, never the table.
+        var raw = Plan(HistoryStore.RawSamplesBetweenSql);
+        AssertIndexOnly(raw);
+        Assert.DoesNotContain(raw, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+        Assert.Contains(raw, step => step.Contains("ts>? AND ts<?", StringComparison.Ordinal));
+
+        AssertIndexOnly(Plan(HistoryStore.HourlyRawBetweenSql));
+
+        var summaries = Plan(HistoryStore.SummariesBetweenSql);
+        Assert.Contains(summaries, step => step.StartsWith("SEARCH samples_hourly", StringComparison.Ordinal)
+                                          && step.Contains("hour_ts>? AND hour_ts<?", StringComparison.Ordinal));
+        Assert.DoesNotContain(summaries, step => step.StartsWith("SCAN", StringComparison.Ordinal));
+        Assert.DoesNotContain(summaries, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_months_uptime_is_two_range_reads_per_service_on_the_status_index()
+    {
+        // The monthly report (and the weekly summary) ask this of every connection. Status
+        // events are kept for ever, so anything unbounded here grows for the life of the install.
+        var prior = Plan(HistoryStore.StatusPriorSql);
+        Assert.Contains(prior, step => step.StartsWith("SEARCH status_events USING", StringComparison.Ordinal)
+                                      && step.Contains("ix_status_lookup", StringComparison.Ordinal));
+        Assert.DoesNotContain(prior, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+
+        var window = Plan(HistoryStore.StatusBetweenSql);
+        Assert.Contains(window, step => step.StartsWith("SEARCH status_events USING", StringComparison.Ordinal)
+                                       && step.Contains("ix_status_lookup", StringComparison.Ordinal)
+                                       && step.Contains("ts>? AND ts<?", StringComparison.Ordinal));
+        Assert.DoesNotContain(window, step => step.StartsWith("SCAN", StringComparison.Ordinal));
+        Assert.DoesNotContain(window, step => step.Contains("TEMP B-TREE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_months_incidents_and_feed_counts_are_ranges_on_their_time_indexes()
+    {
+        var incidents = Plan(IncidentStore.OverlappingSql);
+        Assert.Contains(incidents, step => step.StartsWith("SEARCH incidents USING INDEX ix_incidents_started", StringComparison.Ordinal)
+                                          && step.Contains("started_ts>? AND started_ts<?", StringComparison.Ordinal));
+        Assert.DoesNotContain(incidents, step => step.StartsWith("SCAN", StringComparison.Ordinal));
+
+        foreach (var kinds in new[] { 0, 2 })
+        {
+            var counts = Plan(ChangeStore.CountsSql(kinds));
+            Assert.Contains(counts, step => step.StartsWith("SEARCH changes USING INDEX ix_changes_ts", StringComparison.Ordinal)
+                                           && step.Contains("ts>? AND ts<?", StringComparison.Ordinal));
+            Assert.DoesNotContain(counts, step => step.StartsWith("SCAN changes", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void The_storage_survey_seeks_and_counts_short_ranges_in_the_covering_index()
     {
         // The survey the storage page shows is built from these, per series, twice a day.

@@ -66,6 +66,10 @@
     </div>
 </div>
 
+@* Services running on the Docker hosts that LabbyTwo has an integration for. Above the
+   list, because the moment it is useful is the moment the list is short. *@
+<DiscoveredServices Connections="_connections" LookOnOpen="Discover" OnAdd="AddDiscovered" />
+
 @if (_connections.Count == 0)
 {
     <div class="empty-state">
@@ -292,7 +296,8 @@ else
 
 @if (_draft is not null && _draftProvider is not null)
 {
-    <ConnectionEditor Draft="_draft" Provider="_draftProvider" OnClose="CloseEditor" />
+    <ConnectionEditor Draft="_draft" Provider="_draftProvider" OnClose="CloseEditor"
+                      Intro="@_draftIntro" TestOnOpen="@(_draftIntro is not null)" />
 }
 
 @if (_confirmDelete is not null)
@@ -481,6 +486,23 @@ else
     /// </summary>
     [SupplyParameterFromQuery(Name = "edit")] public string? EditId { get; set; }
 
+    /// <summary>Look for services straight away — the Containers tab's hint links here with it.</summary>
+    [SupplyParameterFromQuery(Name = "discover")] public bool Discover { get; set; }
+
+    /// <summary>What the editor says at the top when it was opened from a suggestion.</summary>
+    private string? _draftIntro;
+
+    /// <summary>
+    /// "Add" on a suggestion: the ordinary editor, filled in. The person reviews it, adds the
+    /// key the hint pointed at, tests it and saves it — or cancels, and nothing was written.
+    /// </summary>
+    private void AddDiscovered(DiscoveredService found)
+    {
+        _draftProvider = found.Provider;
+        _draft = ServiceDiscovery.Draft(found, _connections);
+        _draftIntro = ServiceDiscovery.Intro(found);
+    }
+
     protected override void OnParametersSet()
     {
         if (EditId is { Length: > 0 } id && _draft is null && _connections.FirstOrDefault(c => c.Id == id) is { } connection)
@@ -588,6 +610,7 @@ else
     {
         _draft = null;
         _draftProvider = null;
+        _draftIntro = null;
         // Otherwise a reload, or coming back to this page, would open the editor again.
         if (EditId is { Length: > 0 })
             Nav.NavigateTo("settings/connections", replace: true);

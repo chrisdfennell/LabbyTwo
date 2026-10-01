@@ -1,0 +1,17 @@
+@inherits LayoutComponentBase
+
+@* For the phone view: nothing round the page but the page. The sidebar, the command
+   palette and the banners are MainLayout's, and each of them is either furniture for a
+   desk or something the phone view already says itself — maintenance and "can't see the
+   lab" are at the top of it, with their buttons, rather than above it twice.
+
+   The reconnect notice lives in App.razor, outside every layout, so a phone that loses
+   the connection on the train still says so. *@
+<main class="phone-shell">
+    @Body
+</main>
+
+<div id="blazor-error-ui" class="alert alert-danger m-0 rounded-0 position-fixed bottom-0 start-0 end-0" style="display:none; z-index:1080">
+    An error has occurred. <a href="" class="alert-link">Reload</a>
+    <a class="float-end" href="" data-dismiss>✕</a>
+</div>

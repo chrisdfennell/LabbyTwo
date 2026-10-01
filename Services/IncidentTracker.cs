@@ -34,6 +34,64 @@ public sealed class IncidentTracker(
     private List<Incident>? _live;
     private bool _alertsEvaluated;
 
+    /// <summary>
+    /// The open incidents as of the last change, copied out of <see cref="_live"/> whenever
+    /// it changes — that list is only ever touched under the gate, and a page must be able to
+    /// read this while a signal is being applied. Null until the live list has been loaded.
+    /// </summary>
+    private IReadOnlyList<Incident>? _open;
+
+    /// <summary>
+    /// The open incidents, newest first, from memory: what the phone view lists. Null until
+    /// the tracker has loaded what it tracks — the first signal or sweep reconciliation
+    /// after a start with something open does that — and then kept current by every save.
+    /// </summary>
+    public IReadOnlyList<Incident>? Open => Volatile.Read(ref _open);
+
+    /// <summary>
+    /// The open incidents, loading them first if nothing has yet. Off the render thread in a
+    /// page: the first call after a start may be the one read of the partial index.
+    /// </summary>
+    public async Task<IReadOnlyList<Incident>> OpenAsync(CancellationToken ct = default)
+    {
+        if (Open is { } known)
+            return known;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await LiveAsync(ct);
+            return Open ?? [];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Raised after <see cref="Open"/> is replaced — after the store's own Changed, which
+    /// fires inside the save, before this list has caught up with it. Listeners must be
+    /// quick and must not throw.
+    /// </summary>
+    public event Action? OpenChanged;
+
+    private void Publish(List<Incident> live)
+    {
+        IReadOnlyList<Incident> open = [.. live.Where(i => i.IsOpen).OrderByDescending(i => i.StartedAt)];
+        var before = Volatile.Read(ref _open);
+        Volatile.Write(ref _open, open);
+        if (before is not null && before.SequenceEqual(open))
+            return;
+        try
+        {
+            OpenChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "An incident listener threw");
+        }
+    }
+
     public Task StartAsync(CancellationToken ct)
     {
         changes.Recorded += OnChange;
@@ -140,6 +198,7 @@ public sealed class IncidentTracker(
 
             var saved = await incidents.SaveAsync(changed, ct);
             Keep(live, saved, signal.At);
+            Publish(live);
             return saved;
         }
         finally
@@ -159,6 +218,7 @@ public sealed class IncidentTracker(
             return _live;
         var recent = await incidents.RecentAsync(DateTimeOffset.Now - IncidentRules.JoinWindow - TimeSpan.FromDays(1), 50, ct: ct);
         _live = [.. recent.Where(i => i.IsOpen || DateTimeOffset.Now - i.LastActivity <= IncidentRules.JoinWindow)];
+        Publish(_live);
         return _live;
     }
 
@@ -199,6 +259,7 @@ public sealed class IncidentTracker(
                     if (IncidentRules.Reconcile(incident, StillBad, now) is { } changed)
                         Keep(live, await incidents.SaveAsync(changed, ct), now);
                 }
+                Publish(live);
             }
             finally
             {

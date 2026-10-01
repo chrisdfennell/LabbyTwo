@@ -1,0 +1,95 @@
+@inject ConfigStore Config
+@inject Registry Registry
+@inject Offload Offload
+
+@* A line on the Containers tab when it lists services LabbyTwo could watch properly and
+   nobody has added. Worked out from the rows the tab already has — no request of its own —
+   and dismissible, for these services only: one started next week brings it back. *@
+
+@if (_auto && _pending.Count > 0)
+{
+    <div class="alert alert-info py-2 d-flex align-items-center gap-2 flex-wrap" data-discovery-hint>
+        <span>
+            💡 LabbyTwo recognises @Names here — @(_pending.Count == 1 ? "it is" : "they are") not
+            @(_pending.Count == 1 ? "a connection" : "connections") yet.
+        </span>
+        <a class="btn btn-sm btn-primary ms-auto" href="settings/connections?discover=true">Set @(_pending.Count == 1 ? "it" : "them") up</a>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dismiss-discovery"
+                @onclick="DismissAsync">Not now</button>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Connection Docker { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<ContainerRow> Rows { get; set; } = [];
+
+    /// <summary>Who LabbyTwo is, for skipping its own row. A parameter so a test can say.</summary>
+    [Parameter] public string? SelfHint { get; set; }
+
+    private ServiceDiscovery? _discovery;
+    [Inject] private IServiceProvider Services { get; set; } = default!;
+
+    private bool _auto;
+    private IReadOnlySet<string> _ignored = new HashSet<string>();
+    private IReadOnlySet<string> _dismissed = new HashSet<string>();
+    private IReadOnlyList<DiscoveredService> _pending = [];
+    private IReadOnlyList<ContainerRow>? _matchedRows;
+    private bool _loaded;
+
+    private string Names
+    {
+        get
+        {
+            var names = _pending.Select(p => p.Provider.DisplayName).Distinct().ToList();
+            return names.Count switch
+            {
+                1 => names[0],
+                2 => $"{names[0]} and {names[1]}",
+                3 => $"{names[0]}, {names[1]} and {names[2]}",
+                _ => $"{names[0]}, {names[1]} and {names.Count - 2} more",
+            };
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Optional, so a page built without discovery registered still draws.
+        _discovery = Services.GetService(typeof(ServiceDiscovery)) as ServiceDiscovery;
+        if (_discovery is null)
+            return;
+        var discovery = _discovery;
+        (_auto, _ignored, _dismissed) = await Offload.Run(async ct =>
+            (await discovery.AutoAsync(ct), await discovery.IgnoredAsync(ct), await discovery.HintDismissedAsync(ct)));
+        _loaded = true;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // The tab hands over a new list every twenty seconds or so; the same list twice is
+        // the same answer.
+        if (!_loaded || !_auto || ReferenceEquals(_matchedRows, Rows))
+            return;
+        _matchedRows = Rows;
+        var connections = await Config.ConnectionsAsync();
+        _pending =
+        [
+            .. ServiceDiscovery.Discover(Docker, Rows, connections, Registry.Provider, _ignored, SelfHint ?? SelfContainer.Hint)
+                .Where(found => found.Pending && !_dismissed.Contains(found.Key)),
+        ];
+    }
+
+    private async Task DismissAsync()
+    {
+        if (_discovery is null)
+            return;
+        var keys = _pending.Select(p => p.Key).ToList();
+        var discovery = _discovery;
+        _pending = [];
+        await Offload.Run(async ct =>
+        {
+            await discovery.DismissHintAsync(keys, ct);
+            return true;
+        });
+        _dismissed = new HashSet<string>(_dismissed.Concat(keys), StringComparer.Ordinal);
+    }
+}

@@ -54,15 +54,40 @@ public sealed class BackupProof(
         IReadOnlyList<OffsiteDestination> Destinations,
         IReadOnlyDictionary<string, DestinationStatus> Statuses);
 
+    private IReadOnlyList<BackupRow>? _latest;
+
+    /// <summary>
+    /// The rows as last judged — by the sweep every few minutes, or by any page that asked
+    /// since. Null until something has. For the phone view, which lists late backups beside
+    /// what is down and must not read the database to do it; a judgement a few minutes old
+    /// is right for something measured in hours.
+    /// </summary>
+    public IReadOnlyList<BackupRow>? Latest => Volatile.Read(ref _latest);
+
+    /// <summary>Raised whenever <see cref="Latest"/> is replaced. Listeners must be quick and must not throw.</summary>
+    public event Action? Judged;
+
     /// <summary>Every item, judged at <paramref name="now"/>. Callers on a page run this through <see cref="Offload"/>.</summary>
     public async Task<IReadOnlyList<BackupRow>> RowsAsync(DateTimeOffset now, CancellationToken ct = default)
     {
         var items = await store.AllAsync(ct);
-        if (items.Count == 0)
-            return [];
+        IReadOnlyList<BackupRow> rows = [];
+        if (items.Count > 0)
+        {
+            var context = await ContextAsync(items, ct);
+            rows = [.. items.Select(item => BackupSchedule.Row(item, Read(item, context, now), now, Zone))];
+        }
 
-        var context = await ContextAsync(items, ct);
-        return [.. items.Select(item => BackupSchedule.Row(item, Read(item, context, now), now, Zone))];
+        Volatile.Write(ref _latest, rows);
+        try
+        {
+            Judged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "A backup listener threw");
+        }
+        return rows;
     }
 
     private async Task<Context> ContextAsync(IReadOnlyList<BackupItem> items, CancellationToken ct)
