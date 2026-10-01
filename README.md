@@ -1180,7 +1180,7 @@ CommonMark with Markdig's advanced extensions. Raw HTML is switched off: `<b>` o
 | `- item`, `1. item`, indented for nesting | lists |
 | `- [ ] to do`, `- [x] done` | task lists — shown ticked or not, but display only: clicking does not save |
 | `> quoted` | a quote |
-| `` `code` ``, a fenced ```` ``` ```` block (with a language) or four-space indent | code, in a monospace box; not syntax-highlighted |
+| `` `code` ``, a fenced ```` ``` ```` block (with a language) or four-space indent | code, in a monospace box; not syntax-highlighted. Each has a **copy** button — in a block's corner, and a small icon after a code span (shown on hover, always on a phone). It copies the code exactly, and on plain http, where browsers refuse the clipboard, it selects the code for you to copy instead |
 | `[text](https://…)`, `<https://…>`, a bare `https://…` or `www.…` | links |
 | `![alt](https://…/picture.png)` | an image, loaded by the viewer's browser; `![](https://www.youtube.com/watch?v=…)` embeds the video |
 | pipe tables, with `:---:` alignment | tables |
@@ -1303,6 +1303,54 @@ certificates and the Renewals plugin already report (`cert_days_left`, `days_unt
 installed or not. `{{updates}}` only shows what the last check found — pressed on the
 Containers tab or in Settings, or run on the schedule if you chose one — so a runbook open
 on a wall all day never becomes a stream of calls to Docker Hub.
+
+**Doing things** — commands, logs and scheduled actions:
+
+| Shortcode | Does |
+|---|---|
+| `{{ssh: "NAS" / docker restart plex}}` | a button showing the exact command. Pressing it asks first — naming the machine and its address and showing the command — then runs it on that machine and shows the exit code and the last 50 lines of output under the button. Inline or on a line of its own |
+| `{{logs: plex last=15m errors}}` | the last few lines of one container's log: `plex` is a container's name or a Compose service's; `last=` from `5m` to `24h` (15 minutes if left off); `errors` keeps only lines saying error, exception, fatal or failed; `match="database is locked"` only lines containing that; `lines=20` (1–50, default 10); `connection="Docker"` which Docker connection. With nothing matching it says so — "No errors in the last 15 minutes" — and **Open in Logs** opens the [Logs page](#searching-every-containers-logs) with the same search. On a line of its own |
+| `{{run: "Weekly Plex restart"}}` | a [scheduled action](#scheduled-actions) by name or id: when it runs next ("next run in 3 days, Sun 4 Oct 04:00"), how its last run went ("last ok 2d ago", failed, skipped) and **Run now** |
+
+`{{ssh}}` reads the machine up to the first `/` and takes **everything after it as the
+command, exactly as written** — slashes, quotes, `|` and `=` need no quoting. A machine
+whose name has a slash in it is quoted, `{{ssh: "Rack / Pi" / uptime}}`. Options go before
+the slash: `timeout=120` (seconds, or `2m`; 5 seconds to 10 minutes, a minute if left off)
+and `label="Restart Plex"` for words on the button instead of the command. A command
+containing `}}` is wrapped whole in quotes: `{{ssh: NAS / "docker ps --format '{{.Names}}'"}}`.
+One line, up to 1,000 characters.
+
+What keeps `{{ssh}}` safe:
+
+- **It runs through an SSH host connection** from the [Terminal plugin](examples/LabbyTwo.TerminalPlugin),
+  with that connection's own login, key and pinned host key. Any other connection — or one
+  whose plugin is not installed — draws the button disabled, saying why.
+- **Off until you say so, per machine.** The SSH host connection has an **Allow runbook
+  commands** setting, off by default. Until it is ticked the button is drawn disabled with
+  the reason beside it.
+- **Only with a login.** Like the Terminal, it refuses to run anything while LabbyTwo has no
+  password set (`LABBY_AUTH_PASSWORD`), since anybody who can reach the page could press it.
+- **It always asks.** A command that looks destructive — `rm -r`/`-rf`, `mkfs`, `dd`,
+  writing to `/dev/sd…`, `shutdown`/`reboot`/`poweroff`, a fork bomb, `zfs destroy`,
+  `docker … prune` and a few more — also needs the machine's name typed before **Run it**
+  will press. That list is a speed bump, not a sandbox.
+- **One at a time.** The same command on the same machine never runs twice at once — a
+  double tap, or two people with the note open, gets "already running".
+- **A timeout**, the shortcode's or a minute, after which it is stopped and reported.
+- **Written down.** Every run goes into the [change feed](#what-changed-and-incidents) as
+  "chris ran “docker restart plex” on NAS", with the exit code and how long it took — filter
+  by *Commands run from notes*.
+- **Output is text.** Terminal colour codes are stripped and secret-looking values
+  (`PASSWORD=…`, `token: …`, `Bearer …`, a password in a URL) are masked the way the Logs
+  page masks them. Nothing a command prints can become HTML.
+
+`{{logs}}` is read when somebody is looking at the note — never during a sweep and never
+on a page nobody has open — and again at most once a minute while it stays on screen (not
+while the tab is in the background or the box is inside a closed fold). Each read asks
+Docker for the window's newest 5,000 lines and stops at 2 MB, every line is masked before it
+is matched, and the read is cancelled when the note closes. `{{run}}` reads from the
+scheduler's own memory; its **Run now** is the Scheduled page's — the same guardrails, never
+on top of a run still going, recorded in the history and the feed — after a confirmation.
 
 **Sections and folds** — each marker on a line of its own:
 

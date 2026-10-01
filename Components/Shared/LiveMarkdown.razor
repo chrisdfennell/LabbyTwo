@@ -425,6 +425,10 @@
             "diagram" when blockAllowed => typeof(LiveDiagram),
             "who" => typeof(LiveWho),
             "status" when LabStatus.SummaryTarget(code, _scope?.Connections ?? [], out _) is not null => typeof(LiveStatusSummary),
+            "logs" when blockAllowed => typeof(LiveLogs),
+            // Buttons, like {{button}}: the same in a sentence or on a line of their own.
+            "ssh" => typeof(LiveSsh),
+            "run" => typeof(LiveRun),
             _ => null,
         };
         if (own is not null)

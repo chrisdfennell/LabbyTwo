@@ -59,6 +59,7 @@
             Live values: <code>{{status: NAS}}</code>, <code>{{metric: NAS / cpu_percent}}</code>, <code>{{widget: card title}}</code>.
             Runbooks: <code>{{down}}</code>, <code>{{if down: NAS}}</code> … <code>{{end}}</code>, <code>{{button: NAS / restart}}</code>, <code>{{details: Title}}</code> … <code>{{end}}</code>, <code>&gt; [!WARNING]</code>.
             Lists: <code>{{alerts}}</code>, <code>{{containers: stopped}}</code>, <code>{{renewals}}</code>.
+            Doing things: <code>{{ssh: NAS / docker restart plex}}</code>, <code>{{logs: plex last=15m errors}}</code>, <code>{{run: "Weekly Plex restart"}}</code>.
             History: <code>{{chart: NAS / cpu_percent last=7d}}</code>, <code>{{changes: last=24h}}</code>, <code>{{incidents: open}}</code>, <code>{{backups: late}}</code>.
             Power: <code>{{power}}</code>, <code>{{power: "NAS plug" period=today}}</code>.
             Conditions: <code>{{if down: NAS and not maintenance}}</code> … <code>{{elif any alert}}</code> … <code>{{end}}</code>. The lab: <code>{{status: tab "Media"}}</code>, <code>{{who: home}}</code>, <code>{{who: watching}}</code>.

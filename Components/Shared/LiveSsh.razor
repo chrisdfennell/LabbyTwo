@@ -1,0 +1,174 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@inject RunbookCommandRunner Runner
+
+@* {{ssh: "NAS" / docker restart plex}}: a button that runs one command on a machine, written
+   into a runbook. The button shows the exact command, so what is pressed is what was read.
+
+   Nothing here runs anything itself, or decides whether it may: RunbookCommandRunner checks
+   the login, the connection's opt-in and the one-at-a-time rule, runs it through the
+   connection's own provider (the Terminal plugin's SSH host), and writes it into the change
+   feed. This asks first — showing the machine and the command — and for a command that looks
+   destructive, asks for the machine's name to be typed. What comes back is drawn as text.
+
+   Spans throughout, never a div, so it can sit in a sentence or a list item: a block inside
+   a paragraph is not something a browser keeps. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_request is null || _connection is null)
+{
+    <span class="sc-value is-waiting" title="Loading…">…</span>
+}
+else
+{
+    var request = _request;
+    var connection = _connection;
+    <span class="md-ssh">
+        <button type="button"
+                class="btn btn-sm btn-outline-secondary"
+                disabled="@(_refusal is not null || _busy)"
+                title="@(_refusal ?? $"Run this on {connection.Name}")"
+                @onclick="Ask">
+            @if (_busy)
+            {
+                <span>Running on @connection.Name…</span>
+            }
+            else if (request.Label.Length > 0)
+            {
+                <span>▶ @request.Label</span>
+            }
+            else
+            {
+                <span>▶ <span class="md-ssh-command">@request.Command</span></span>
+            }
+        </button>
+        @if (_refusal is not null)
+        {
+            <span class="tile-meta ms-2">@_refusal</span>
+        }
+        @if (_outcome is { } outcome)
+        {
+            @if (outcome.Lines.Count > 0)
+            {
+                <span class="md-ssh-output" role="log" aria-label="@($"Output of {request.Command}")">@string.Join("\n", outcome.Lines)</span>
+            }
+            <span class="md-ssh-status tile-meta @(outcome.Ok ? "" : "is-bad")">
+                @(outcome.Ran ? $"{outcome.Message} {Ago.Duration(outcome.Took)}, {outcome.Lines.Count} line{(outcome.Lines.Count == 1 ? "" : "s")} of output{(outcome.Lines.Count >= RunbookCommands.OutputLines ? " (the last " + RunbookCommands.OutputLines + ")" : "")}." : outcome.Message)
+            </span>
+        }
+    </span>
+
+    @if (_asking)
+    {
+        <Modal Title="@($"Run this on {connection.Name}?")" Size="" OnClose="Cancel">
+            <ChildContent>
+                <p class="mb-1">On <strong>@connection.Name</strong>@(Host(connection) is { Length: > 0 } host ? $" ({host})" : ""):</p>
+                <pre class="md-ssh-output mb-2">@request.Command</pre>
+                <p class="tile-meta mb-2">Stops after @Ago.Duration(request.Timeout). The run, its exit code and your name go into the change feed.</p>
+                @if (_danger is { } danger)
+                {
+                    <div class="alert alert-warning py-2 mb-2">This command @danger. Type <strong>@connection.Name</strong> to run it.</div>
+                    <input class="form-control form-control-sm" aria-label="@($"Type {connection.Name} to confirm")"
+                           placeholder="@connection.Name" @bind="_typed" @bind:event="oninput" />
+                }
+            </ChildContent>
+            <Footer>
+                <button class="btn btn-secondary btn-sm" @onclick="Cancel">Cancel</button>
+                <button class="btn btn-sm @(_danger is null ? "btn-primary" : "btn-danger")" disabled="@(!Confirmed)" @onclick="RunAsync">Run it</button>
+            </Footer>
+        </Modal>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private string? _problem;
+    private RunbookCommands.Request? _request;
+    private Connection? _connection;
+    private string? _refusal;
+    private string? _danger;
+    private bool _asking;
+    private string _typed = "";
+    private bool _busy;
+    private RunbookCommandRunner.Outcome? _outcome;
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        if (Scope is null)
+            return;
+
+        if (RunbookCommands.Read(Code, out var bad) is not { } request)
+        {
+            _problem = $"{bad} ({Code.Source})";
+            return;
+        }
+        if (ShortcodeLookup.Connection(Scope.Connections, request.Connection) is not { } connection)
+        {
+            _problem = $"No connection called “{request.Connection}”. ({Code.Source})";
+            return;
+        }
+
+        _request = request;
+        _connection = connection;
+        _danger = RunbookCommands.Danger(request.Command);
+        _refusal = Runner.Refusal(connection);
+    }
+
+    private static string Host(Connection connection) => connection.Settings.Get("host");
+
+    /// <summary>A dangerous command needs the machine's name typed; anything else, one more press.</summary>
+    private bool Confirmed => _danger is null
+        || (_connection is not null && string.Equals(_typed.Trim(), _connection.Name.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private void Ask()
+    {
+        if (_refusal is not null || _busy)
+            return;
+        _typed = "";
+        _asking = true;
+    }
+
+    private void Cancel() => _asking = false;
+
+    private async Task RunAsync()
+    {
+        if (!Confirmed || _busy || _request is not { } request || _connection is not { } connection)
+            return;
+        _asking = false;
+
+        var who = "Somebody";
+        if (Auth is not null)
+        {
+            var user = (await Auth).User;
+            if (user.Identity is not { IsAuthenticated: true })
+            {
+                _outcome = RunbookCommandRunner.Outcome.Refused("Log in to run commands.");
+                return;
+            }
+            if (user.Identity.Name is { Length: > 0 } name)
+                who = name;
+        }
+
+        _busy = true;
+        _outcome = null;
+        StateHasChanged();
+        try
+        {
+            // On the pool: the circuit should go on drawing while a command takes its minute.
+            _outcome = await Task.Run(() => Runner.RunAsync(connection, request.Command, request.Timeout, who));
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

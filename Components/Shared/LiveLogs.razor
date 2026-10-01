@@ -1,0 +1,225 @@
+@implements IDisposable
+@inject Offload Offload
+@inject IServiceProvider Services
+
+@* {{logs: plex last=15m errors}}: the last few matching lines of one container's log, in the
+   note, with a link to the whole search on the Logs page.
+
+   Read when the note is drawn in a browser — never during prerender, never because a sweep
+   landed — and again at most once a minute while it stays on screen: the timer asks the
+   browser first whether this box is visible (the tab in front, not inside a closed fold,
+   somewhere near the window) and skips the read when it is not. Each read is capped (the
+   window's last 5,000 lines, 2 MB) and cancelled when the note goes away. The container list
+   comes from DockerContainers.SharedListAsync, the same one the Containers tab and
+   {{containers}} share.
+
+   Every line is masked before it is matched and is drawn as text. *@
+
+@if (_problem is not null)
+{
+    <div class="md-down" role="note">
+        <div class="md-down-row">
+            <span class="sc-problem" tabindex="0" role="note" title="@($"{_problem} ({Code.Source})")" aria-label="@_problem">?</span>
+            <span class="tile-meta md-ct-error">@_problem</span>
+        </div>
+    </div>
+}
+else if (_request is null || _docker is null || !_load.Ready || _snapshot is null)
+{
+    <div class="md-down md-logs is-waiting" aria-busy="true" @ref="_box"><span class="tile-meta">…</span></div>
+}
+else
+{
+    var request = _request;
+    var snapshot = _snapshot;
+    <div class="md-down md-logs" @ref="_box">
+        <div class="md-down-row">
+            <strong>@(snapshot.Container ?? request.Container)</strong>
+            <span class="tile-meta">@Describe(request) on @_docker.Name</span>
+            @if (snapshot.Link is { } link)
+            {
+                <a class="tile-meta ms-auto" href="@link">Open in Logs</a>
+            }
+        </div>
+        @if (snapshot.Error is { } error)
+        {
+            <div class="md-down-row">
+                <span class="sc-problem" tabindex="0" role="note" title="@error" aria-label="@error">?</span>
+                <span class="tile-meta md-ct-error">@error</span>
+            </div>
+        }
+        else if (snapshot.Lines.Count == 0)
+        {
+            <div class="md-down-row is-clear">
+                <span class="status-dot @(request.Errors ? "status-up" : "status-unknown")" aria-hidden="true"></span>
+                <span>@Sentence(NoteLogs.Nothing(request))</span>
+            </div>
+        }
+        else
+        {
+            <div class="md-logs-lines" role="log" aria-label="@($"Recent lines from {snapshot.Container}")">
+                @foreach (var line in snapshot.Lines)
+                {
+                    <span class="md-logs-line @(line.Stream == LogStream.Stderr ? "is-stderr" : "")"><span class="md-logs-time">@(line.Time?.ToLocalTime().ToString("HH:mm:ss"))</span>@line.Text</span>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    /// <summary>How often a note left open reads the log again.</summary>
+    public static readonly TimeSpan RefreshEvery = TimeSpan.FromSeconds(60);
+
+    private sealed record Snapshot(IReadOnlyList<LogLine> Lines, string? Container, string? Link, string? Error);
+
+    private BackgroundLoad _load = default!;
+    private string? _problem;
+    private NoteLogs.Request? _request;
+    private Connection? _docker;
+    private Snapshot? _snapshot;
+    private ElementReference _box;
+    private CancellationTokenSource? _timer;
+    private bool _disposed;
+
+    protected override void OnInitialized() =>
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        if (Scope is null)
+            return;
+
+        if (NoteLogs.Read(Code, out var bad) is not { } request)
+        {
+            _problem = bad;
+            _load.Cancel();
+            return;
+        }
+        // connection= names the Docker connection, as it does for {{containers}}.
+        var docker = MarkdownLists.Docker(Code, Scope.Connections, out var noDocker);
+        if (docker is null)
+        {
+            _problem = noDocker;
+            _load.Cancel();
+            return;
+        }
+
+        _request = request;
+        _docker = docker;
+        Load(refresh: false);
+        StartTimer();
+    }
+
+    private void Load(bool refresh)
+    {
+        if (_request is not { } request || _docker is not { } docker)
+            return;
+        var endpoint = docker.Settings.Get("endpoint", DockerSocket.EnvironmentEndpoint);
+        var timeout = TimeSpan.FromSeconds(Math.Clamp(docker.Settings.GetInt("timeout", 10), 1, 120));
+        var dockerId = docker.Id;
+        var key = (dockerId, endpoint, request);
+
+        async Task<Snapshot> Fetch(CancellationToken ct)
+        {
+            try
+            {
+                var rows = await DockerContainers.SharedListAsync(endpoint, timeout, ct);
+                if (NoteLogs.Find(rows, request.Container) is not { } row)
+                    return new Snapshot([], null, null, $"No container or Compose service called “{request.Container}” on {docker.Name}.");
+                var lines = await NoteLogs.ReadAsync(endpoint, timeout, row.Id, request, DateTimeOffset.Now, ct);
+                return new Snapshot(lines, row.Name, NoteLogs.PageLink(request, dockerId, row.Name), null);
+            }
+            catch (DockerProxyDeniedException ex)
+            {
+                return new Snapshot([], null, null, ex.Message);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                return new Snapshot([], null, null, DockerContainers.Explain(ex, endpoint));
+            }
+        }
+
+        if (refresh)
+            _ = _load.Refresh(key, Fetch, snapshot => _snapshot = snapshot);
+        else
+            _ = _load.Load(key, Fetch, snapshot => _snapshot = snapshot);
+    }
+
+    /// <summary>
+    /// Once a minute while the note is open — and only when the browser says this box can be
+    /// seen. Started once; a note drawn again with the same shortcode keeps the timer it has.
+    /// </summary>
+    private void StartTimer()
+    {
+        if (_timer is not null || !RendererInfo.IsInteractive)
+            return;
+        var cancel = _timer = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var ticks = new PeriodicTimer(RefreshEvery);
+                while (await ticks.WaitForNextTickAsync(cancel.Token))
+                {
+                    if (_disposed)
+                        return;
+                    if (await VisibleAsync())
+                        await InvokeAsync(() => Load(refresh: true));
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+                // The circuit went between ticks.
+            }
+        });
+    }
+
+    /// <summary>Whether the box is on screen. Yes when the browser cannot be asked — better a read too many than a note that never updates.</summary>
+    private async Task<bool> VisibleAsync()
+    {
+        if (Services.GetService(typeof(IJSRuntime)) is not IJSRuntime js)
+            return true;
+        try
+        {
+            var visible = true;
+            await InvokeAsync(async () => visible = await js.InvokeAsync<bool>("labbyMarkdown.visible", _box));
+            return visible;
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException or JSDisconnectedException)
+        {
+            return true;
+        }
+    }
+
+    private static string Describe(NoteLogs.Request request)
+    {
+        var what = (request.Errors, request.Match.Length > 0) switch
+        {
+            (true, true) => $"errors mentioning “{request.Match}”",
+            (true, false) => "errors",
+            (false, true) => $"lines mentioning “{request.Match}”",
+            _ => "latest lines",
+        };
+        return $"{what} · last {ChangeWindow.Describe(request.Window)}";
+    }
+
+    private static string Sentence(string text) => text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _timer?.Cancel();
+        _timer?.Dispose();
+        _load.Dispose();
+    }
+}

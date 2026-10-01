@@ -72,11 +72,13 @@ public static class Shortcodes
         "sparkline", "uptimebar", "link", "today", "countdown", "ago", "power",
         "gauge",
         "who",
+        // Buttons, like {{button}}: they read the same in a sentence or on a line of their own.
+        "ssh", "run",
     ];
 
     /// <summary>A whole card or list, on a line of its own.</summary>
     public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "chart", "down", "alerts", "containers", "updates", "renewals", "changes", "incidents", "backups",
-        "table", "diagram"];
+        "table", "diagram", "logs"];
 
     /// <summary>
     /// The edges of a section: <c>{{if …}}</c> shown only while something is true, and

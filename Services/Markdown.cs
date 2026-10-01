@@ -20,6 +20,8 @@ public sealed partial class Markdown
         .UseAdvancedExtensions()
         .UseCallouts()
         .DisableHtml()
+        // Last, so it wraps the code renderers the extensions above have already set up.
+        .UseCopyButtons()
         .Build();
 
     // The same syntax with exact source positions, used only to find the code in a note so
