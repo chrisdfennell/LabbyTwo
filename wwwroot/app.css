@@ -1460,6 +1460,80 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .markdown-body img:not(.md-embed *) { max-width: 100%; }
 .markdown-body input[type="checkbox"]:not(.md-embed *) { margin-right: .4rem; }
 
+/* Copy buttons on code (Services/MarkdownCopy.cs, wwwroot/markdown.js). The label and the
+   icon are drawn here rather than written into the page, so selecting and copying a whole
+   note never picks up the word "Copy". A block's button sits in its corner; a code span's
+   is a small icon after it, shown on hover or focus — and always on a touch screen, which
+   has no hover to reveal it. */
+.md-code { position: relative; }
+.md-code-inline { white-space: nowrap; }
+.md-code-inline > code { white-space: normal; }
+.md-copy {
+    -webkit-user-select: none;
+    user-select: none;
+    border: 1px solid var(--edge);
+    background: var(--panel);
+    color: var(--muted);
+    border-radius: .3rem;
+    font-size: .72rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.md-copy:hover, .md-copy:focus-visible { color: var(--text); border-color: var(--accent); }
+.md-copy::before {
+    content: "";
+    display: inline-block;
+    width: .7em;
+    height: .8em;
+    border: 1.5px solid currentColor;
+    border-radius: .15em;
+    box-shadow: -.2em -.2em 0 -.05em var(--panel), -.2em -.2em 0 0 currentColor;
+    margin-left: .2em;
+    vertical-align: -.05em;
+}
+.md-copy[data-state="copied"] { color: var(--up); border-color: var(--up); }
+.md-copy[data-state="copied"]::before { content: "✓"; border: 0; box-shadow: none; width: auto; height: auto; margin-left: 0; }
+.md-code > .md-copy { position: absolute; top: .4rem; right: .4rem; padding: .3rem .45rem; opacity: .8; }
+.md-code > .md-copy::after { content: "Copy"; margin-left: .35em; }
+.md-code > .md-copy[data-state="copied"]::after { content: "Copied"; }
+.md-code > .md-copy[data-state="selected"]::after { content: "Selected"; }
+.md-code > pre { padding-right: 4.5rem !important; }
+.md-code-inline > .md-copy { padding: .12rem .22rem; margin-left: .15rem; opacity: 0; vertical-align: .05em; }
+.md-code-inline:hover > .md-copy,
+.md-code-inline > .md-copy:focus-visible,
+.md-code-inline > .md-copy[data-state] { opacity: 1; }
+@media (hover: none) {
+    .md-code-inline > .md-copy { opacity: .7; }
+    .md-code > .md-copy { opacity: 1; }
+}
+
+/* {{ssh: …}}, {{logs: …}} and {{run: …}}: commands, log lines and scheduled actions inside a
+   runbook. Everything inside the output boxes is text the server wrote as text. */
+.md-ssh, .md-run { display: inline; }
+.md-ssh-command { font-family: var(--bs-font-monospace, monospace); font-size: .85em; }
+.md-ssh .btn { white-space: normal; text-align: left; }
+.md-ssh-output, .md-logs-lines {
+    display: block;
+    margin: .4rem 0 .6rem;
+    padding: .5rem .6rem;
+    max-height: 22rem;
+    overflow: auto;
+    border: 1px solid var(--edge);
+    border-radius: .4rem;
+    background: var(--panel-2);
+    font-family: var(--bs-font-monospace, monospace);
+    font-size: .8rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.md-ssh-status { display: block; margin-top: .35rem; }
+.md-ssh-status.is-bad, .md-logs-line.is-stderr { color: var(--down); }
+.md-logs-line { display: block; }
+.md-logs-time { color: var(--muted); margin-right: .5em; }
+.md-logs .md-down-row { flex-wrap: wrap; }
+.md-run-meta { display: inline; margin: 0 .35rem; }
+
 /* Live values written into Markdown ({{status: NAS}} and friends). They sit inside a
    sentence, so they keep the sentence's size and only gain weight and tabular figures —
    a number that changes every sweep should not make the words after it shuffle about. */

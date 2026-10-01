@@ -1,0 +1,181 @@
+@implements IDisposable
+@inject ScheduledActions Scheduled
+@inject Offload Offload
+
+@* {{run: "Weekly Plex restart"}}: one scheduled action in a runbook — its name, when it next
+   runs, how its last run went, and a Run now button.
+
+   Everything shown comes from the scheduler's own memory (ScheduledActions.StatusAsync): the
+   schedule the minute tick reads, and each action's last run as it was recorded. The only
+   database read is an action's newest stored run, once, the first time anything asks after
+   LabbyTwo starts — and that goes through Offload like any other read. The line redraws when
+   a run is recorded and once a minute, for "in 3 h" to keep counting down.
+
+   Run now is the Scheduled page's own: ScheduledActions.RunNowAsync, through every guardrail
+   but maintenance, never on top of a run already going, written into the history and the
+   change feed. A note asks first, since a runbook may be open on a wall tablet. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (!_load.Ready)
+{
+    <span class="sc-value is-waiting" title="Loading…">…</span>
+}
+else if (_status is null)
+{
+    var missing = $"No scheduled action called “{_name}”. ({Code.Source})";
+    <span class="sc-problem" tabindex="0" role="note" title="@missing" aria-label="@missing">?</span>
+}
+else
+{
+    var status = _status;
+    var now = DateTimeOffset.Now;
+    var busy = _pressed || status.Running;
+    <span class="md-run">
+        @if (status.Last is { } last)
+        {
+            <span class="status-dot @last.Dot" aria-hidden="true"></span>
+        }
+        <strong>@status.Action.Name</strong>
+        <span class="tile-meta md-run-meta">@RunShortcode.Next(status, Scheduled.Zone, now) · @RunShortcode.Last(status.Last, Scheduled.Zone, now)</span>
+        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@busy"
+                title="Run it now, through the same checks as the schedule. Does not move the next run."
+                @onclick="() => _asking = true">
+            @(busy ? "Running…" : "Run now")
+        </button>
+        @if (_notice is { } notice)
+        {
+            <span class="tile-meta ms-2 @(notice.Ok ? "text-success" : "text-danger")">@notice.Text</span>
+        }
+    </span>
+
+    @if (_asking)
+    {
+        <ConfirmDialog Title="@($"Run “{status.Action.Name}” now?")"
+                       Message="It runs straight away, through the same checks as its schedule — never on top of a run that is still going. The next scheduled run stays where it is."
+                       ConfirmText="Run now"
+                       OnConfirm="RunNowAsync"
+                       OnCancel="() => _asking = false" />
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>Not needed to find a scheduled action, but every shortcode component is handed it; null while the page reads it.</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private BackgroundLoad _load = default!;
+    private string? _problem;
+    private string? _name;
+    private ScheduledActions.Status? _status;
+    private bool _asking;
+    private bool _pressed;
+    private (bool Ok, string Text)? _notice;
+    private CancellationTokenSource? _timer;
+    private bool _disposed;
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Scheduled.Recorded += OnRecorded;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        if (RunShortcode.Name(Code, out var bad) is not { } name)
+        {
+            _problem = $"{bad} ({Code.Source})";
+            return;
+        }
+        _name = name;
+        Load(refresh: false);
+        StartTimer();
+    }
+
+    private void Load(bool refresh)
+    {
+        if (_name is not { } name)
+            return;
+
+        Task<ScheduledActions.Status?> Fetch(CancellationToken ct) =>
+            Offload.Run(c => Scheduled.StatusAsync(name, DateTimeOffset.Now, c), ct);
+
+        void Apply(ScheduledActions.Status? status) => _status = status;
+
+        if (refresh)
+            _ = _load.Refresh(name, Fetch, Apply);
+        else
+            _ = _load.Load(name, Fetch, Apply);
+    }
+
+    private void OnRecorded(ScheduledRun run)
+    {
+        if (_disposed || _status is null || run.ActionId != _status.Action.Id)
+            return;
+        _ = InvokeAsync(() => Load(refresh: true));
+    }
+
+    /// <summary>Once a minute, so "in 3 min" counts down and a run that came due moves on. Memory only.</summary>
+    private void StartTimer()
+    {
+        if (_timer is not null || !RendererInfo.IsInteractive)
+            return;
+        var cancel = _timer = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var ticks = new PeriodicTimer(TimeSpan.FromMinutes(1));
+                while (await ticks.WaitForNextTickAsync(cancel.Token) && !_disposed)
+                    await InvokeAsync(() => Load(refresh: true));
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        });
+    }
+
+    /// <summary>
+    /// The Scheduled page's Run now. Not through Offload: it waits on a container or a provider
+    /// for up to a minute and a half, and should not hold a slot every chart shares.
+    /// </summary>
+    private async Task RunNowAsync()
+    {
+        _asking = false;
+        if (_status is not { } status)
+            return;
+        _pressed = true;
+        _notice = null;
+        StateHasChanged();
+        try
+        {
+            var run = await Task.Run(() => Scheduled.RunNowAsync(status.Action.Id));
+            _notice = (run.Ok, $"{RunShortcode.Outcome(run)}{(run.Message.Length > 0 ? $" — {run.Message}" : "")}");
+        }
+        catch (InvalidOperationException ex)
+        {
+            _notice = (false, ex.Message);
+        }
+        finally
+        {
+            _pressed = false;
+        }
+        Load(refresh: true);
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Scheduled.Recorded -= OnRecorded;
+        _timer?.Cancel();
+        _timer?.Dispose();
+        _load.Dispose();
+    }
+}

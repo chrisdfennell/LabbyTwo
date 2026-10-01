@@ -366,6 +366,10 @@
             "incidents" when blockAllowed => typeof(LiveIncidents),
             "backups" when blockAllowed => typeof(LiveBackups),
             "chart" when blockAllowed => typeof(LiveChart),
+            "logs" when blockAllowed => typeof(LiveLogs),
+            // Buttons, like {{button}}: the same in a sentence or on a line of their own.
+            "ssh" => typeof(LiveSsh),
+            "run" => typeof(LiveRun),
             _ => null,
         };
         if (own is not null)

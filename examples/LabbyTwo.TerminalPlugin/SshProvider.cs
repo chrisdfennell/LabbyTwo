@@ -14,7 +14,7 @@ namespace LabbyTwo.TerminalPlugin;
 /// hold a password would be a worse citizen than the rest of them: load, memory and
 /// uptime come off <c>/proc</c> in the same round trip that proves the login works.
 /// </summary>
-public sealed class SshProvider : IConnectionProvider
+public sealed class SshProvider : IConnectionProvider, ICommandRunner
 {
     public string Type => "ssh";
     public string DisplayName => "SSH host";
@@ -61,6 +61,9 @@ public sealed class SshProvider : IConnectionProvider
 
         new("port", "Port", FieldKind.Number, Default: "22") { Advanced = true },
         new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "15") { Advanced = true },
+
+        // {{ssh: …}} buttons in notes. Off until somebody ticks it for this machine.
+        RunbookCommands.AllowField,
     ];
 
     public IReadOnlyList<MetricSpec> Metrics =>
@@ -208,6 +211,68 @@ public sealed class SshProvider : IConnectionProvider
         }
 
         return readings;
+    }
+
+    /// <summary>
+    /// One command from a runbook's <c>{{ssh: …}}</c> button, over a login of its own — the
+    /// same client the probe and the terminal use, so the host key is pinned the same way and
+    /// a changed key refuses the same way. No terminal is asked for: a command that wants to
+    /// prompt gets end-of-input and stops, rather than sitting there until the timeout waiting
+    /// for a keyboard nobody is at. The checks around it (the opt-in, the timeout, the change
+    /// feed) are the host's, in RunbookCommandRunner; this only runs it.
+    /// </summary>
+    /// <remarks>
+    /// The output is held whole until the command ends, which SSH.NET's result does; the host
+    /// keeps only the last fifty lines of it. A command that prints gigabytes belongs in the
+    /// Terminal, not behind a button.
+    /// </remarks>
+    public async Task<CommandResult> RunCommandAsync(Connection connection, string command, TimeSpan timeout, CancellationToken ct)
+    {
+        var watch = new SshHost.HostKeyWatch();
+        try
+        {
+            using var client = SshHost.Client(connection, watch);
+            await client.ConnectAsync(ct);
+            using var run = client.CreateCommand(command);
+            run.CommandTimeout = timeout;
+            try
+            {
+                await run.ExecuteAsync(ct);
+            }
+            catch (Renci.SshNet.Common.SshOperationTimeoutException)
+            {
+                return CommandResult.Failed($"Stopped after {timeout.TotalSeconds:0} seconds without finishing.", Output(run));
+            }
+
+            return run.ExitStatus is { } code
+                ? new CommandResult(code, Output(run))
+                : CommandResult.Failed(run.ExitSignal is { Length: > 0 } signal
+                    ? $"Ended by signal {signal}."
+                    : "Ended without an exit code.", Output(run));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return CommandResult.Failed(watch.Rejected ? SshHost.KeyChanged(watch) : Explain(connection, ex));
+        }
+    }
+
+    private static string Output(Renci.SshNet.SshCommand run)
+    {
+        try
+        {
+            var output = run.Result ?? "";
+            var error = run.Error ?? "";
+            return error.Length == 0 ? output : output.Length == 0 ? error : output.TrimEnd('\n') + "\n" + error;
+        }
+        catch (Exception)
+        {
+            // Asked before the command produced anything worth reading.
+            return "";
+        }
     }
 
     private static double? Number(string? raw) =>

@@ -174,6 +174,8 @@ builder.Services.AddSingleton<Geocoder>();
 // silence that stops a reboot you asked for from paging you happen once rather than in
 // every card that grows a button.
 builder.Services.AddSingleton<ActionRunner>();
+// {{ssh: …}} buttons in notes: the login, the opt-in, one at a time, and the change feed.
+builder.Services.AddSingleton<RunbookCommandRunner>();
 
 // Gathers every Media and Downloads connection for the media tab. Registered by hand
 // rather than discovered: it answers a page's question, it is not itself an extension.
