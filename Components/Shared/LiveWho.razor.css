@@ -1,0 +1,23 @@
+/* One stream a line, even inside a sentence: a list of three things playing read as one
+   run-on line is no list at all. */
+.md-who-stream {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 .4rem;
+}
+
+.md-who-progress {
+    display: inline-block;
+    flex: 0 0 4rem;
+    height: .3rem;
+    border-radius: .15rem;
+    background: var(--bs-border-color, rgba(127, 127, 127, .3));
+    overflow: hidden;
+}
+
+.md-who-progress > span {
+    display: block;
+    height: 100%;
+    background: var(--bs-primary, currentColor);
+}

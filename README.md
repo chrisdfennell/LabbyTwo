@@ -1226,6 +1226,9 @@ their own; a few mark the edges of a section.
 | Shortcode | Shows |
 |---|---|
 | `{{status: NAS}}` | up / down / checking / paused, with the service tile's coloured dot |
+| `{{status: tab "Media"}}` | one line for a tab's connections — those its cards are bound to — "Media: 7 fine, 1 down (Plex), 1 checking", with a red dot while anything is down. `{{status: all}}` for the whole lab ("Everything: …"); add `full` (`{{status: tab Media full}}`, or `full=true`) to list each connection after it with its dot; `label="TV"` renames it. A connection actually called "all" or "tab Media" is still that connection |
+| `{{who: home}}` | who is in — "Chris and Sam", or "nobody" — from the [Who's home plugin](#plugins)'s last sweep; "presence isn't set up" without it |
+| `{{who: watching}}` | what Plex is playing, one stream a line: "Chris — The Office (Dinner Party) on Living room TV, 42%, transcoding", with a progress bar; or "nothing playing". From the sessions the Plex and Tautulli connections already read on every sweep — a stream both report is listed once, with Tautulli's word on transcoding |
 | `{{metric: NAS / cpu_percent}}` | the latest reading as the metric tile formats it, in the units chosen in Settings → Appearance; `decimals=2` and `unit=` override (below) |
 | `{{forecast: NAS}}` | when it fills up — "in about 6 weeks", "now", "not at the current rate": the soonest to fill, or `{{forecast: NAS / disk_percent}}` for one |
 | `{{uptime: NAS}}` | uptime over the last 30 days, `99.8%`; `days=7` for another window (1–90) |
@@ -1306,6 +1309,7 @@ on a wall all day never becomes a stream of calls to Docker Hub.
 | Shortcode | Does |
 |---|---|
 | `{{if …}}` … `{{else}}` … `{{end}}` | shows what is between them only while the condition holds; `{{else}}` is optional |
+| `{{if …}}` … `{{elif …}}` … `{{elif …}}` … `{{else}}` … `{{end}}` | the first part whose condition holds, else the `{{else}}` part; one `{{end}}` closes the lot |
 | `{{details: Full restart procedure}}` … `{{end}}` | folds what is between them under that title until clicked open; `open=true` starts it open |
 
 | Condition | Holds while |
@@ -1314,7 +1318,39 @@ on a wall all day never becomes a stream of calls to Docker Hub.
 | `up: NAS` | its last verdict is up |
 | `any down` | anything monitored is down |
 | `all up` | everything monitored is up, and nothing is still being checked |
-| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
+| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `=` (or `==`) `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
+| `metric: Office / temp_c between 18 and 24` | the reading is in the range, both ends included; a unit after either number is the unit of both, `between 64°F and 75°F` |
+| `down: tab "Media"` | anything monitored on that tab (its cards' connections) is down |
+| `up: tab "Media"` | everything monitored on that tab is up |
+| `alert: "Disk almost full"` | that alert rule is firing, on any connection — the rule's name, or for a rule you never named, the name the Alerts page shows for it |
+| `any alert` | any alert rule is firing |
+| `alert on: "QNAP NAS"` | any alert rule is firing on that connection |
+| `maintenance` | **Silence all** (maintenance) is holding every alert |
+| `blind` | LabbyTwo cannot see the lab — its own DNS, Docker or database is failing — so failures are being held |
+| `backup late` | a backup on the Backups page is overdue, or its source says there has never been one; `backup late: "Photos"` for one. One that cannot be checked is not "late" |
+| `incident open` | an incident is still going on |
+
+Join them with `and`, `or` and `not`, and brackets: `{{if metric: QNAP NAS / disk_percent > 85 and not maintenance}}`,
+`{{if (down: NAS or down: Plex) and not blind}}`. `not` binds tightest, then `and`, then
+`or`, so `a or b and c` means `a or (b and c)` — use brackets when you mean the other. The
+words are any case. A name runs to the next `and`, `or` or closing bracket, so a name with
+one of those in it goes in quotes when it is joined to something: `down: "Sonarr and Radarr" or maintenance`
+(on its own, `down: Sonarr and Radarr` still means the one connection, as it always did).
+Every test in a condition is checked, not only as many as decide it, so a misspelt name is
+a **?** whatever the rest says.
+
+```markdown
+{{if down: tab "Media"}}
+Something on the Media tab is down: {{status: tab "Media" full}}
+{{elif metric: QNAP NAS / disk_percent > 85 and not maintenance}}
+> [!WARNING]
+> The NAS is filling up — {{metric: QNAP NAS / disk_percent}}.
+{{elif any alert or backup late}}
+{{alerts}}
+{{else}}
+All quiet. Home: {{who: home}}. Playing: {{who: watching}}
+{{end}}
+```
 
 #### The rules
 
@@ -1328,7 +1364,7 @@ All of them visible when broken, rather than silently wrong:
 - **Writing a shortcode as text.** `\{{status: NAS}}` shows the braces; so does anything in
   a code span or code block, which is how this README's examples survive being pasted in.
 - **Where each goes.** A value in a card's place is fine; a card or list in a sentence is a
-  **?** saying it goes on a line of its own. `{{if}}`, `{{details}}`, `{{else}}` and `{{end}}`
+  **?** saying it goes on a line of its own. `{{if}}`, `{{elif}}`, `{{details}}`, `{{else}}` and `{{end}}`
   each take a whole line, and wrap whole paragraphs, lists and tables — the Markdown
   between them is rendered on its own, so a list cannot start outside a section and end
   inside it (one cut in two becomes two lists).

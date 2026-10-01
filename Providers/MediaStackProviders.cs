@@ -185,7 +185,9 @@ public sealed class TautulliProvider(IHttpClientFactory httpFactory) : IConnecti
                 ? "Nothing playing"
                 : $"{streams:0} stream(s), {metrics["transcode_count"]:0} transcoding";
 
-            return ProbeResult.Up(stopwatch.Elapsed, message, metrics);
+            // The same answer lists the sessions themselves; kept for {{who: watching}}.
+            var details = new Dictionary<string, string> { [NowPlaying.DetailKey] = NowPlaying.Encode(ReadSessions(data)) };
+            return ProbeResult.Up(stopwatch.Elapsed, message, metrics, details);
         }
         catch (Exception ex)
         {
@@ -193,6 +195,49 @@ public sealed class TautulliProvider(IHttpClientFactory httpFactory) : IConnecti
             return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("url")));
         }
     }
+
+    /// <summary>
+    /// The streams in <c>get_activity</c>'s data: who (the friendly name Tautulli shows, else
+    /// the Plex user), what (the series and episode, or the film and year), on which player,
+    /// how far, and Tautulli's own transcode decision — "transcode", or "direct play" and
+    /// "copy" (direct stream), which are not.
+    /// </summary>
+    public static IReadOnlyList<NowPlayingStream> ReadSessions(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("sessions", out var sessions)
+            || sessions.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var streams = new List<NowPlayingStream>();
+        foreach (var session in sessions.EnumerateArray())
+        {
+            if (session.ValueKind != JsonValueKind.Object)
+                continue;
+            var series = Text(session, "grandparent_title");
+            var title = Text(session, "title");
+            var decision = Text(session, "transcode_decision");
+            streams.Add(new NowPlayingStream(
+                First(Text(session, "friendly_name"), Text(session, "user")),
+                series.Length > 0 ? series : First(title, Text(session, "full_title")),
+                series.Length > 0 ? title : Text(session, "year"),
+                First(Text(session, "player"), Text(session, "device"), Text(session, "platform")),
+                AsNumber(session, "progress_percent") ?? 0,
+                decision.Length == 0 ? null : string.Equals(decision, "transcode", StringComparison.OrdinalIgnoreCase)));
+        }
+        return streams;
+    }
+
+    private static string Text(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) ? value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString()?.Trim() ?? "",
+            JsonValueKind.Number => value.GetRawText(),
+            _ => "",
+        } : "";
+
+    private static string First(params string[] candidates) => candidates.FirstOrDefault(c => c.Length > 0) ?? "";
 
     /// <summary>Tautulli returns its numbers as JSON strings, so parse either shape.</summary>
     private static double? AsNumber(JsonElement element, string name)
