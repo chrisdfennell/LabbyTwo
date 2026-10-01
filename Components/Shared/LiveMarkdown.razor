@@ -8,6 +8,7 @@
 @inject LatestReadings Latest
 @inject Registry Registry
 @inject ILogger<LiveMarkdown> Log
+@inject IServiceProvider Services
 
 @* Markdown with live values in it. Drop-in for the old (MarkupString)Markdown.ToHtml(…):
    the caller keeps its own markdown-body wrapper, and a note with no shortcodes renders
@@ -45,13 +46,54 @@
     private RunbookFacts _facts = default!;
     private Dictionary<LiveIf, ConditionResult> _results = [];
 
+    // What conditions beyond up and down ask about: alerts, maintenance, backups, incidents.
+    // Asked for rather than injected, so a page drawn without those parts of the app (a test
+    // host, a future embed) still draws, with those tests simply false.
+    private MetricAlertService? _evaluator;
+    private AlertRuleStore? _ruleStore;
+    private AppSettingsStore? _settingsStore;
+    private BackupProof? _backups;
+    private IncidentTracker? _incidents;
+    private IReadOnlyList<AlertRule>? _rules;
+    private SettingsBag? _settings;
+
     protected override void OnInitialized()
     {
         _facts = new RunbookFacts(Registry, Health, Latest);
+        _evaluator = Services.GetService(typeof(MetricAlertService)) as MetricAlertService;
+        _ruleStore = Services.GetService(typeof(AlertRuleStore)) as AlertRuleStore;
+        _settingsStore = Services.GetService(typeof(AppSettingsStore)) as AppSettingsStore;
+        _backups = Services.GetService(typeof(BackupProof)) as BackupProof;
+        _incidents = Services.GetService(typeof(IncidentTracker)) as IncidentTracker;
         Config.Changed += OnConfigChanged;
         Health.Updated += OnLabChanged;
         Latest.Changed += OnReadingsChanged;
+        if (_evaluator is not null)
+            _evaluator.Updated += OnLabChanged;
+        if (_backups is not null)
+            _backups.Judged += OnLabChanged;
+        if (_incidents is not null)
+            _incidents.OpenChanged += OnLabChanged;
+        if (_ruleStore is not null)
+            _ruleStore.Changed += OnConfigChanged;
+        if (_settingsStore is not null)
+            _settingsStore.Changed += OnConfigChanged;
     }
+
+    /// <summary>
+    /// What the conditions are decided against, from memory only: the names the page read,
+    /// and the state the app keeps — never a query, since this runs on every sweep.
+    /// </summary>
+    private RunbookContext Context(ShortcodeScope scope) => new(
+        scope.Connections,
+        scope.Tabs,
+        scope.Widgets,
+        _rules,
+        _evaluator?.Firing,
+        _settings is not null && Maintenance.From(_settings, DateTimeOffset.Now).On,
+        Health.IsBlind,
+        _backups?.Latest,
+        _incidents?.Open);
 
     protected override void OnParametersSet()
     {
@@ -86,10 +128,11 @@
             return false;
 
         var results = new Dictionary<LiveIf, ConditionResult>();
+        var context = Context(_scope);
         foreach (var section in _page.Sections())
         {
-            if (section.Section.Condition is { } condition)
-                results[section] = _facts.Evaluate(condition, _scope.Connections);
+            if (section.Section.Expression is { } condition)
+                results[section] = _facts.Evaluate(condition, context);
         }
         var changed = results.Count != _results.Count
             || results.Any(r => !_results.TryGetValue(r.Key, out var before) || before != r.Value);
@@ -130,12 +173,21 @@
         _ = Task.Run(async () =>
         {
             ShortcodeScope? scope = null;
+            IReadOnlyList<AlertRule>? rules = null;
+            SettingsBag? settings = null;
             try
             {
                 scope = new ShortcodeScope(
                     await Config.ConnectionsAsync(),
                     await Config.WidgetsAsync(),
                     await Config.TabsAsync());
+                // Only a page with sections asks about alerts or maintenance. Both stores
+                // are cached, like the three above.
+                if (_page.HasSections)
+                {
+                    rules = _ruleStore is null ? null : await _ruleStore.AllAsync();
+                    settings = _settingsStore is null ? null : await _settingsStore.AllAsync();
+                }
             }
             catch (Exception ex)
             {
@@ -154,6 +206,8 @@
                     if (scope is not null)
                     {
                         _scope = scope;
+                        _rules = rules ?? _rules;
+                        _settings = settings ?? _settings;
                         Decide();
                     }
                     if (_stale)
@@ -366,6 +420,11 @@
             "incidents" when blockAllowed => typeof(LiveIncidents),
             "backups" when blockAllowed => typeof(LiveBackups),
             "chart" when blockAllowed => typeof(LiveChart),
+            "gauge" => typeof(LiveGauge),
+            "table" when blockAllowed => typeof(LiveTable),
+            "diagram" when blockAllowed => typeof(LiveDiagram),
+            "who" => typeof(LiveWho),
+            "status" when LabStatus.SummaryTarget(code, _scope?.Connections ?? [], out _) is not null => typeof(LiveStatusSummary),
             "logs" when blockAllowed => typeof(LiveLogs),
             // Buttons, like {{button}}: the same in a sentence or on a line of their own.
             "ssh" => typeof(LiveSsh),
@@ -378,6 +437,16 @@
             builder.SetKey(index);
             builder.AddComponentParameter(101, "Code", code);
             builder.AddComponentParameter(102, "Scope", _scope);
+            builder.CloseComponent();
+        }
+        else if (code.Kind == NoteLinks.Kind)
+        {
+            // [[Note title]]: told whose link it is, so two notes of the same title resolve
+            // to the one on this page and a missing one is offered here.
+            builder.OpenComponent<LiveNoteLink>(110);
+            builder.SetKey(index);
+            builder.AddComponentParameter(111, nameof(LiveNoteLink.Code), code);
+            builder.AddComponentParameter(112, nameof(LiveNoteLink.OwnerId), OwnerId);
             builder.CloseComponent();
         }
         else if (code.Kind == "button")
@@ -440,5 +509,15 @@
         Config.Changed -= OnConfigChanged;
         Health.Updated -= OnLabChanged;
         Latest.Changed -= OnReadingsChanged;
+        if (_evaluator is not null)
+            _evaluator.Updated -= OnLabChanged;
+        if (_backups is not null)
+            _backups.Judged -= OnLabChanged;
+        if (_incidents is not null)
+            _incidents.OpenChanged -= OnLabChanged;
+        if (_ruleStore is not null)
+            _ruleStore.Changed -= OnConfigChanged;
+        if (_settingsStore is not null)
+            _settingsStore.Changed -= OnConfigChanged;
     }
 }

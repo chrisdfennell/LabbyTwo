@@ -2679,3 +2679,92 @@ html.wall-cursor-hidden * { cursor: none !important; }
 }
 .phone-hint-text { flex: 1 1 14rem; }
 .phone-hint .btn { min-height: 40px; }
+
+/* ---------- {{gauge}}, {{table}} and diagrams in Markdown ----------
+
+   All three are drawn with the theme's own tokens, so dark, light and every palette come
+   for free. A level is never only a colour: the gauge's value text and tooltip say
+   "warning" or "critical", a table cell has the word for screen readers, and a diagram box
+   has a glyph as well as its bar — the same three ways the dependency map says it. */
+
+/* A gauge the size of a word: a ring or a short bar, then the reading. The fill follows the
+   gauge card's colours, and a gauge with no lines to judge by stays the accent colour. */
+.md-gauge {
+    display: inline-flex;
+    align-items: center;
+    gap: .3em;
+    vertical-align: -.2em;
+    white-space: nowrap;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    --gauge-fill: var(--accent);
+}
+.md-gauge.is-fine { --gauge-fill: var(--up); }
+.md-gauge.is-warm { --gauge-fill: var(--warn); }
+.md-gauge.is-critical { --gauge-fill: var(--down); }
+.md-gauge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: .25em; }
+.md-gauge-label { font-weight: 400; color: var(--muted); }
+
+.md-gauge-ring { width: 1.2em; height: 1.2em; flex: none; }
+.md-gauge.is-medium .md-gauge-ring { width: 2.4em; height: 2.4em; }
+.md-gauge-track { fill: none; stroke: var(--edge); stroke-width: 5; }
+.md-gauge-arc { fill: none; stroke: var(--gauge-fill); stroke-width: 5; stroke-linecap: round; }
+.md-gauge.is-medium .md-gauge-text { font-size: 1.15em; }
+
+.md-gauge-bar {
+    position: relative;
+    display: inline-block;
+    width: 3.5em;
+    height: .5em;
+    border-radius: 999px;
+    background: var(--edge);
+    overflow: hidden;
+    flex: none;
+}
+.md-gauge.is-medium .md-gauge-bar { width: 7em; height: .75em; }
+.md-gauge-fill { position: absolute; inset: 0 auto 0 0; background: var(--gauge-fill); border-radius: inherit; }
+.md-gauge-mark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); opacity: .55; }
+
+/* {{table}}: a Markdown table, live. The numbers line up, and a cell past a line is tinted
+   rather than filled, so a table of warnings is still readable. */
+.md-table-wrap { overflow-x: auto; margin: 0 0 .75rem; }
+.markdown-body .md-table-wrap table { margin: 0; }
+.md-live-table caption { caption-side: top; color: var(--muted); font-size: .85rem; padding: 0 0 .3rem; }
+.md-live-table td.md-cell { font-variant-numeric: tabular-nums; white-space: nowrap; vertical-align: top; }
+.md-live-table th[scope="row"] { font-weight: 600; background: none; }
+.md-cell-value { font-weight: 600; }
+.md-live-table td.md-cell.is-warm { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.md-live-table td.md-cell.is-warm .md-cell-value { color: var(--warn); }
+.md-live-table td.md-cell.is-critical { background: var(--down-soft); }
+.md-live-table td.md-cell.is-critical .md-cell-value { color: var(--down); }
+.md-cell-spark { color: var(--accent); line-height: 1; margin-top: .15rem; }
+.md-cell-spark .md-spark { width: 4.5em; }
+
+/* A diagram: boxes in the panel colour, a status bar and glyph on the ones that are
+   connections, lines in the muted ink. Plain boxes have no bar, so "Internet" never looks
+   like something LabbyTwo is watching. */
+.md-diagram { margin: 0 0 .75rem; }
+.md-diagram-title { font-weight: 600; margin-bottom: .4rem; }
+.md-diagram-scroll { overflow: auto; }
+.md-diagram-svg { display: block; height: auto; }
+.md-diagram-edge { fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: .75; }
+.md-diagram-edge.is-dotted { stroke-dasharray: 4 4; }
+.md-diagram-edge.is-thick { stroke-width: 3; }
+.md-diagram-arrow path { fill: var(--muted); }
+.md-diagram-edge-label { fill: var(--muted); font-size: 11px; paint-order: stroke; stroke: var(--panel-2); stroke-width: 4px; }
+.md-diagram-box { fill: var(--panel); stroke: var(--edge); stroke-width: 1; }
+.md-diagram-bar { fill: var(--muted); }
+.md-diagram-label { fill: var(--text); font-size: 12.5px; font-weight: 600; }
+.md-diagram-node.is-neutral .md-diagram-label { font-weight: 500; }
+a.md-diagram-node { cursor: pointer; }
+a.md-diagram-node:hover .md-diagram-box,
+a.md-diagram-node:focus-visible .md-diagram-box { stroke: var(--accent); stroke-width: 2; }
+a.md-diagram-node:focus { outline: none; }
+.md-diagram-node.is-up .md-diagram-bar { fill: var(--up); }
+.md-diagram-node.is-down .md-diagram-bar { fill: var(--down); }
+.md-diagram-node.is-down .md-diagram-box { fill: color-mix(in srgb, var(--down) 12%, var(--panel)); stroke: var(--down); stroke-width: 1.5; }
+.md-diagram-node.is-down .md-diagram-label { fill: var(--down); }
+.md-diagram-node.is-checking .md-diagram-bar { fill: var(--warn); }
+.md-diagram-node.is-maintenance .md-diagram-bar { fill: var(--accent); }
+.md-diagram-node.is-maintenance .md-diagram-box { stroke: var(--accent-line); stroke-dasharray: 5 3; }
+.md-diagram-node.is-paused { opacity: .6; }

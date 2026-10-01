@@ -1,6 +1,7 @@
 @inject ConfigStore Config
 @inject Registry Registry
 @inject ActionRunner Runner
+@inject NoteDirectory NoteDirectory
 
 @* Sits under a Markdown box and points at lines that will not render the way they look.
    Shown wherever Markdown is edited, so the notes page and a Markdown widget behave the
@@ -61,6 +62,7 @@
             Doing things: <code>{{ssh: NAS / docker restart plex}}</code>, <code>{{logs: plex last=15m errors}}</code>, <code>{{run: "Weekly Plex restart"}}</code>.
             History: <code>{{chart: NAS / cpu_percent last=7d}}</code>, <code>{{changes: last=24h}}</code>, <code>{{incidents: open}}</code>, <code>{{backups: late}}</code>.
             Power: <code>{{power}}</code>, <code>{{power: "NAS plug" period=today}}</code>.
+            Conditions: <code>{{if down: NAS and not maintenance}}</code> … <code>{{elif any alert}}</code> … <code>{{end}}</code>. The lab: <code>{{status: tab "Media"}}</code>, <code>{{who: home}}</code>, <code>{{who: watching}}</code>.
         </span>
         <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAsync" aria-expanded="@(_open ? "true" : "false")">
             @(_open ? "Close" : "Insert live value…")
@@ -86,6 +88,9 @@
                             <option value="uptime">Uptime, last 30 days</option>
                             <option value="since">Time since it changed</option>
                             <option value="gauge">A gauge card</option>
+                            <option value="gauge-inline">A small gauge in the sentence</option>
+                            <option value="table">A live table of readings</option>
+                            <option value="diagram">A diagram of how things connect</option>
                             <option value="widget">An existing card</option>
                             <option value="down">What’s down right now</option>
                             <option value="if-down">A section shown while it’s down</option>
@@ -107,6 +112,7 @@
                             <option value="power">What electricity costs</option>
                             <option value="details">A fold that opens (details)</option>
                             <option value="callout">A callout box</option>
+                            <option value="note-link">A link to another note</option>
                         </select>
                     </div>
 
@@ -254,6 +260,27 @@
                             </select>
                         </div>
                     }
+                    else if (_kind == "note-link")
+                    {
+                        <div class="col-sm-4">
+                            <label class="form-label small mb-1" for="@Id("note")">Note</label>
+                            <select id="@Id("note")" class="form-select form-select-sm" @bind="_noteId">
+                                <option value="">@(_noteGraph is null ? "Loading…" : _noteGraph.Notes.Count == 0 ? "There are no notes yet" : "Choose…")</option>
+                                @foreach (var note in (_noteGraph?.Notes ?? []).Where(n => NoteLinks.CanLink(n.Title)))
+                                {
+                                    <option value="@note.Id">@note.Shown — @note.Place.Describe()</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small mb-1" for="@Id("note-heading")">Heading</label>
+                            <input id="@Id("note-heading")" class="form-control form-control-sm" placeholder="optional" @bind="_noteHeading" />
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small mb-1" for="@Id("note-text")">Words</label>
+                            <input id="@Id("note-text")" class="form-control form-control-sm" placeholder="its title" @bind="_noteText" />
+                        </div>
+                    }
                     else if (_kind == "widget")
                     {
                         <div class="col-sm-8">
@@ -317,7 +344,7 @@
                                 </select>
                             </div>
                         }
-                        @if (_kind is "metric" or "gauge" or "forecast" or "sparkline" or "chart")
+                        @if (_kind is "metric" or "gauge" or "gauge-inline" or "table" or "forecast" or "sparkline" or "chart")
                         {
                             <div class="col-sm-4">
                                 <label class="form-label small mb-1" for="@Id("metric")">Metric</label>
@@ -371,6 +398,10 @@
     private string _powerPeriod = "month";
     private string _powerShow = "cost";
     private string _backupShow = "";
+    private NoteGraph? _noteGraph;
+    private string _noteId = "";
+    private string _noteHeading = "";
+    private string _noteText = "";
 
     // Recomputed when the text changes rather than in the markup, so a long note is not
     // re-scanned on every unrelated render of the form around it.
@@ -415,6 +446,9 @@
             : null,
         "details" => Details(_title.Trim().Length > 0 ? _title.Trim() : "More"),
         "callout" => $"> [!{_callout.ToUpperInvariant()}]\n> Write it here.",
+        // A starting sketch to edit: the connection, if one is chosen, behind a router.
+        "diagram" => $"```diagram\nInternet -> Router -> \"{(_connectionName.Length > 0 ? _connectionName.Replace("\"", "") : "NAS")}\"\n```",
+        "note-link" => NoteLinkPreview(),
         _ when _connectionName.Length == 0 => null,
         "sparkline" => _metric.Trim().Length > 0
             ? Shortcodes.Write("sparkline", [_connectionName, $"{_metric.Trim()} {_window}"])
@@ -432,8 +466,15 @@
         "gauge" => _metric.Trim().Length > 0
             ? Shortcodes.Write("card", ["gauge"], [new("connection", _connectionName), new("metric", _metric.Trim())])
             : null,
+        "gauge-inline" => _metric.Trim().Length > 0 ? Shortcodes.Write("gauge", [_connectionName, _metric.Trim()]) : null,
+        // One row to start from; more connections go before the slash, more columns after it.
+        "table" => $"{{{{table: {TableName(_connectionName)} / status{(_metric.Trim().Length > 0 ? ", " + TableName(_metric.Trim()) : "")}}}}}",
         _ => Shortcodes.Write(_kind, [_connectionName]),
     };
+
+    /// <summary>A name in a {{table}}'s list, quoted when it has a comma in it, since commas separate the rows.</summary>
+    private static string TableName(string name) =>
+        name.Contains(',') ? "\"" + name.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"" : Shortcodes.QuoteTarget(name);
 
     /// <summary>
     /// The skeleton of a section for when one connection is down: a heading to fill in, a
@@ -454,6 +495,18 @@
         Shortcodes.Write("details", [title]) + "\n1. First step…\n2. Second step…\n{{end}}";
 
     /// <summary>
+    /// <c>[[Title]]</c> for the chosen note, with the page in front only when another note
+    /// has the same title — so the link reads as plainly as it can and still finds this one.
+    /// </summary>
+    private string? NoteLinkPreview()
+    {
+        if (_noteGraph?.Note(_noteId) is not { } note)
+            return null;
+        var shared = _noteGraph.Notes.Count(n => string.Equals(NoteLinks.Tidy(n.Title), NoteLinks.Tidy(note.Title), StringComparison.OrdinalIgnoreCase)) > 1;
+        return NoteLinks.Write(note.Title, _noteHeading.Trim(), _noteText.Trim(), shared ? note.Place.Section ?? note.Place.Page : null);
+    }
+
+    /// <summary>
     /// The lists are read when the helper is opened, not when the editor is, so a form with
     /// three Markdown fields that nobody inserts into costs nothing. Awaited, never waited on.
     /// </summary>
@@ -468,6 +521,8 @@
             _widgets = [.. widgets.Select(w => w.Title.Trim()).Where(t => t.Length > 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)];
         }
+        if (_open && _noteGraph is null)
+            _noteGraph = await NoteDirectory.GetAsync();
     }
 
     /// <summary>
