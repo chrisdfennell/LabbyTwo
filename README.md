@@ -1226,6 +1226,9 @@ their own; a few mark the edges of a section.
 | Shortcode | Shows |
 |---|---|
 | `{{status: NAS}}` | up / down / checking / paused, with the service tile's coloured dot |
+| `{{status: tab "Media"}}` | one line for a tab's connections — those its cards are bound to — "Media: 7 fine, 1 down (Plex), 1 checking", with a red dot while anything is down. `{{status: all}}` for the whole lab ("Everything: …"); add `full` (`{{status: tab Media full}}`, or `full=true`) to list each connection after it with its dot; `label="TV"` renames it. A connection actually called "all" or "tab Media" is still that connection |
+| `{{who: home}}` | who is in — "Chris and Sam", or "nobody" — from the [Who's home plugin](#plugins)'s last sweep; "presence isn't set up" without it |
+| `{{who: watching}}` | what Plex is playing, one stream a line: "Chris — The Office (Dinner Party) on Living room TV, 42%, transcoding", with a progress bar; or "nothing playing". From the sessions the Plex and Tautulli connections already read on every sweep — a stream both report is listed once, with Tautulli's word on transcoding |
 | `{{metric: NAS / cpu_percent}}` | the latest reading as the metric tile formats it, in the units chosen in Settings → Appearance; `decimals=2` and `unit=` override (below) |
 | `{{forecast: NAS}}` | when it fills up — "in about 6 weeks", "now", "not at the current rate": the soonest to fill, or `{{forecast: NAS / disk_percent}}` for one |
 | `{{uptime: NAS}}` | uptime over the last 30 days, `99.8%`; `days=7` for another window (1–90) |
@@ -1306,6 +1309,7 @@ on a wall all day never becomes a stream of calls to Docker Hub.
 | Shortcode | Does |
 |---|---|
 | `{{if …}}` … `{{else}}` … `{{end}}` | shows what is between them only while the condition holds; `{{else}}` is optional |
+| `{{if …}}` … `{{elif …}}` … `{{elif …}}` … `{{else}}` … `{{end}}` | the first part whose condition holds, else the `{{else}}` part; one `{{end}}` closes the lot |
 | `{{details: Full restart procedure}}` … `{{end}}` | folds what is between them under that title until clicked open; `open=true` starts it open |
 
 | Condition | Holds while |
@@ -1314,7 +1318,149 @@ on a wall all day never becomes a stream of calls to Docker Hub.
 | `up: NAS` | its last verdict is up |
 | `any down` | anything monitored is down |
 | `all up` | everything monitored is up, and nothing is still being checked |
-| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `==` `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
+| `metric: NAS / disk_percent > 90` | the reading passes; `>` `>=` `<` `<=` `=` (or `==`) `!=`. A unit after the number may be the metric's own or, for a temperature, wind speed, pressure or rain, any unit of the same kind — `> 122°F` and `> 50°C` are the same condition (below) |
+| `metric: Office / temp_c between 18 and 24` | the reading is in the range, both ends included; a unit after either number is the unit of both, `between 64°F and 75°F` |
+| `down: tab "Media"` | anything monitored on that tab (its cards' connections) is down |
+| `up: tab "Media"` | everything monitored on that tab is up |
+| `alert: "Disk almost full"` | that alert rule is firing, on any connection — the rule's name, or for a rule you never named, the name the Alerts page shows for it |
+| `any alert` | any alert rule is firing |
+| `alert on: "QNAP NAS"` | any alert rule is firing on that connection |
+| `maintenance` | **Silence all** (maintenance) is holding every alert |
+| `blind` | LabbyTwo cannot see the lab — its own DNS, Docker or database is failing — so failures are being held |
+| `backup late` | a backup on the Backups page is overdue, or its source says there has never been one; `backup late: "Photos"` for one. One that cannot be checked is not "late" |
+| `incident open` | an incident is still going on |
+
+Join them with `and`, `or` and `not`, and brackets: `{{if metric: QNAP NAS / disk_percent > 85 and not maintenance}}`,
+`{{if (down: NAS or down: Plex) and not blind}}`. `not` binds tightest, then `and`, then
+`or`, so `a or b and c` means `a or (b and c)` — use brackets when you mean the other. The
+words are any case. A name runs to the next `and`, `or` or closing bracket, so a name with
+one of those in it goes in quotes when it is joined to something: `down: "Sonarr and Radarr" or maintenance`
+(on its own, `down: Sonarr and Radarr` still means the one connection, as it always did).
+Every test in a condition is checked, not only as many as decide it, so a misspelt name is
+a **?** whatever the rest says.
+
+```markdown
+{{if down: tab "Media"}}
+Something on the Media tab is down: {{status: tab "Media" full}}
+{{elif metric: QNAP NAS / disk_percent > 85 and not maintenance}}
+> [!WARNING]
+> The NAS is filling up — {{metric: QNAP NAS / disk_percent}}.
+{{elif any alert or backup late}}
+{{alerts}}
+{{else}}
+All quiet. Home: {{who: home}}. Playing: {{who: watching}}
+{{end}}
+```
+
+#### Tables, gauges and diagrams
+
+**`{{table}}`** — on a line of its own. Connections down the side, readings across the top,
+every cell live:
+
+```markdown
+{{table: "QNAP NAS", Pi, PC / status, cpu_percent, ram_percent, temp_c}}
+{{table: "QNAP NAS", Pi / disk_percent, temp_c sparkline=24h title="Storage and heat"}}
+{{table: tab "Media" / status, uptime}}
+```
+
+- Before the slash, the rows: connections by name or id, separated by commas (a name with a
+  comma in it goes in quotes, `"Home, office"`). Or `tab "Media"` (also `tab="Media"`) for
+  every connection a card on that tab is bound to, in the cards' order — plus a Containers
+  or Git tab's own connection. Up to 40 rows.
+- After it, the columns: metrics by key or label (`temp_c`, `Temperature`), headed by the
+  metric's label. Three words are not metrics: `status` (as `{{status}}`), `uptime` (the
+  30-day availability, as `{{uptime}}` — write `uptime_days` for the metric of that name) and
+  `since` (as `{{since}}`). Up to 12.
+- Readings are the metric tile's, in the units chosen in **Settings → Appearance**. A
+  connection that does not report a column shows **—**, not a **?**: a Pi with no
+  temperature sensor is not a mistake in the note.
+- Each reading is coloured amber or red against the connection's **alert rules** for that
+  metric — its own rules if it has any, otherwise rules for every connection. One rule is the
+  red line; two or more above (or below) make the nearest the amber line and the furthest
+  the red one, so "disk above 85" and "disk above 95" are exactly a warning and an emergency.
+  A reading is past a rule's line the way the rule counts it — strictly above or below. With
+  no rule, a percentage that fills up (disk and volume use) is amber at 80% and red at 95%,
+  as on the gauge card; anything else is left uncoloured. A disabled or "unusual for the
+  time" rule has no fixed line and is ignored. The tooltip says the level and where the
+  lines came from, and a screen reader hears "warning" or "critical" after the number.
+- `sparkline=24h` draws a trend line under each reading (`1h` to `30d`; `sparkline=true` is
+  24h). `title="…"` is the table's caption.
+
+**`{{gauge}}`** — inside a sentence or a table cell, the size of a word:
+
+```markdown
+Storage is {{gauge: "QNAP NAS" / disk_percent}} full.
+| Pi | {{gauge: Pi / temp_c max=90 warn=60 crit=75 style=bar size=medium label="CPU heat"}} |
+```
+
+| Option | Does |
+|---|---|
+| `style=ring` / `style=bar` | a ring (the default) or a short bar with the warning and critical lines marked on it |
+| `size=small` / `size=medium` | the size of the text around it (the default) or twice that |
+| `min=0 max=100` | the ends of the scale. A percentage is 0–100; anything else is 0–100 too, unless a line is past 100, when the scale reaches a quarter beyond it |
+| `warn=80 crit=95` | the amber and red lines, instead of the alert rules'. Written the other way round (`warn=50 crit=20`) they mean lower is worse, for a battery |
+| `label="NAS disk"` | words after the reading, and what a screen reader calls it |
+
+Every number is in the metric's **stored** unit — `°C` for a temperature, like an alert rule
+and the gauge card — so the gauge's proportions and colour do not change when somebody
+reads the dashboard in Fahrenheit; the reading and its tooltip are in the reader's units.
+The gauge is a `role="meter"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and a
+value text that says the level in words, and it can be tabbed to for its tooltip.
+
+**Diagrams** — a fenced block whose language is `diagram`:
+
+````markdown
+```diagram
+Internet -> Router -> "QNAP NAS" -> Plex
+"QNAP NAS" -> Sonarr, Radarr
+Router -> "Domain controller"
+Router ->|over VPN| "Home, office"
+```
+````
+
+- One line per chain: names joined by `->` (`-->` and `=>` work too). Commas fan out and in
+  — `NAS -> Sonarr, Radarr`, `Sonarr, Radarr -> Downloads`. `->|label|` writes words on that
+  arrow. A name on its own on a line is a box with no arrows. `#` starts a comment.
+- Quotes are optional, needed only round a name with a comma, an arrow or a quote in it.
+  Names compare ignoring case, so `Router` and `router` are one box.
+- `direction TD` as the first line draws it top-down; left to right is the default.
+- A box whose name is a connection's name (any case) or id is coloured by its live status
+  — green up, red down, amber checking, a dashed accent outline while the connection is
+  silenced for maintenance, faded when it is paused — shows a glyph as well (▲ ▼ … ◆ ■), and
+  is a link to that connection. Anything else (`Internet`) is a plain box. Colours change as
+  sweeps land, without the note being touched.
+- Up to 80 boxes and 200 arrows. Laid out in layers on the server — no script, nothing
+  fetched from anywhere. An arrow that skips a layer is drawn straight across it; an arrow
+  going back round a loop is drawn as a curve under the boxes.
+
+A `` ```mermaid `` block is drawn the same way when it is a **flowchart** — its first line
+`graph` or `flowchart` and a direction (`TD`, `TB`, `BT`, `LR`, `RL`; top-down if left off).
+This much of Mermaid is understood:
+
+| Mermaid | Read as |
+|---|---|
+| `A`, `A[Label]`, `A(Label)`, `A((Label))`, `A{Label}`, `A([Label])`, `A[[Label]]`, `A[(Label)]`, `A>Label]`, with `"quoted text"` inside | a box; the label (or the id, with none) is what is drawn and matched to a connection. The shape is not drawn — every box is a box |
+| `A --> B`, `A ---> B` | an arrow |
+| `A --- B` | a line with no arrowhead |
+| `A -.-> B`, `A -.- B` | a dotted arrow / line |
+| `A ==> B`, `A === B` | a thick arrow / line |
+| `A -->\|text\| B`, `A -- text --> B`, `A -. text .-> B`, `A == text ==> B` | a labelled arrow |
+| `A --> B --> C`, `A & B --> C & D` | chains and groups |
+| `;` | ends a statement, like a new line |
+| `%% comment`, `subgraph … end`, `classDef`, `class`, `style`, `linkStyle`, `click`, `direction` | read past; a subgraph's own frame is not drawn |
+
+Anything else — `sequenceDiagram`, `pie`, `gantt` — leaves the block as the code it always
+was, so pasting one in loses nothing. A diagram that cannot be read is a **?** saying which
+line and why; the rest of the note draws as usual.
+
+**`{{diagram: auto}}`** — on a line of its own: the dependency map, drawn from
+each connection's **Sits behind** (set in its editor on the Connections page), the same
+drawing as the map page and the dependency map card.
+`root="NAS"` draws only that connection and what sits behind it, `standalone=true` adds the
+connections that sit behind nothing, and `title="…"` names it.
+
+Labels in all three are text, never markup: a connection or box called `<script>` is shown
+as those characters.
 
 #### The rules
 
@@ -1328,7 +1474,7 @@ All of them visible when broken, rather than silently wrong:
 - **Writing a shortcode as text.** `\{{status: NAS}}` shows the braces; so does anything in
   a code span or code block, which is how this README's examples survive being pasted in.
 - **Where each goes.** A value in a card's place is fine; a card or list in a sentence is a
-  **?** saying it goes on a line of its own. `{{if}}`, `{{details}}`, `{{else}}` and `{{end}}`
+  **?** saying it goes on a line of its own. `{{if}}`, `{{elif}}`, `{{details}}`, `{{else}}` and `{{end}}`
   each take a whole line, and wrap whole paragraphs, lists and tables — the Markdown
   between them is rendered on its own, so a list cannot start outside a section and end
   inside it (one cut in two becomes two lists).

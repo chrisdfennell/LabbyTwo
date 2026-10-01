@@ -1,0 +1,95 @@
+@implements IDisposable
+@inject HealthMonitor Health
+
+@* {{status: tab "Media"}} and {{status: all}}: a tab's connections, or the whole lab's, in
+   one line — "Media: 7 fine, 1 down (Plex), 1 checking" — and with "full" each one with
+   its dot after it. Everything comes from the monitor's last verdicts, in memory, and is
+   worked out again on every sweep; what it counts and how it words it is LabStatus, where
+   it is tested. Written on few lines, because whitespace here lands inside somebody's
+   sentence. *@
+
+@if (_problem is not null)
+{
+    <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+}
+else if (_summary is null)
+{
+    <span class="sc-value is-waiting" title="Loading…">…</span>
+}
+else
+{
+    <span class="sc-value md-status-summary" title="@Title"><span class="status-dot @Dot" aria-hidden="true"></span>@_summary.Line</span>@if (_full && _summary.Entries.Count > 0)
+    {
+        <span class="md-status-list" role="list">@foreach (var entry in _summary.Entries)
+        {
+            <span class="md-status-item" role="listitem" @key="entry.Connection.Id"><span class="status-dot @entry.Dot" aria-hidden="true"></span>@entry.Connection.Name <span class="tile-meta">@entry.Word</span></span>
+        }</span>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, cards and tabs, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private StatusLine? _summary;
+    private string? _problem;
+    private bool _full;
+
+    private string Dot => _summary switch
+    {
+        { Down: > 0 } => "status-down",
+        { Entries.Count: > 0 } s when s.Entries.All(e => e.Word == "up") => "status-up",
+        _ => "status-unknown",
+    };
+
+    private string Title => _summary is null ? "" : string.Join(", ", _summary.Entries.Select(e => $"{e.Connection.Name}: {e.Word}"));
+
+    protected override void OnInitialized() => Health.Updated += OnUpdated;
+
+    protected override void OnParametersSet() => Show();
+
+    private void Show()
+    {
+        _problem = null;
+        _summary = null;
+        if (Scope is null)
+            return;
+
+        var target = LabStatus.SummaryTarget(Code, Scope.Connections, out _full);
+        if (target is null)
+        {
+            _problem = $"Say all, or tab and a tab's name: {{{{status: tab \"Media\"}}}}. ({Code.Source})";
+            return;
+        }
+
+        IEnumerable<Connection> connections;
+        string title;
+        if (target == "all")
+        {
+            connections = Scope.Connections;
+            title = Code.Option("label", "Everything");
+        }
+        else
+        {
+            var name = target[4..].Trim();
+            if (LabStatus.FindTab(Scope.Tabs, name) is not { } tab)
+            {
+                _problem = $"No tab called “{name}”. ({Code.Source})";
+                return;
+            }
+            connections = LabStatus.OnTab(tab, Scope.Widgets, Scope.Connections);
+            title = Code.Option("label", tab.Name);
+        }
+        _summary = LabStatus.Summarize(title, connections, Health.IsMonitored, Health.State);
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        Show();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Health.Updated -= OnUpdated;
+}

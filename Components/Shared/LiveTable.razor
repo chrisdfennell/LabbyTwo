@@ -1,0 +1,295 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject LatestReadings Latest
+@inject Registry Registry
+@inject DisplayUnits DisplayUnits
+@inject AlertRuleStore Rules
+@inject Offload Offload
+
+@* {{table: "QNAP NAS", Pi, PC / status, cpu_percent, ram_percent, temp_c}}: connections down
+   the side, readings across the top, every cell live.
+
+   The readings are from memory (LiveReading), so drawing the table on every sweep costs no
+   query however many cells it has. The cells that need history are separate components
+   that load it themselves, once, the way they do anywhere else in a note: a sparkline under
+   a reading (sparkline=24h) goes through SharedSeries, which every chart and sparkline on
+   every open page shares, and an uptime cell is {{uptime}}'s own, read at most every five
+   minutes. Status and "since" are {{status}} and {{since}} themselves, so a table and a
+   sentence beside it cannot disagree.
+
+   Each reading is coloured against MetricBands — the connection's alert rules where it has
+   them — and the level is also said in words, in the tooltip and to a screen reader. A
+   connection that does not report one of the columns gets a dash, not a question mark: a
+   table of a NAS and a Pi with a temperature column is normal, and the Pi not having a
+   sensor is not a mistake in the note. *@
+
+@if (_problem is not null)
+{
+    <div class="md-embed is-problem" role="note">
+        <span class="sc-problem" tabindex="0" role="note" title="@_problem" aria-label="@_problem">?</span>
+        <span class="tile-meta">@_problem</span>
+    </div>
+}
+else if (_table is null || Scope is null)
+{
+    <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
+}
+else
+{
+    var units = DisplayUnits.Current;
+    <div class="md-table-wrap">
+        <table class="md-live-table">
+            @if (_table.Title is { } title)
+            {
+                <caption>@title</caption>
+            }
+            <thead>
+                <tr>
+                    <th scope="col">Connection</th>
+                    @foreach (var column in _columns)
+                    {
+                        <th scope="col">@column.Header</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _rows)
+                {
+                    <tr @key="row.Key">
+                        <th scope="row">@row.Name</th>
+                        @if (row.Connection is not { } connection)
+                        {
+                            <td colspan="@_columns.Count">
+                                <span class="sc-problem" tabindex="0" role="note" title="@row.Problem" aria-label="@row.Problem">?</span>
+                                <span class="tile-meta">@row.Problem</span>
+                            </td>
+                        }
+                        else
+                        {
+                            @foreach (var column in _columns)
+                            {
+                                @Cell(connection, column, units)
+                            }
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Shortcode Code { get; set; } = default!;
+
+    /// <summary>The connections, cards and tabs, as the page read them. Null while being read, which shows as "…".</summary>
+    [Parameter] public ShortcodeScope? Scope { get; set; }
+
+    private sealed record Row(string Key, string Name, Connection? Connection, string? Problem);
+
+    /// <param name="Written">The column as written: a special word, or a metric key or label.</param>
+    private sealed record Column(string Written, string Header, bool Special);
+
+    private BackgroundLoad _load = default!;
+    private IReadOnlyList<AlertRule>? _rules;
+    private TableSpec? _table;
+    private string? _problem;
+    private IReadOnlyList<Row> _rows = [];
+    private IReadOnlyList<Column> _columns = [];
+    private HashSet<string> _ids = [];
+
+    /// <summary>
+    /// The shortcodes handed to the cells that are other components, made once per cell
+    /// rather than on every draw — they are what those components key their loads by.
+    /// </summary>
+    private readonly Dictionary<string, Shortcode> _cellCodes = new(StringComparer.Ordinal);
+
+    protected override void OnInitialized()
+    {
+        _load = Offload.Loader(InvokeAsync, StateHasChanged, RendererInfo.IsInteractive);
+        Health.Updated += OnUpdated;
+        Latest.Changed += OnLatestChanged;
+        DisplayUnits.Changed += OnUpdated;
+        Rules.Changed += OnRulesChanged;
+        _load.Load("rules", ct => Offload.Run(c => Rules.AllAsync(c), ct), rules => _rules = rules);
+    }
+
+    protected override void OnParametersSet()
+    {
+        _problem = null;
+        _table = TableShortcode.Read(Code, out var problem);
+        if (_table is null)
+        {
+            _problem = $"{problem} ({Code.Source})";
+            return;
+        }
+        if (Scope is null)
+            return;
+
+        var rows = new List<Row>();
+        if (_table.Tab is { } tabName)
+        {
+            var tab = Scope.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabName, StringComparison.Ordinal))
+                      ?? Scope.Tabs.FirstOrDefault(t => string.Equals(t.Name.Trim(), tabName, StringComparison.OrdinalIgnoreCase)
+                                                        || string.Equals(t.Slug, tabName, StringComparison.OrdinalIgnoreCase));
+            if (tab is null)
+            {
+                _problem = $"No tab called “{tabName}”. ({Code.Source})";
+                return;
+            }
+            foreach (var connection in TabConnections(tab))
+                rows.Add(new Row(connection.Id, connection.Name, connection, null));
+            if (rows.Count == 0)
+            {
+                _problem = $"Nothing on the {tab.Name} tab is bound to a connection, so there are no rows. Name them instead: {{{{table: NAS, Pi / status}}}}. ({Code.Source})";
+                return;
+            }
+        }
+        else
+        {
+            foreach (var name in _table.Connections)
+            {
+                rows.Add(ShortcodeLookup.Connection(Scope.Connections, name) is { } connection
+                    ? new Row(connection.Id, connection.Name, connection, null)
+                    : new Row("?" + name, name, null, $"No connection called “{name}”."));
+            }
+        }
+        _rows = rows;
+        _ids = [.. rows.Where(r => r.Connection is not null).Select(r => r.Connection!.Id)];
+
+        // A metric column is headed by its label as the first row that has it calls it —
+        // "Memory" for ram_percent — and by what was written when no row reports it.
+        _columns =
+        [
+            .. _table.Columns.Select(written =>
+            {
+                if (TableShortcode.IsSpecial(written))
+                    return new Column(written.Trim().ToLowerInvariant(), Capitalise(written.Trim().ToLowerInvariant()), true);
+                foreach (var row in rows)
+                {
+                    if (row.Connection is { } connection && Key(connection, written) is { } key)
+                        return new Column(written, Registry.Metric(connection, key).Label, false);
+                }
+                return new Column(written, written, false);
+            }),
+        ];
+    }
+
+    /// <summary>
+    /// The connections a tab's cards are bound to, in the order the cards are, and a
+    /// Containers or Git tab's own connection. Deleted ones are skipped rather than drawn as
+    /// a question mark: the tab is what the note named, and the tab is fine.
+    /// </summary>
+    private IEnumerable<Connection> TabConnections(Tab tab)
+    {
+        var ids = Scope!.Widgets
+            .Where(w => w.TabId == tab.Id && w.ConnectionId is { Length: > 0 })
+            .OrderBy(w => w.Sort)
+            .Select(w => w.ConnectionId!)
+            .Prepend(tab.Settings.Get("connection"))
+            .Where(id => id.Length > 0)
+            .Distinct(StringComparer.Ordinal);
+        foreach (var id in ids)
+        {
+            if (Scope.Connections.FirstOrDefault(c => c.Id == id) is { } connection)
+                yield return connection;
+        }
+    }
+
+    private string? Key(Connection connection, string written) =>
+        ShortcodeLookup.MetricKey(Registry, connection, written, LiveReading.Reported(Health, Latest, connection.Id));
+
+    private static string Capitalise(string word) => word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..];
+
+    private Shortcode CellCode(string kind, IEnumerable<string> target)
+    {
+        var parts = target.ToList();
+        var key = kind + "\n" + string.Join("\n", parts);
+        if (!_cellCodes.TryGetValue(key, out var code))
+            _cellCodes[key] = code = Shortcodes.Parse(Shortcodes.Write(kind, parts))!;
+        return code;
+    }
+
+    private RenderFragment Cell(Connection connection, Column column, Units.Preferences units) => __builder =>
+    {
+        if (column.Special)
+        {
+            <td class="md-cell">
+                <LiveValue Code="@CellCode(column.Written, [connection.Id])" Scope="Scope" />
+            </td>
+            return;
+        }
+
+        if (Key(connection, column.Written) is not { } key)
+        {
+            <td class="md-cell is-missing" title="@($"{connection.Name} does not report “{column.Written}”")">
+                <span class="tile-meta">—</span>
+            </td>
+            return;
+        }
+
+        var spec = Registry.Metric(connection, key);
+        var value = LiveReading.Value(Health, Latest, connection.Id, key);
+        if (value is not { } reading)
+        {
+            <td class="md-cell is-missing" title="@($"{connection.Name} · {spec.Label}: no reading in the last {LiveReading.StoredWindow.TotalHours:0} hours")">
+                <span class="tile-meta">—</span>
+                @Spark(connection, key)
+            </td>
+            return;
+        }
+
+        // Uncoloured until the rules are in, as a gauge is, rather than one colour then another.
+        var bands = _rules is null ? MetricBands.None : MetricBands.For(_rules, connection.Id, key, spec);
+        var level = bands.Level(reading);
+        var word = MetricBands.Word(level);
+        string Format(double stored) => Units.Format(spec, stored, units);
+        var text = LiveText.Metric(reading, LiveText.Decimals(null, spec), spec.Unit, units);
+        var lines = bands.Describe(Format);
+        var title = $"{connection.Name} · {spec.Label}: {text}"
+                    + (word.Length > 0 && level != "is-fine" ? $" — {word}" : "")
+                    + (lines.Length > 0 ? $" ({lines})" : "");
+        <td class="@($"md-cell {level}".TrimEnd())" title="@title">
+            <span class="md-cell-value">@text</span>@if (word.Length > 0 && level != "is-fine")
+            {
+                <span class="visually-hidden">, @word</span>
+            }
+            @Spark(connection, key)
+        </td>
+    };
+
+    private RenderFragment Spark(Connection connection, string key) => __builder =>
+    {
+        if (_table?.Sparkline is { } window)
+        {
+            <div class="md-cell-spark">
+                <LiveSparkline Code="@CellCode("sparkline", [connection.Id, key + " " + LiveReading.WindowWord(window)])" Scope="Scope" />
+            </div>
+        }
+    };
+
+    private void OnUpdated() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnLatestChanged(string connectionId)
+    {
+        if (_ids.Contains(connectionId))
+            _ = InvokeAsync(() =>
+            {
+                // A metric only ever stored, not declared, is unknown until its readings
+                // load — so the headers are worked out again, not just the cells.
+                OnParametersSet();
+                StateHasChanged();
+            });
+    }
+
+    private void OnRulesChanged() =>
+        _ = _load.Refresh("rules", ct => Offload.Run(c => Rules.AllAsync(c), ct), rules => _rules = rules);
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Latest.Changed -= OnLatestChanged;
+        DisplayUnits.Changed -= OnUpdated;
+        Rules.Changed -= OnRulesChanged;
+        _load.Dispose();
+    }
+}

@@ -70,16 +70,19 @@ public static class Shortcodes
     [
         "status", "metric", "forecast", "uptime", "since", "button",
         "sparkline", "uptimebar", "link", "today", "countdown", "ago", "power",
+        "gauge",
+        "who",
     ];
 
     /// <summary>A whole card or list, on a line of its own.</summary>
-    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "chart", "down", "alerts", "containers", "updates", "renewals", "changes", "incidents", "backups"];
+    public static readonly IReadOnlyList<string> BlockKinds = ["widget", "card", "chart", "down", "alerts", "containers", "updates", "renewals", "changes", "incidents", "backups",
+        "table", "diagram"];
 
     /// <summary>
     /// The edges of a section: <c>{{if …}}</c> shown only while something is true, and
     /// <c>{{details: …}}</c> folded away until somebody opens it. Both end at <c>{{end}}</c>.
     /// </summary>
-    public static readonly IReadOnlyList<string> StructureKinds = ["if", "else", "end", "details"];
+    public static readonly IReadOnlyList<string> StructureKinds = ["if", "else", "end", "details", "elif"];
 
     /// <summary>
     /// Kinds that make sense with nothing after them, and so may be written without the
@@ -137,12 +140,15 @@ public static class Shortcodes
         // rather than here, since its own colon and operators are not arguments. It has to
         // look like one of ours — a colon, or "any down" / "all up" — so Go's {{if .Ready}}
         // stays the text it was.
+        // {{elif …}} is read the same way, as the "otherwise, if" of the one above.
         var trimmed = inner.Trim();
-        if (trimmed.Length > 3 && trimmed.StartsWith("if", StringComparison.OrdinalIgnoreCase) && char.IsWhiteSpace(trimmed[2]))
+        var conditional = trimmed.StartsWith("elif", StringComparison.OrdinalIgnoreCase) ? "elif" : "if";
+        if (trimmed.Length > conditional.Length + 1 && trimmed.StartsWith(conditional, StringComparison.OrdinalIgnoreCase)
+            && char.IsWhiteSpace(trimmed[conditional.Length]))
         {
-            var condition = trimmed[3..].Trim();
-            if (condition.Contains(':') || Runbook.IsWholeLabCondition(condition))
-                return new Shortcode("if", [condition], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), source);
+            var condition = trimmed[(conditional.Length + 1)..].Trim();
+            if (Runbook.LooksLikeCondition(condition))
+                return new Shortcode(conditional, [condition], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), source);
             return null;
         }
 
