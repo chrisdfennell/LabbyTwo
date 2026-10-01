@@ -1,0 +1,20 @@
+/* A link to another note: the note's other links' look, with no arrow — it stays in the app.
+   A note that does not exist yet is dashed and muted, the way a wiki marks a page still to
+   write, so it is plain before clicking that it opens an empty editor rather than a note. */
+
+.note-link { text-decoration: underline; }
+
+.note-link.is-missing {
+    color: var(--muted);
+    text-decoration-style: dashed;
+}
+
+.note-link.is-missing::after {
+    content: "+";
+    margin-left: .1em;
+    font-size: .8em;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.note-link.is-waiting { text-decoration: none; }

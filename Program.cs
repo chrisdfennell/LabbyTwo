@@ -120,6 +120,8 @@ builder.Services.AddSingleton<LatestReadings>();
 builder.Services.AddSingleton<Offload>();
 builder.Services.AddSingleton<SharedSeries>();
 builder.Services.AddSingleton<NotesStore>();
+builder.Services.AddSingleton<NoteDirectory>();
+builder.Services.AddSingleton<NoteTemplateStore>();
 builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();

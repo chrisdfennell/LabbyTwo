@@ -1,4 +1,9 @@
+@implements IDisposable
 @inject NotesStore Notes
+@inject NoteDirectory Directory
+@inject NoteTemplateStore Templates
+@inject Offload Offload
+@inject IJSRuntime JS
 @inject NavigationManager Nav
 @using Microsoft.AspNetCore.WebUtilities
 
@@ -7,8 +12,32 @@
         <h1>@(string.IsNullOrWhiteSpace(Tab.Icon) ? "" : Tab.Icon + " ")@Tab.Name</h1>
         <p class="subtitle">Markdown notes and runbooks.</p>
     </div>
-    <button class="btn btn-sm btn-primary" @onclick="NewNote">+ New note</button>
+    <div class="d-flex gap-1 flex-none">
+        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _picking = true">From a template…</button>
+        <button class="btn btn-sm btn-primary" @onclick="NewNote">+ New note</button>
+    </div>
 </div>
+
+@if (_renamed is { } renamed)
+{
+    <div class="md-hint mb-3" role="status">
+        <div>
+            <div>
+                @(renamed.Sources.Count == 1 ? "One note links" : $"{renamed.Sources.Count} notes link")
+                to this note as “@renamed.OldTitle”: @string.Join(", ", renamed.Sources.Select(n => n.Shown)).
+            </div>
+            <div class="tile-meta mt-1">
+                Those links still lead here — LabbyTwo remembers which note they meant — but they still say the old name.
+            </div>
+        </div>
+        <div class="d-flex gap-1 flex-none">
+            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@_updatingLinks" @onclick="UpdateLinksAsync">
+                @(_updatingLinks ? "Updating…" : $"Change them to “{renamed.NewTitle}”")
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _renamed = null">Leave them</button>
+        </div>
+    </div>
+}
 
 @if (_notes.Count == 0)
 {
@@ -29,6 +58,17 @@ else
                         </div>
                     </div>
                     <div class="widget-body markdown-body"><LiveMarkdown Content="@note.Content" OwnerId="@note.Id" /></div>
+                    @if (_graph?.Backlinks(note.Id) is { Count: > 0 } linking)
+                    {
+                        <div class="tile-meta mt-2 note-backlinks">
+                            Linked from:
+                            @for (var i = 0; i < linking.Count; i++)
+                            {
+                                var from = linking[i];
+                                <a class="note-link" href="@from.Href" title="@from.Place.Describe()">@from.Shown</a>@(i < linking.Count - 1 ? ", " : "")
+                            }
+                        </div>
+                    }
                     <div class="tile-meta mt-2">Updated @note.UpdatedAt.ToString("d MMM yyyy HH:mm")</div>
                 </div>
             </div>
@@ -60,10 +100,21 @@ else
         </div>
         </ChildContent>
         <Footer>
+            @if (_templateSaved is { } saved)
+            {
+                <span class="tile-meta me-auto" role="status">@saved</span>
+            }
+            <button class="btn btn-outline-secondary btn-sm @(_templateSaved is null ? "me-auto" : "")" @onclick="SaveAsTemplateAsync"
+                    title="Keep this note's title and Markdown as a template for new notes">Save as template</button>
             <button class="btn btn-secondary btn-sm" @onclick="() => _editing = null">Cancel</button>
             <button class="btn btn-primary btn-sm" @onclick="SaveAsync">Save</button>
         </Footer>
     </Modal>
+}
+
+@if (_picking)
+{
+    <NoteTemplatePicker OnChosen="StartFromTemplate" OnClose="() => _picking = false" />
 }
 
 @if (_confirmDelete is not null)
@@ -82,13 +133,30 @@ else
     private string? _editingId;
     private NotesStore.Note? _confirmDelete;
 
+    /// <summary>Every note's title and the link index, for "Linked from"; null until read.</summary>
+    private NoteGraph? _graph;
+    private bool _picking;
+    private string? _templateSaved;
+    private Renamed? _renamed;
+    private bool _updatingLinks;
+    private bool _disposed;
+
+    /// <summary>A heading a [[Note#Heading]] link asked for, to scroll to once the page is drawn.</summary>
+    private (string NoteId, string Heading)? _scrollTo;
+
     private sealed class Draft
     {
         public string Title { get; set; } = "";
         public string Content { get; set; } = "";
     }
 
+    /// <summary>A note renamed while other notes link to it by its old title — the offer to change them.</summary>
+    /// <param name="Before">The directory as it was before the rename, which is what says which links meant this note.</param>
+    private sealed record Renamed(string NoteId, string OldTitle, string NewTitle, IReadOnlyList<NoteEntry> Sources, NoteGraph Before);
+
     private static string Describe(NotesStore.Note note) => note.Title is { Length: > 0 } ? note.Title : "Untitled";
+
+    protected override void OnInitialized() => Directory.Changed += OnDirectoryChanged;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -96,10 +164,43 @@ else
         OpenAsked();
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_scrollTo is not { } target)
+            return;
+        _scrollTo = null;
+        try
+        {
+            await JS.InvokeVoidAsync("labbyNotes.scrollToHeading", $"note-{target.NoteId}", target.Heading);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or TaskCanceledException or InvalidOperationException)
+        {
+            // The browser has already scrolled to the note itself; the heading is a nicety.
+        }
+    }
+
+    /// <summary>A note was written somewhere, or a page renamed: "Linked from" may say something else now.</summary>
+    private void OnDirectoryChanged()
+    {
+        if (_disposed)
+            return;
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed)
+                return;
+            _graph = await Directory.GetAsync();
+            StateHasChanged();
+        });
+    }
+
     /// <summary>
     /// ?edit=&lt;id&gt; opens that note in the editor — where an incident's "Write up" sends
     /// you, so the note it just wrote is ready to finish. Taken off the address once opened,
     /// so closing the editor and reloading does not open it again.
+    ///
+    /// ?new=Title&amp;in=&lt;id&gt; opens a new note with that title: where a link to a note
+    /// that does not exist yet sends you. ?heading= with #note-&lt;id&gt; scrolls to a heading
+    /// inside that note, for a <c>[[Note#Heading]]</c> link.
     /// </summary>
     private void OpenAsked()
     {
@@ -108,41 +209,149 @@ else
         if (!RendererInfo.IsInteractive)
             return;
         var uri = Nav.ToAbsoluteUri(Nav.Uri);
-        if (!QueryHelpers.ParseQuery(uri.Query).TryGetValue("edit", out var asked))
+        var query = QueryHelpers.ParseQuery(uri.Query);
+
+        // The browser has scrolled to the note; the heading inside it is found once drawn.
+        // Inside this note, not the page: two notes can both have a "Restart" heading.
+        if (query.TryGetValue("heading", out var heading) && uri.Fragment.StartsWith("#note-", StringComparison.Ordinal)
+            && _notes.Any(n => n.Id == uri.Fragment[6..]))
+            _scrollTo = (uri.Fragment[6..], heading.ToString());
+
+        // Only on the notes page it was meant for, when one page has two notes sections.
+        if (query.TryGetValue("new", out var title)
+            && (!query.TryGetValue("in", out var place) || place.ToString() == Tab.Id))
+        {
+            NewNote();
+            _editing!.Title = title.ToString();
+            Nav.NavigateTo(uri.GetLeftPart(UriPartial.Path), replace: true);
+            return;
+        }
+
+        if (!query.TryGetValue("edit", out var asked))
             return;
         if (_notes.FirstOrDefault(n => n.Id == asked.ToString()) is { } note)
             Edit(note);
         Nav.NavigateTo(uri.GetLeftPart(UriPartial.Path) + $"#note-{asked}", replace: true);
     }
 
-    private async Task LoadAsync() => _notes = await Notes.ForTabAsync(Tab.Id);
+    /// <summary>The notes, and the link directory for "Linked from" — both off the render thread.</summary>
+    private async Task LoadAsync()
+    {
+        _notes = await Offload.Run(ct => Notes.ForTabAsync(Tab.Id, ct));
+        _graph = await Directory.GetAsync();
+    }
 
     private void NewNote()
     {
         _editingId = null;
+        _templateSaved = null;
         _editing = new Draft();
     }
 
     private void Edit(NotesStore.Note note)
     {
         _editingId = note.Id;
+        _templateSaved = null;
         _editing = new Draft { Title = note.Title, Content = note.Content };
+    }
+
+    /// <summary>A template chosen in the picker, opened in the editor as a new note — saved only by Save.</summary>
+    private void StartFromTemplate(NoteDraft draft)
+    {
+        _picking = false;
+        NewNote();
+        _editing!.Title = draft.Title;
+        _editing.Content = draft.Markdown;
     }
 
     private async Task SaveAsync()
     {
-        if (_editing is null)
+        if (_editing is not { } draft)
             return;
-        await Notes.SaveAsync(_editingId, Tab.Id, _editing.Title, _editing.Content);
+
+        // A rename is only worth asking about when other notes name this one by its old
+        // title, and who does has to be read before the save changes what titles resolve to.
+        var before = _editingId is null ? null : _notes.FirstOrDefault(n => n.Id == _editingId);
+        var graph = _graph ?? await Directory.GetAsync();
+        IReadOnlyList<NoteEntry> linking = before is not null
+                                          && NoteLinks.Tidy(before.Title).Length > 0
+                                          && !string.Equals(NoteLinks.Tidy(before.Title), NoteLinks.Tidy(draft.Title), StringComparison.OrdinalIgnoreCase)
+            ? graph.LinkingByTitle(before.Id)
+            : [];
+
+        var editingId = _editingId;
+        var id = await Offload.Run(ct => Notes.SaveAsync(editingId, Tab.Id, draft.Title, draft.Content, ct));
+        _renamed = linking.Count > 0 && NoteLinks.CanLink(draft.Title)
+            ? new Renamed(id, before!.Title, NoteLinks.Tidy(draft.Title), linking, graph)
+            : null;
         _editing = null;
         await LoadAsync();
     }
 
+    /// <summary>
+    /// Writes the new title into every link that named the old one, keeping each link's
+    /// page, heading and words. Each note is read fresh and saved as an ordinary edit, so
+    /// the link index follows by itself.
+    /// </summary>
+    private async Task UpdateLinksAsync()
+    {
+        if (_renamed is not { } renamed)
+            return;
+        _updatingLinks = true;
+        try
+        {
+            await Offload.Run(async ct =>
+            {
+                foreach (var source in await Notes.ByIdsAsync([.. renamed.Sources.Select(s => s.Id)], ct))
+                {
+                    var content = NoteLinks.Retarget(source.Content, link => PointsHere(renamed, link, source.Id), renamed.NewTitle);
+                    if (content != source.Content)
+                        await Notes.SaveAsync(source.Id, source.TabId, source.Title, content, ct);
+                }
+                return true;
+            });
+            _renamed = null;
+        }
+        finally
+        {
+            _updatingLinks = false;
+        }
+        await LoadAsync();
+    }
+
+    private static NoteTarget? PointsHere(Renamed renamed, NoteLink link, string fromId) =>
+        renamed.Before.Resolve(link.Target, fromId) is { Note: { } note } found && note.Id == renamed.NoteId ? found : null;
+
+    /// <summary>
+    /// Keeps what is in the editor as a template, named after its title; the template
+    /// picker lists, edits and deletes them. Says so in the footer, and leaves the editor open.
+    /// </summary>
+    private async Task SaveAsTemplateAsync()
+    {
+        if (_editing is not { } draft)
+            return;
+        var name = draft.Title.Trim() is { Length: > 0 } title ? title : "Untitled template";
+        await Offload.Run(ct => Templates.SaveAsync(null, name, draft.Title, draft.Content, ct));
+        _templateSaved = $"Saved as the template “{name}”.";
+    }
+
     private async Task DeleteAsync()
     {
-        if (_confirmDelete is not null)
-            await Notes.DeleteAsync(_confirmDelete.Id);
+        if (_confirmDelete is { } doomed)
+        {
+            await Offload.Run(async ct =>
+            {
+                await Notes.DeleteAsync(doomed.Id, ct);
+                return true;
+            });
+        }
         _confirmDelete = null;
         await LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Directory.Changed -= OnDirectoryChanged;
     }
 }

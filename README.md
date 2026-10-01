@@ -1450,6 +1450,67 @@ its plug and within a sweep the same note is the NAS-is-down page, with the wake
 restart buttons, the list of containers to stop and what changed in the two hours before
 — and nothing about disk space.
 
+#### Links between notes
+
+Put a note's title in double square brackets to link to it, from another note or from a
+Markdown card:
+
+| Write | Links to |
+|---|---|
+| `[[Plex runbook]]` | the note called *Plex runbook*, on whichever notes page it is (any case) |
+| `[[Plex runbook\|the Plex steps]]` | the same note, with your words as the link |
+| `[[Plex runbook#Restart]]` | its *Restart* heading — the page opens at the note and scrolls to the heading inside it |
+| `[[Runbooks / Plex runbook]]` | the one on the *Runbooks* page, when two pages have a note of that title. A notes section on a custom page answers to its own title or its page's name |
+| `[[Runbooks / Plex runbook#Restart\|restart it]]` | all of it at once: page, title, heading, words |
+
+(In a table cell the `|` needs no backslash — the link is taken out before the table is
+read. The backslash above is only this README's own table.)
+
+- **A note that does not exist yet** is a dashed, muted link with a **+**. Clicking it opens
+  the editor for a new note with that title, on the page the link names, else the page the
+  link is on, else the first notes page. The moment that note is saved, every link to it
+  becomes an ordinary link — no reload.
+- **"Linked from:"** under each note lists the notes that link to it, each a link back.
+- **Renaming a note** that other notes link to by name offers, above the notes, to change
+  those links to the new title (keeping their heading and words). You can leave them: each
+  link remembers which note it found, so `[[Old title]]` still goes to the renamed note.
+  Delete the note and its links become "missing" links again.
+- **Two notes with the same title:** a link goes to the one on its own page; from elsewhere,
+  to the first by page name — write the page in front to choose.
+- **A title with a slash or a hash** in it still links: the whole thing is tried as a title
+  before anything is split off.
+- **Writing one as text.** `\[[Plex runbook]]` shows the brackets, and so does anything in
+  a code span or code block. `[[ -f file ]]` — a space straight inside the brackets — is
+  never a link, so shell scripts pasted into prose stay as they were. A shortcode wins over
+  a link: `{{status: "[[NAS]]"}}` is a status.
+- **Inserting one.** **Insert live value…** → **A link to another note** lists every note,
+  with an optional heading and words, and writes the link for you (with the page in front
+  only when the title is not unique).
+
+Links are kept in a small index that every save writes, so drawing one is a lookup in
+memory and "Linked from" is a list already made; notes written before this version are
+indexed the first time a notes page, or anything with a link on it, is opened.
+
+#### Note templates
+
+**From a template…** on a notes page starts a new note from one of these, filled in from
+what you choose. It opens in the editor like any new note; nothing is saved until **Save**.
+
+| Template | Asks for | Writes |
+|---|---|---|
+| **Runbook for a connection** | one connection | its live status, since when, 30-day uptime and when it was checked; a 24-hour trend line of its first metric (response time if it has none) and a daily uptime strip; `{{if down: …}}` with a warning, its own action buttons (up to four that need nothing typed in, safest first), `{{down}}` and what changed in the two hours before, `{{else}}` "is up"; a folded *If it won't come back*; a `- [ ]` checklist of steps; a links section with `{{link}}` to its own page |
+| **Incident write-up** | one of the last 90 days' incidents | the same write-up the Incidents page's **Write up** makes, but into this notes page |
+| **Maintenance plan** | a date, and any connections it touches | when (with a countdown), who, what and why; a table of what it touches with each one's status; *Before*, *Steps* and *After* checklists; late backups; a *Rollback* section; "Everything is up" or what is down; what changed in the last 24 hours |
+| **Service overview** | several connections | "Everything is up" or what is down, then a table: each one's name (a link to its page when it has one), status, since, 30-day uptime and 24-hour trend line; then the alerts firing |
+
+Names go in safely: a connection called `NAS}} {{button: Router / reboot` is written as one
+oddly named connection everywhere, never as a button, a section or a table cell of its own.
+
+**Your own templates.** **Save as template** in any note's editor keeps its title and
+Markdown, exactly as written, as a template named after the title. They are listed under
+**Your templates** in the same picker, each with **Use**, **Edit** (its name in the list,
+the title of notes made from it, and the Markdown) and **✕** to delete it.
+
 ### Weather and radar
 
 **Settings → Where you are** holds one location for the whole install, and the forecast,
