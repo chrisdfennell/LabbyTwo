@@ -13,6 +13,8 @@
             @onchange="e => SetMode(e.Value?.ToString())">
         <option value="none">Just tell me — do nothing automatically</option>
         <option value="restart">Restart a Docker container</option>
+        <option value="pause">Pause a Docker container</option>
+        <option value="stop">Stop a Docker container</option>
         <option value="action" disabled="@(_withActions.Count == 0)">
             Run one of a connection's actions@(_withActions.Count == 0 ? " (none has any)" : "")
         </option>
@@ -21,7 +23,7 @@
     @if (Value is { } fix)
     {
         <div class="row g-2 mt-1">
-            @if (fix.Kind == RemediationKind.RestartContainer)
+            @if (fix.IsContainer)
             {
                 <div class="col-6">
                     <label class="form-label small" for="@($"{Id}-docker")">On</label>
@@ -41,9 +43,16 @@
                 <div class="col-6">
                     <label class="form-label small" for="@($"{Id}-container")">Container</label>
                     <input id="@($"{Id}-container")" class="form-control form-control-sm" value="@fix.Container"
-                           placeholder="plex"
+                           placeholder="plex" list="@($"{Id}-busiest")"
                            @onchange="e => Set(fix with { Container = e.Value?.ToString()?.Trim() ?? string.Empty })" />
-                    <div class="form-text">Its name, or its Compose service.</div>
+                    <datalist id="@($"{Id}-busiest")">
+                        <option value="@Remediation.BusiestByCpu">the busiest container by CPU, when it runs</option>
+                        <option value="@Remediation.BusiestByDisk">the busiest container by disk, when it runs</option>
+                    </datalist>
+                    <div class="form-text">
+                        Its name, or its Compose service — or <code>@Remediation.BusiestByCpu</code> /
+                        <code>@Remediation.BusiestByDisk</code> for whichever is busiest when it runs.
+                    </div>
                 </div>
             }
             else
@@ -156,7 +165,7 @@
     private IReadOnlyList<Connection> _dockers = [];
     private IReadOnlyList<Connection> _withActions = [];
 
-    private string Mode => Value is null ? "none" : Value.Kind == RemediationKind.RestartContainer ? "restart" : "action";
+    private string Mode => Value is null ? "none" : Value.IsContainer ? Remediation.StoredKind(Value.Kind) : "action";
 
     protected override async Task OnInitializedAsync()
     {
@@ -167,12 +176,12 @@
 
     private Task SetMode(string? mode) => mode switch
     {
-        "restart" => Set((Value ?? Fresh()) with
+        "restart" or "stop" or "pause" => Set((Value ?? Fresh()) with
         {
-            Kind = RemediationKind.RestartContainer,
-            TargetConnectionId = Value is { Kind: RemediationKind.RestartContainer } same ? same.TargetConnectionId
+            Kind = Remediation.ParseKind(mode),
+            TargetConnectionId = Value is { IsContainer: true } same ? same.TargetConnectionId
                 : _dockers.Count == 1 ? _dockers[0].Id : "",
-            Container = Value is { Kind: RemediationKind.RestartContainer, Container.Length: > 0 } had ? had.Container
+            Container = Value is { IsContainer: true, Container.Length: > 0 } had ? had.Container
                 : SuggestedContainer ?? "",
         }),
         "action" => Set((Value ?? Fresh()) with { Kind = RemediationKind.ProviderAction, TargetConnectionId = "", ActionId = "" }),
@@ -189,8 +198,8 @@
 
     private string Doing(Remediation fix)
     {
-        if (fix.Kind == RemediationKind.RestartContainer)
-            return $"restart {fix.Container}";
+        if (fix.IsContainer)
+            return $"{Remediation.StoredKind(fix.Kind)} {Remediation.Describe(fix.Container)}";
         var connection = _withActions.FirstOrDefault(c => c.Id == fix.TargetConnectionId);
         var label = connection is null ? fix.ActionId : Runner.ActionsFor(connection).FirstOrDefault(a => a.Id == fix.ActionId)?.Label ?? fix.ActionId;
         return $"run “{label}” on {connection?.Name ?? "?"}";

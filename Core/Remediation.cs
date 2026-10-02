@@ -9,6 +9,18 @@ public enum RemediationKind
     RestartContainer,
 
     /// <summary>
+    /// Stop one container. For the container that is eating the NAS rather than one that
+    /// has fallen over: a transcoder at 190% CPU for half an hour is fixed by it not running.
+    /// </summary>
+    StopContainer,
+
+    /// <summary>
+    /// Pause one container: frozen, not stopped, so it carries on exactly where it was when
+    /// unpaused. The gentler answer to "something is hammering the disks".
+    /// </summary>
+    PauseContainer,
+
+    /// <summary>
     /// Run one of a connection's own action buttons — the same ones the Controls card and a
     /// runbook's <c>{{button: NAS / restart}}</c> offer, through the same ActionRunner.
     /// </summary>
@@ -94,10 +106,54 @@ public sealed record Remediation
         entry.RuleId is { } rule ? RuleTrigger(rule) : DownTrigger(entry.ConnectionId);
 
     /// <summary>Whether enough is filled in to run — a restart with no container, or an action with none chosen, is not.</summary>
-    public bool IsComplete => TargetConnectionId.Length > 0 && Kind switch
+    public bool IsComplete => TargetConnectionId.Length > 0 && (IsContainer ? Container.Trim().Length > 0 : ActionId.Length > 0);
+
+    /// <summary>Whether it acts on a container (restart, stop or pause) rather than running a provider action.</summary>
+    public bool IsContainer => Kind is RemediationKind.RestartContainer or RemediationKind.StopContainer or RemediationKind.PauseContainer;
+
+    /// <summary>What it does to its container.</summary>
+    public Services.ContainerAction ContainerVerb => Kind switch
     {
-        RemediationKind.RestartContainer => Container.Trim().Length > 0,
-        _ => ActionId.Length > 0,
+        RemediationKind.StopContainer => Services.ContainerAction.Stop,
+        RemediationKind.PauseContainer => Services.ContainerAction.Pause,
+        _ => Services.ContainerAction.Restart,
+    };
+
+    /// <summary>
+    /// Written in place of a name: whichever container on the Docker connection is using the
+    /// most CPU when it runs. For an alert on <c>container_cpu_max</c>, which fires for "any
+    /// container", so the fix cannot name one in advance.
+    /// </summary>
+    public const string BusiestByCpu = "@busiest-cpu";
+
+    /// <summary>Whichever container is reading and writing the most when it runs.</summary>
+    public const string BusiestByDisk = "@busiest-disk";
+
+    public static bool IsBusiestToken(string container) => container.Trim() is BusiestByCpu or BusiestByDisk;
+
+    /// <summary>"the busiest container (by CPU)" for the tokens, the name itself otherwise.</summary>
+    public static string Describe(string container) => container.Trim() switch
+    {
+        BusiestByCpu => "the busiest container (by CPU)",
+        BusiestByDisk => "the busiest container (by disk)",
+        var name => name,
+    };
+
+    /// <summary>The kind as stored: "restart", "stop", "pause" or "action".</summary>
+    public static string StoredKind(RemediationKind kind) => kind switch
+    {
+        RemediationKind.ProviderAction => "action",
+        RemediationKind.StopContainer => "stop",
+        RemediationKind.PauseContainer => "pause",
+        _ => "restart",
+    };
+
+    public static RemediationKind ParseKind(string stored) => stored switch
+    {
+        "action" => RemediationKind.ProviderAction,
+        "stop" => RemediationKind.StopContainer,
+        "pause" => RemediationKind.PauseContainer,
+        _ => RemediationKind.RestartContainer,
     };
 
     /// <summary>The values kept within reason, whatever the form sent.</summary>

@@ -132,5 +132,15 @@ public sealed record ProbeResult(
 
     public static ProbeResult Down(TimeSpan duration, string message)
         => new(false, message, duration);
+
+    /// <summary>
+    /// Metrics that belong in the live state (cards, alert rules, the phone view) but are not
+    /// to be written to history this time. For a reading that is not new — the Docker probe
+    /// passing on the container stats a 60-second poller took, on a 30-second sweep — and for
+    /// a reading worth watching but not worth a series of its own. Init-only, so a plugin
+    /// built against the positional constructor still binds; null means "record them all",
+    /// which is what every provider written before this did.
+    /// </summary>
+    public IReadOnlySet<string>? NotRecorded { get; init; }
 }
 

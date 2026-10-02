@@ -129,7 +129,17 @@ public sealed record ContainerStats(
     ulong TxBytes,
     DateTimeOffset At,
     double? RxPerSecond = null,
-    double? TxPerSecond = null);
+    double? TxPerSecond = null)
+{
+    /// <summary>Block I/O read, bytes per second. Null on the first sample, and after the counters reset.</summary>
+    public double? ReadPerSecond { get; init; }
+
+    /// <summary>Block I/O written, bytes per second.</summary>
+    public double? WritePerSecond { get; init; }
+
+    /// <summary>Processes and threads in the container, when the kernel reports it.</summary>
+    public ulong? Pids { get; init; }
+}
 
 /// <summary>The parts of <c>GET /containers/{id}/json</c> the inspect panel shows.</summary>
 public sealed record ContainerDetails(
@@ -214,6 +224,25 @@ public static class DockerContainers
     /// </summary>
     private static readonly TimeSpan StatsReuse = TimeSpan.FromSeconds(8);
 
+    private static long _statsRequests;
+
+    /// <summary>
+    /// Forgets the readings kept for <see cref="StatsReuse"/> on one endpoint, so the next ask
+    /// goes to Docker. For tests, which take two rounds a few milliseconds apart.
+    /// </summary>
+    public static void ForgetRecentStats(string endpoint)
+    {
+        foreach (var key in Recent.Keys.Where(k => k.StartsWith(endpoint + "|", StringComparison.Ordinal)).ToList())
+            Recent.TryRemove(key, out _);
+    }
+
+    /// <summary>
+    /// Stats requests actually sent since the process started, every endpoint and caller
+    /// together — readings reused from <see cref="StatsReuse"/> do not count. What the health
+    /// page and the resource poller's cost figure are worked out from.
+    /// </summary>
+    public static long StatsRequestsMade => Interlocked.Read(ref _statsRequests);
+
     /// <summary>Stopping a container waits for it to exit, and ten seconds' grace is Docker's default.</summary>
     public static readonly TimeSpan ActionTimeout = TimeSpan.FromSeconds(60);
 
@@ -273,6 +302,23 @@ public static class DockerContainers
     {
         lock (SharedLists)
             SharedLists[endpoint] = (DateTimeOffset.UtcNow, Task.FromResult(rows));
+    }
+
+    /// <summary>
+    /// The last list anybody fetched for this endpoint, if it arrived without error less than
+    /// <paramref name="maxAge"/> ago — never a request. For the resource poller, which runs
+    /// on its own minute and would otherwise just miss the probe's list two times in three:
+    /// a list half a minute old is plenty to know which containers to ask about.
+    /// </summary>
+    public static IReadOnlyList<ContainerRow>? Remembered(string endpoint, TimeSpan maxAge)
+    {
+        lock (SharedLists)
+        {
+            return SharedLists.TryGetValue(endpoint, out var existing) && existing.List.IsCompletedSuccessfully &&
+                   DateTimeOffset.UtcNow - existing.At < maxAge
+                ? existing.List.Result
+                : null;
+        }
     }
 
     /// <summary>Forgets shared lists, so the next reader asks again. For tests, and after an action.</summary>
@@ -726,7 +772,17 @@ public static class DockerContainers
         ulong MemoryLimit,
         ulong RxBytes,
         ulong TxBytes,
-        DateTimeOffset Read);
+        DateTimeOffset Read)
+    {
+        /// <summary>Bytes read from block devices since the container started — every device added up.</summary>
+        public ulong BlockRead { get; init; }
+
+        /// <summary>Bytes written to block devices since the container started.</summary>
+        public ulong BlockWrite { get; init; }
+
+        /// <summary><c>pids_stats.current</c>; null when the kernel does not say.</summary>
+        public ulong? Pids { get; init; }
+    }
 
     public static RawSample ParseSample(string payload)
     {
@@ -768,7 +824,51 @@ public static class DockerContainers
             ? parsed
             : DateTimeOffset.UtcNow;
 
-        return new RawSample(cpuTotal, system, online, preTotal, preSystem, used, limit, rx, tx, read);
+        var (blockRead, blockWrite) = BlockIo(root);
+        ulong? pids = root.TryGetProperty("pids_stats", out var pidStats) && pidStats.ValueKind == JsonValueKind.Object &&
+                      pidStats.TryGetProperty("current", out var current) && current.ValueKind == JsonValueKind.Number &&
+                      current.TryGetUInt64(out var count)
+            ? count
+            : null;
+
+        return new RawSample(cpuTotal, system, online, preTotal, preSystem, used, limit, rx, tx, read)
+        {
+            BlockRead = blockRead,
+            BlockWrite = blockWrite,
+            Pids = pids,
+        };
+    }
+
+    /// <summary>
+    /// Bytes read and written, from <c>blkio_stats.io_service_bytes_recursive</c>. One list
+    /// either way, but the two cgroup versions fill it differently, and getting it wrong
+    /// doubles the number or loses it:
+    /// <list type="bullet">
+    /// <item>cgroup v1 writes each device's ops capitalised — <c>Read</c>, <c>Write</c>,
+    /// <c>Sync</c>, <c>Async</c>, <c>Discard</c> and <c>Total</c>. Only Read and Write count:
+    /// Sync plus Async is the same bytes again, and Total is all of them.</item>
+    /// <item>cgroup v2 writes them in lower case — <c>read</c>, <c>write</c> — with no totals,
+    /// and on a host with no I/O accounting for a device the list is null rather than
+    /// empty.</item>
+    /// </list>
+    /// So: Read and write, in any case, summed over every device; everything else ignored.
+    /// </summary>
+    private static (ulong Read, ulong Write) BlockIo(JsonElement root)
+    {
+        if (!root.TryGetProperty("blkio_stats", out var blkio) || blkio.ValueKind != JsonValueKind.Object ||
+            !blkio.TryGetProperty("io_service_bytes_recursive", out var list) || list.ValueKind != JsonValueKind.Array)
+            return (0, 0);
+
+        ulong read = 0, write = 0;
+        foreach (var entry in list.EnumerateArray())
+        {
+            var op = Str(entry, "op");
+            if (op.Equals("read", StringComparison.OrdinalIgnoreCase))
+                read += U64(entry, "value");
+            else if (op.Equals("write", StringComparison.OrdinalIgnoreCase))
+                write += U64(entry, "value");
+        }
+        return (read, write);
     }
 
     private static (ulong Total, ulong System, int Online) Cpu(JsonElement root, string property)
@@ -806,26 +906,50 @@ public static class DockerContainers
         if (cpu is null && previous is not null)
             cpu = CpuPercent(sample.CpuTotal, previous.CpuTotal, sample.SystemCpu, previous.SystemCpu, sample.OnlineCpus);
 
-        double? rxRate = null, txRate = null;
-        if (previous is not null && sample.Read > previous.Read &&
-            sample.RxBytes >= previous.RxBytes && sample.TxBytes >= previous.TxBytes)
+        double? rxRate = null, txRate = null, readRate = null, writeRate = null;
+        if (previous is not null && sample.Read > previous.Read)
         {
             var seconds = (sample.Read - previous.Read).TotalSeconds;
-            rxRate = (sample.RxBytes - previous.RxBytes) / seconds;
-            txRate = (sample.TxBytes - previous.TxBytes) / seconds;
+            rxRate = Rate(sample.RxBytes, previous.RxBytes, seconds);
+            txRate = Rate(sample.TxBytes, previous.TxBytes, seconds);
+            readRate = Rate(sample.BlockRead, previous.BlockRead, seconds);
+            writeRate = Rate(sample.BlockWrite, previous.BlockWrite, seconds);
         }
 
         return new ContainerStats(cpu, sample.MemoryUsed, sample.MemoryLimit, sample.RxBytes, sample.TxBytes,
-            sample.Read, rxRate, txRate);
+            sample.Read, rxRate, txRate)
+        {
+            ReadPerSecond = readRate,
+            WritePerSecond = writeRate,
+            Pids = sample.Pids,
+        };
     }
+
+    /// <summary>
+    /// A counter's rate between two samples, or null when it went backwards. Docker's
+    /// counters start again from zero when a container restarts under the same id, and the
+    /// difference across that is not a rate of anything — a huge negative number, or, as an
+    /// unsigned subtraction, a huge positive one, which on a chart reads as the NAS doing
+    /// eighteen exabytes a second. Null says "no reading this round" instead, and the next
+    /// round differences two samples from the new run.
+    /// </summary>
+    public static double? Rate(ulong now, ulong before, double seconds) =>
+        seconds > 0 && now >= before ? (now - before) / seconds : null;
 
     /// <summary>
     /// Stats for the given running containers, a few at a time. A container whose stats
     /// cannot be read is left out rather than failing the lot — it probably stopped between
     /// the list and now.
     /// </summary>
+    /// <param name="oneShot">
+    /// Always ask for one-shot, even with no previous sample to difference. The resource
+    /// poller's choice: without one-shot Docker holds every first request open for a second
+    /// to take a second sample of its own, which is forty connections held for a second on a
+    /// NAS already struggling. The poller's first round simply has no CPU yet, and its
+    /// second differences against the first.
+    /// </param>
     public static async Task<IReadOnlyDictionary<string, ContainerStats>> StatsAsync(
-        string endpoint, TimeSpan timeout, IReadOnlyCollection<string> ids, CancellationToken ct)
+        string endpoint, TimeSpan timeout, IReadOnlyCollection<string> ids, CancellationToken ct, bool oneShot = false)
     {
         var gate = StatsGates.GetOrAdd(endpoint, _ => new SemaphoreSlim(StatsConcurrency, StatsConcurrency));
         var results = new ConcurrentDictionary<string, ContainerStats>();
@@ -849,7 +973,8 @@ public static class DockerContainers
                 // answers at once — forty containers every ten seconds is then forty quick
                 // requests, not forty that each hold a connection for a second.
                 var path = $"/containers/{Uri.EscapeDataString(id)}/stats?stream=false" +
-                           (previous is null ? "" : "&one-shot=true");
+                           (previous is null && !oneShot ? "" : "&one-shot=true");
+                Interlocked.Increment(ref _statsRequests);
                 var payload = await DockerSocket.GetAsync(endpoint, timeout, path, ct);
                 var sample = ParseSample(payload);
                 var computed = Compute(sample, previous);

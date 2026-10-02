@@ -1,0 +1,155 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject SharedSeries Series
+
+@* "Who is eating the NAS", answered at a glance: the containers using the most CPU, and the
+   ones reading and writing the most, from the resource poller's last round in memory. The
+   sparklines are the last hour of each one's own series, for those kept in history — read
+   through SharedSeries, off the render thread and shared with every other card, and only
+   again when a new round has landed. *@
+
+@if (Context.Connection is not { } docker)
+{
+    <p class="tile-meta mb-0">Choose a Docker connection in this card's settings.</p>
+}
+else if (_snapshot is null)
+{
+    <p class="tile-meta mb-0" data-busiest-empty>
+        No container readings from @docker.Name yet. They arrive within a minute while resource polling is on
+        (the Docker connection's advanced settings).
+    </p>
+}
+else
+{
+    @if (_snapshot.Error is { } error)
+    {
+        <div class="small text-warning mb-1">@error</div>
+    }
+    <div class="row g-3">
+        <div class="col-12 @(Wide ? "col-md-6" : "")">
+            <div class="tile-meta mb-1">By CPU</div>
+            @if (_byCpu.Count == 0)
+            {
+                <div class="small tile-meta" data-busiest-quiet>Nothing is using the CPU.</div>
+            }
+            @foreach (var row in _byCpu)
+            {
+                <div class="d-flex align-items-center gap-2 small mb-1" data-busiest-cpu="@row.Name">
+                    <span class="text-truncate flex-grow-1">@row.Name</span>
+                    <span class="flex-none" style="width: 5rem">@Spark(row, ContainerUsage.CpuMetric, "%")</span>
+                    <strong class="flex-none text-end" style="min-width: 3.5rem">@(row.CpuPercent is { } cpu ? $"{cpu:0.#}%" : "–")</strong>
+                </div>
+            }
+        </div>
+        <div class="col-12 @(Wide ? "col-md-6" : "")">
+            <div class="tile-meta mb-1">By disk</div>
+            @if (_byDisk.Count == 0)
+            {
+                <div class="small tile-meta" data-busiest-quiet>Nothing is reading or writing.</div>
+            }
+            @foreach (var row in _byDisk)
+            {
+                <div class="d-flex align-items-center gap-2 small mb-1" data-busiest-disk="@row.Name">
+                    <span class="text-truncate flex-grow-1">@row.Name</span>
+                    <span class="flex-none" style="width: 5rem">@Spark(row, ContainerUsage.ReadMetric, " MB/s")</span>
+                    <strong class="flex-none text-end text-nowrap" style="min-width: 6rem"
+                            title="@($"{ContainerUsage.Rate(row.ReadPerSecond ?? 0)} read, {ContainerUsage.Rate(row.WritePerSecond ?? 0)} written")">
+                        @ContainerUsage.Rate(row.DiskPerSecond ?? 0)
+                    </strong>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private ContainerResourceSnapshot? _snapshot;
+    private IReadOnlyList<ContainerReading> _byCpu = [];
+    private IReadOnlyList<ContainerReading> _byDisk = [];
+    private Dictionary<string, IReadOnlyList<double>> _sparks = [];
+    private long _sparkRound = -1;
+    private readonly CancellationTokenSource _gone = new();
+
+    private int Count => Math.Clamp(Context.Widget.Settings.GetInt("count", 5), 1, 15);
+    private bool Wide => Context.Widget.Width >= 6;
+
+    protected override void OnInitialized() => Health.Updated += OnSweep;
+
+    protected override void OnParametersSet() => Refresh();
+
+    private void OnSweep() => _ = InvokeAsync(() =>
+    {
+        if (_gone.IsCancellationRequested)
+            return;
+        Refresh();
+        StateHasChanged();
+    });
+
+    private void Refresh()
+    {
+        if (Context.Connection is not { } docker)
+            return;
+        _snapshot = ContainerResourceSnapshots.Get(docker.Id);
+        if (_snapshot is null)
+            return;
+
+        var running = _snapshot.Running.ToList();
+        _byCpu = [.. running.Where(r => r.CpuPercent > ContainerUsage.IdleCpu)
+            .OrderByDescending(r => r.CpuPercent).ThenBy(r => r.Name, StringComparer.Ordinal).Take(Count)];
+        _byDisk = [.. running.Where(r => r.DiskPerSecond > ContainerUsage.IdleDiskBytes)
+            .OrderByDescending(r => r.DiskPerSecond).ThenBy(r => r.Name, StringComparer.Ordinal).Take(Count)];
+
+        if (_snapshot.Round != _sparkRound && RendererInfo.IsInteractive)
+        {
+            _sparkRound = _snapshot.Round;
+            _ = LoadSparksAsync(docker.Id, _snapshot);
+        }
+    }
+
+    private async Task LoadSparksAsync(string connectionId, ContainerResourceSnapshot snapshot)
+    {
+        var wanted = _byCpu.Select(r => (r.Name, ContainerUsage.CpuMetric))
+            .Concat(_byDisk.Select(r => (r.Name, ContainerUsage.ReadMetric)))
+            .Where(w => snapshot.Recorded.Contains(w.Name))
+            .Distinct()
+            .ToList();
+        var sparks = new Dictionary<string, IReadOnlyList<double>>();
+        try
+        {
+            foreach (var (name, metric) in wanted)
+            {
+                var samples = await Series.SamplesAsync(connectionId, ContainerUsage.KeyFor(metric, name),
+                    TimeSpan.FromHours(1), TimeSpan.FromSeconds(55), _gone.Token);
+                sparks[$"{metric}|{name}"] = [.. samples.Select(s => s.Value)];
+            }
+            await InvokeAsync(() =>
+            {
+                _sparks = sparks;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private RenderFragment Spark(ContainerReading row, string metric, string unit) => __builder =>
+    {
+        if (_sparks.TryGetValue($"{metric}|{row.Name}", out var values) && values.Count > 1)
+        {
+            <Sparkline Values="values" Unit="@unit" Decimals="1" Label="@($"{row.Name}, last hour")" />
+        }
+    };
+
+    public void Dispose()
+    {
+        Health.Updated -= OnSweep;
+        _gone.Cancel();
+        _gone.Dispose();
+    }
+}

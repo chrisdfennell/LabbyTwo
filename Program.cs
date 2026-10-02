@@ -287,6 +287,14 @@ builder.Services.AddSingleton<StorageManager>();
 builder.Services.AddSingleton<SelfWatch>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SelfWatch>());
 
+// Who is eating the NAS: each running container's CPU, memory, disk and network, polled
+// lightly and kept in memory; it reaches history through the Docker probe. And the early
+// warning built on it, from the host's /proc every thirty seconds.
+builder.Services.AddSingleton<ContainerResources>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ContainerResources>());
+builder.Services.AddSingleton<HostPressureWatch>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<HostPressureWatch>());
+
 // Login is opt-in: setting a password turns it on, otherwise LabbyTwo stays open on a
 // trusted LAN, which is how most home labs actually run.
 var authEnabled = options.Auth.Enabled;
