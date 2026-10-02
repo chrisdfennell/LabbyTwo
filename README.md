@@ -206,12 +206,14 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **Ambient Weather** | Every reading the station sends — indoor/outdoor temperature, wind, rain, pressure, UV. |
 | **Sonarr** / **Radarr** / **Lidarr** / **Readarr** | Version, reachability, and download queue depth. |
 | **Prowlarr** | Version and reachability for your indexer manager. |
-| **Plex** | Server version and what is playing right now. |
-| **Tautulli** | Active Plex streams, how many are transcoding, and total bandwidth. |
+| **Plex** | Server version and what is playing right now, with transcodes split into hardware (Quick Sync) and software. |
+| **Tautulli** | Active Plex streams, how many are transcoding — on the GPU and in software — and total bandwidth. |
 | **Bazarr** | How many episodes and movies are still missing subtitles. |
 | **Seerr** | Requests pending, approved and available. Formerly Overseerr and Jellyseerr. |
 | **NZBGet** | Download rate, queue size, free disk, and whether it is paused. |
 | **ErsatzTV** | Reachability and how many channels it is publishing. |
+| **Tunarr** | Channels, how many are being streamed and to how many viewers, and whether ffmpeg is set to use the GPU. |
+| **Intel GPU (Quick Sync)** | Who is using a GPU shared between containers — Plex, Tdarr, Tunarr — and, where the kernel lets a container see it, how busy it is and how fast it is clocked. See [A GPU shared by Plex, Tdarr and Tunarr](#a-gpu-shared-by-plex-tdarr-and-tunarr). |
 | **Unmanic** | Pending tasks and how many workers are busy. |
 | **Webhook** | *Alert channel.* Discord, Slack or ntfy — the payload shape is detected from the URL. |
 | **Pushover** | *Alert channel.* Push notifications to your phone. |
@@ -227,7 +229,7 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **Air quality** | AQI, PM2.5, ozone and dust from Open-Meteo, with the band and the health advice spelled out. No API key. |
 | **SABnzbd** | Queue size, speed, what is left, free disk, and whether it is paused. |
 | **Transmission** | Torrents active and transfer rates. Handles the session-id handshake for you. |
-| **Tdarr** | Transcode and health-check queues, workers busy, space saved. Falling behind looks exactly like working. |
+| **Tdarr** | Transcode and health-check queues, workers busy — GPU and CPU counted apart — and space saved. Falling behind looks exactly like working. |
 | **Mylar3** | Comic series tracked and issues still wanted. |
 | **Whisparr** | Version, reachability and queue depth, like the other *arrs. |
 | **Komga** | Series, books and how many are unread. |
@@ -285,6 +287,7 @@ Docker Hub, pinned digests):
 | Nextcloud | `nextcloud` (http 80), `linuxserver/nextcloud` (https 443) | |
 | Scrutiny, Speedtest Tracker, Duplicati, Healthchecks, Gitea, Prometheus | their official or linuxserver images | 8080, 80, 8200, 8000, 3000, 9090 |
 | ErsatzTV, Unmanic, Tdarr, Audiobookshelf, Komga, Navidrome, Mylar3 | their official or linuxserver images | 8409, 8888, 8265, 80, 25600, 4533, 8090 |
+| Tunarr | `chrisbenincasa/tunarr`, `*/tunarr` | 8000 |
 | Gluetun, Syncthing, Paperless-ngx | with their plugins installed | 8000, 8384, 8000 |
 
 When Docker lists an image only by id (the tag was pulled again since), the container's exact
@@ -385,6 +388,69 @@ per hour, the best difficulty any of them has found, and which are offline. In a
 {{metric: "NMMiner 1" / est_hashrate_ghs}}
 {{table: "NMMiner 1", "NMMiner 2" / status, est_hashrate_ghs, shares_per_hour, best_diff_ever}}
 ```
+
+#### A GPU shared by Plex, Tdarr and Tunarr
+
+A NAS with an Intel iGPU usually hands the same `/dev/dri` to Plex, Tdarr and Tunarr. They
+do not know about each other, so the familiar failure is Tdarr re-encoding the library on
+Quick Sync while somebody is watching a film Plex is also transcoding on it — and the film
+stutters. The **GPU — who's using Quick Sync** card shows who has what on the GPU right now,
+how busy it is where that can be seen, and says so when they collide:
+
+> 2 apps on Quick Sync · GPU 87% busy · 1300/1350 MHz
+> Plex — 2 hardware transcodes · Tdarr — 1 GPU worker · Tunarr — nothing streaming
+> ⚠️ Tdarr is transcoding on the GPU while Plex has 2 hardware transcodes — Plex may stutter.
+
+**What can be seen, and from where.** Two different questions, with very different answers
+inside a container:
+
+| Question | Where it comes from | Reliable? |
+|---|---|---|
+| Is Plex transcoding in hardware? | Plex's `/status/sessions` — a session counts as hardware when `transcodeHwDecoding`/`transcodeHwEncoding` name a codec or `transcodeHwFullPipeline="1"`. `transcodeHwRequested` is ignored: it only says hardware was *allowed*, and a session that fell back to software still carries it. Tautulli's `transcode_hw_decoding`/`transcode_hw_encoding` say the same thing. Recorded as `transcodes_hw` and `transcodes_sw`. | Yes — from probes LabbyTwo already makes |
+| Is Tdarr on the GPU? | Tdarr's `/api/v2/get-nodes`: each busy worker's `workerType` is `transcodegpu`, `transcodecpu`, `healthcheckgpu` or `healthcheckcpu`. Recorded as `gpu_workers_active`, `cpu_workers_active` and `health_workers_active`, beside the queues it already had. | Yes |
+| Is Tunarr on the GPU? | Tunarr's `/api/sessions` — channels with somebody connected — and whether ffmpeg is set to `qsv` or `vaapi` (`/api/ffmpeg-settings`, or the transcode configs on newer builds). Its API has moved between releases; whatever a build does not answer is left out rather than failing the connection. | Mostly |
+| How busy is the GPU? | sysfs: the actual and maximum GPU clock, and RC6 residency — the time it spent in deep sleep — from which the share of time it was *awake* is worked out between two probes. | Where the kernel publishes it |
+| How busy is each engine (video vs render)? | Only the i915 perf PMU, which needs a privileged container or `CAP_PERFMON`. | **Not offered** |
+
+LabbyTwo never asks for privileges or makes perf syscalls: a dashboard is the last thing that
+should hold the keys to your kernel. "Busy" from RC6 is an upper bound — a GPU doing a
+little every few milliseconds never gets to sleep — but it follows a transcode closely, and
+a GPU that never sleeps is exactly the one that cannot take another job.
+
+**Turning on the GPU's own numbers.** Add an **Intel GPU (Quick Sync)** connection. Docker
+does not give a container its own sysfs, so `/sys/class/drm` inside LabbyTwo is usually the
+host's and readable as it is — try the connection's **Test** first. Where it says
+*"GPU load isn't visible from inside a container on this system"*, mount the host's copy
+read-only:
+
+```yaml
+    volumes:
+      - labbytwo-data:/app/data
+      # Read-only, and nothing else: no devices, no privileges, no capabilities.
+      - /sys/class/drm:/host/sys/class/drm:ro
+      - /sys/devices:/host/sys/devices:ro
+```
+
+Both lines, not just the first: every `cardN` in `/sys/class/drm` is a link into
+`/sys/devices`, so mounting the drm folder alone gives a list of cards and nothing behind
+them (the connection says exactly that when it happens). Leave the connection's folder blank
+and it tries `/sys/class/drm`, then `/host/sys/class/drm`. Legacy i915 (`gt_act_freq_mhz`,
+`power/rc6_residency_ms`), per-GT i915 (`gt/gt0/…`) and xe (`device/tile0/gt0/…`) layouts are
+all read. If none of it is readable, the card says *"GPU load isn't visible from inside a
+container on this system; showing who's transcoding instead"* — and does exactly that.
+
+The connection also records the cross-app numbers — `plex_hw_transcodes`,
+`tdarr_gpu_workers`, `tunarr_streams`, `apps_on_gpu` and `overlap` — so they chart like
+anything else, and offers two alert rules, both **off until you add them**: *Tdarr is
+competing with Plex for the GPU* (`overlap` for 10 minutes: Tdarr GPU workers busy while Plex
+has at least one hardware transcode) and *The GPU is flat out* (busy above 90% for 15
+minutes, where load is visible). The card itself works without the connection; it just
+cannot show load.
+
+Plex and Tautulli describe the same server, so a Tautulli connection only stands in for Plex
+when no Plex connection is answering — two rows saying the same two transcodes would be
+counted as four. Tdarr's `workers` now counts busy workers only: a worker Tdarr marks
+`idle` is waiting for a file, not working on one.
 
 ### Controls — the ones that do something back
 
@@ -1459,6 +1525,7 @@ greys out the rest with the reason.
 | Forecast vs reality | Weather forecast + a station — yesterday's forecast scored against your own thermometer |
 | NAS overview | QNAP |
 | Plex — now playing | Plex |
+| GPU — who's using Quick Sync | nothing — Plex (or Tautulli), Tdarr and Tunarr on a shared Intel GPU: who has what on it, how busy it is where that can be seen, and a warning when they collide. See [A GPU shared by Plex, Tdarr and Tunarr](#a-gpu-shared-by-plex-tdarr-and-tunarr) |
 | Jellyfin — now playing | Jellyfin |
 | Download queue | Sonarr, Radarr — what is downloading right now, with progress |
 | What's on this week | Sonarr, Radarr — upcoming episodes and films, grouped by day |

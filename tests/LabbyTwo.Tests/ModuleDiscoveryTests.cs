@@ -49,6 +49,7 @@ public class ModuleDiscoveryTests
             "audiobookshelf", "navidrome",
             "sabnzbd", "transmission", "tdarr", "mylar3", "whisparr", "komga",
             "certificate", "github", "mqtt", "steps", "miner", "host",
+            "tunarr", "intel-gpu",
         ];
 
         Assert.Equal(

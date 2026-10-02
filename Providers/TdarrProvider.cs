@@ -39,6 +39,9 @@ public sealed class TdarrProvider(IHttpClientFactory httpFactory) : IConnectionP
         new("transcodes_done", "Transcoded"),
         new("saved_gb", "Space saved", " GB", 1),
         new("workers", "Workers busy"),
+        new("gpu_workers_active", "GPU workers busy"),
+        new("cpu_workers_active", "CPU workers busy"),
+        new("health_workers_active", "Health-check workers busy"),
         new("errors", "Errored"),
         new("latency_ms", "Response time", " ms"),
     ];
@@ -83,19 +86,12 @@ public sealed class TdarrProvider(IHttpClientFactory httpFactory) : IConnectionP
             try
             {
                 using var nodes = await GetAsync(connection, $"{baseUrl}/api/v2/get-nodes", ct);
-                double busy = 0;
+                var workers = ReadWorkers(nodes.RootElement);
 
-                if (nodes.RootElement.ValueKind == JsonValueKind.Object)
-                {
-                    foreach (var node in nodes.RootElement.EnumerateObject())
-                    {
-                        if (node.Value.TryGetProperty("workers", out var workers)
-                            && workers.ValueKind == JsonValueKind.Object)
-                            busy += workers.EnumerateObject().Count();
-                    }
-                }
-
-                metrics["workers"] = busy;
+                metrics["workers"] = workers.Active;
+                metrics["gpu_workers_active"] = workers.Gpu;
+                metrics["cpu_workers_active"] = workers.Cpu;
+                metrics["health_workers_active"] = workers.HealthCheck;
             }
             catch (Exception)
             {
@@ -108,6 +104,7 @@ public sealed class TdarrProvider(IHttpClientFactory httpFactory) : IConnectionP
             var queued = metrics.GetValueOrDefault("queue_transcode");
             var message = queued > 0
                 ? $"{queued:N0} queued, {metrics.GetValueOrDefault("workers"):0} worker(s) busy"
+                  + (metrics.GetValueOrDefault("gpu_workers_active") is > 0 and var onGpu ? $" ({onGpu:0} on the GPU)" : "")
                 : $"{metrics.GetValueOrDefault("files"):N0} files, nothing queued";
 
             return ProbeResult.Up(stopwatch.Elapsed, message, metrics);
@@ -117,6 +114,60 @@ public sealed class TdarrProvider(IHttpClientFactory httpFactory) : IConnectionP
             stopwatch.Stop();
             return ProbeResult.Down(stopwatch.Elapsed, ProbeError.Describe(ex, connection.Settings.Get("url")));
         }
+    }
+
+    /// <summary>What Tdarr's nodes have at work right now, counted by kind.</summary>
+    /// <param name="Active">Every worker with a file in hand.</param>
+    /// <param name="Gpu">Those of a GPU type — transcode or health check — which are the ones sharing Quick Sync with Plex.</param>
+    /// <param name="Cpu">Those of a CPU type.</param>
+    /// <param name="HealthCheck">Those checking files rather than transcoding them, on either.</param>
+    public sealed record Workers(int Active, int Gpu, int Cpu, int HealthCheck);
+
+    /// <summary>
+    /// The workers in a <c>/api/v2/get-nodes</c> answer: an object keyed by node id, each
+    /// node holding a <c>workers</c> object keyed by worker id. A worker's
+    /// <c>workerType</c> is one of <c>transcodegpu</c>, <c>transcodecpu</c>,
+    /// <c>healthcheckgpu</c> and <c>healthcheckcpu</c>, which is the only place Tdarr says
+    /// whether it is on the GPU. A worker marked <c>idle</c> is waiting for a file and is not
+    /// counted; one with no <c>idle</c> at all is, as older builds only listed busy workers.
+    /// </summary>
+    public static Workers ReadWorkers(JsonElement nodes)
+    {
+        int active = 0, gpu = 0, cpu = 0, health = 0;
+        if (nodes.ValueKind != JsonValueKind.Object)
+            return new Workers(0, 0, 0, 0);
+
+        foreach (var node in nodes.EnumerateObject())
+        {
+            if (node.Value.ValueKind != JsonValueKind.Object
+                || !node.Value.TryGetProperty("workers", out var workers)
+                || workers.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (var worker in workers.EnumerateObject())
+            {
+                var w = worker.Value;
+                if (w.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (w.TryGetProperty("idle", out var idle) && idle.ValueKind == JsonValueKind.True)
+                    continue;
+
+                active++;
+                var type = w.TryGetProperty("workerType", out var t) && t.ValueKind == JsonValueKind.String
+                    ? t.GetString()?.ToLowerInvariant() ?? ""
+                    : "";
+                if (type.EndsWith("gpu", StringComparison.Ordinal))
+                    gpu++;
+                else if (type.EndsWith("cpu", StringComparison.Ordinal))
+                    cpu++;
+                if (type.StartsWith("healthcheck", StringComparison.Ordinal))
+                    health++;
+            }
+        }
+
+        return new Workers(active, gpu, cpu, health);
     }
 
     private async Task<JsonDocument> CruddbAsync(Connection connection, string baseUrl, string body, CancellationToken ct)
