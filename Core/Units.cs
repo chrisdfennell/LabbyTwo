@@ -340,6 +340,12 @@ public static class Units
     /// </summary>
     public static string Format(double value, string unit, int decimals, Preferences prefs)
     {
+        // A hashrate or a difficulty picks its own scale — see MinerUnits. No preference
+        // applies to either, and a fixed number of decimals would print a lottery miner's
+        // 0.00084 GH/s as "0.00".
+        if (MinerUnits.TryFormat(value, unit, out var mined))
+            return mined;
+
         var (converted, shown) = Display(value, unit, prefs);
         return converted.ToString($"F{decimals}") + shown;
     }

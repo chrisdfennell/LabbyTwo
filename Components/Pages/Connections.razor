@@ -62,9 +62,17 @@
             <a class="btn btn-sm btn-outline-secondary" href="settings/connections/map"
                title="What sits behind what, and what an outage takes down with it">🗺️ Map</a>
         }
+        <button class="btn btn-sm btn-outline-secondary" data-action="find-miners"
+                title="Look for NMMiner and Bitaxe miners on a network you choose"
+                @onclick="() => _findingMiners = !_findingMiners">⛏️ Find miners</button>
         <button class="btn btn-sm btn-primary" @onclick="() => _picking = true">+ Add connection</button>
     </div>
 </div>
+
+@if (_findingMiners)
+{
+    <MinerFinder Connections="_connections" OnAdd="AddFoundMiner" OnClose="() => _findingMiners = false" />
+}
 
 @* Services running on the Docker hosts that LabbyTwo has an integration for. Above the
    list, because the moment it is useful is the moment the list is short. *@
@@ -501,6 +509,28 @@ else
         _draftProvider = found.Provider;
         _draft = ServiceDiscovery.Draft(found, _connections);
         _draftIntro = ServiceDiscovery.Intro(found);
+    }
+
+    private bool _findingMiners;
+
+    /// <summary>
+    /// "Add" on a miner the scan found: the ordinary editor with the address and a name
+    /// filled in. Its hostname when it has one, since that is what its own screen calls it.
+    /// </summary>
+    private void AddFoundMiner(FoundMiner found)
+    {
+        if (Registry.Provider("miner") is not { } provider)
+            return;
+
+        _draftProvider = provider;
+        _draft = new Connection
+        {
+            Provider = provider.Type,
+            Name = found.Hostname.Length > 0 ? found.Hostname : $"Miner {found.Address}",
+            Icon = provider.Icon,
+            Settings = new SettingsBag { ["address"] = found.Address },
+        };
+        _draftIntro = $"Found {found.Model} at {found.Address}. Test it, rename it if you like, and save.";
     }
 
     protected override void OnParametersSet()

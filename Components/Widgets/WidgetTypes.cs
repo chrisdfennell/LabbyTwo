@@ -509,6 +509,47 @@ public sealed class TunnelWidget : IWidgetType
 }
 
 /// <summary>
+/// One Bitcoin miner: hashrate (reported, or estimated from shares when the miner says
+/// zero), share rate, best difficulty, and a Bitaxe's temperatures and power.
+/// </summary>
+public sealed class MinerWidget : IWidgetType
+{
+    public string Type => "miner";
+    public string DisplayName => "Miner";
+    public string Icon => "⛏️";
+    public string Description => "One NMMiner or Bitaxe: its hashrate, shares per hour, best difficulty and — for a Bitaxe — temperature and power.";
+    public IReadOnlyList<string> ProviderTypes => ["miner"];
+    public int DefaultWidth => 4;
+    public Type Component => typeof(MinerCard);
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show_details", "Show the details", FieldKind.Bool, Default: "true",
+            Help: "Model, firmware, pool and worker under the numbers. The payout address stays shortened unless the connection says otherwise."),
+    ];
+}
+
+/// <summary>
+/// Every miner added up. Bound to no connection on purpose, like the total card: it finds
+/// every miner connection itself, so the next one added joins the total with no edit.
+/// </summary>
+public sealed class MinersWidget : IWidgetType
+{
+    public string Type => "miners";
+    public string DisplayName => "Miners";
+    public string Icon => "⛏️";
+    public string Description => "All your miners at once: total hashrate, total shares per hour, the best difficulty any of them has found, and which are offline.";
+    public int DefaultWidth => 4;
+    public Type Component => typeof(MinersCard);
+
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("show_list", "List each miner", FieldKind.Bool, Default: "true",
+            Help: "One line per miner under the totals, with its own hashrate and status."),
+    ];
+}
+
+/// <summary>
 /// Recent workflow runs. Bound to GitHub by name rather than to a capability, because
 /// GitHub is the only thing here that reports runs — see the note on <see cref="CiRun"/>.
 /// </summary>

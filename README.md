@@ -221,6 +221,7 @@ only → select all → Silence" means the rows in front of you and not the twen
 | **cloudflared (local)** | The same tunnel asked from the inside: connections, data centres, requests and errors per minute, straight from the cloudflared container's metrics port. No Cloudflare account or token — see [Watching cloudflared without a token](#watching-cloudflared-without-a-token). |
 | **OPNsense** | Gateway packet loss and latency, WAN addresses, memory. The router is never "down"; it just starts dropping things. |
 | **Shelly** | Power draw, energy used and temperature, straight off the plug. No cloud, no broker. Gen1 and Gen2 both. |
+| **Bitcoin miner (NMMiner / Bitaxe)** | Hashrate, shares accepted and rejected, shares per hour, best difficulty, WiFi signal — and a Bitaxe's temperatures, power and fan. Works out a hashrate from accepted shares too, for when the miner's own figure says zero. **Restarts a Bitaxe.** See [Bitcoin miners](#bitcoin-miners). |
 | **Weather forecast** | Up to sixteen days of highs, lows, gusts, UV and snow from Open-Meteo, plus the next 48 hours one hour at a time. No API key, and the half a weather station cannot tell you. |
 | **Weather warnings (US)** | Tornado, flood, winter-storm and heat warnings from the National Weather Service, pushed to your alert channels within five minutes — and past quiet hours when they are severe. |
 | **Air quality** | AQI, PM2.5, ozone and dust from Open-Meteo, with the band and the health advice spelled out. No API key. |
@@ -332,6 +333,59 @@ not connected the connection shows as down, and the suggested rule **The tunnel 
 card, charts and rules work with either, and running both is fine: the API sees every
 tunnel from outside, this sees one connector from inside.
 
+#### Bitcoin miners
+
+The **Bitcoin miner** connection reads an NMMiner
+(the ESP32 "lottery" miners) or anything running AxeOS — the Bitaxe family and its clones.
+Give it the miner's IP address; both answer `GET /api/system/info` on port 80, and which one
+answered is worked out from the shape of the reply, so one kind of connection covers a drawer
+of mixed miners. No pool account or API key is involved.
+
+Have several? **⛏️ Find miners** on the Connections page asks every address in a network you
+type (`192.168.86.0/24`, up to a /24) for `/api/system/info` — sixteen at a time, one second
+each, only when you press it — and offers to add each miner it finds, pre-filled. NMMiner does
+not announce itself on the network, so asking is the only way to find one.
+
+| Metric | What it is |
+|---|---|
+| `hashrate_ghs` | The miner's own hashrate, read as GH/s (the AxeOS convention). Shown in whatever unit fits — `840 KH/s`, `1.21 TH/s`. |
+| `est_hashrate_ghs` | Hashrate worked out from accepted shares (below). |
+| `shares_accepted`, `shares_rejected`, `reject_percent` | Counters since the miner booted, and the rejected share of them. |
+| `shares_per_hour` | Accepted shares over roughly the last fifteen minutes. None on the first probe. |
+| `best_diff_session`, `best_diff_ever` | Best share difficulty since boot and ever, shown as miners write them — `306.59`, `4.29G`. |
+| `network_diff`, `pool_diff` | Bitcoin's difficulty (`132.8T`) and the share difficulty the pool set. |
+| `block_hits`, `new_blocks` | Blocks found, and how many since the last probe — which is what the **Block found!** rule watches. |
+| `uptime_hours`, `wifi_rssi`, `free_heap_kb` | Since boot; WiFi signal in dBm; free ESP32 memory. |
+| `temp_c`, `vr_temp_c`, `power_w`, `fan_rpm` | A Bitaxe's ASIC and regulator temperatures, power and fan. NMMiner reports none. |
+
+**Why two hashrates.** An NMMiner has been seen answering `hashRate: 0` while its accepted
+shares kept climbing, so the reported figure cannot be the only one. A share at difficulty *d*
+takes, on average, *d* × 2³² hashes to find — that is what difficulty means — so accepted
+shares per second × pool difficulty × 2³² is the hashrate it took to find them. The estimate
+is statistical: within a few per cent over fifteen minutes at a few hundred shares an hour,
+jumpy when shares are minutes apart, and zero for a window with none in it. The **Miner** card
+leads with the miner's own figure when it is above zero and with the estimate (marked ≈) when
+it is not. A reboot — the counter or uptime going backwards — starts the history again rather
+than reading as a negative rate.
+
+The payout address in the stratum user is shown shortened — `bc1q8k…dssa.nmminer1` — on cards,
+in the connection's details and in the Test result, unless **Show the full payout address** is
+turned on for that connection. LabbyTwo never logs it.
+
+Suggested rules: **No shares accepted for 30 min**, **Rejected shares high** (over 5% for half
+an hour), **Weak WiFi** (below −80 dBm for 15 minutes), **Running hot** (a Bitaxe over 70 °C) and
+**Block found!**, which sends once per block. A miner that stops answering is down like any
+other connection, so it needs no rule of its own. A Bitaxe also gets a **Restart miner**
+button; an NMMiner does not, because its API has never been seen to offer one.
+
+Cards: **Miner** for one, and **Miners** for all of them at once — total hashrate, total shares
+per hour, the best difficulty any of them has found, and which are offline. In a note:
+
+```
+{{metric: "NMMiner 1" / est_hashrate_ghs}}
+{{table: "NMMiner 1", "NMMiner 2" / status, est_hashrate_ghs, shares_per_hour, best_diff_ever}}
+```
+
 ### Controls — the ones that do something back
 
 Most providers only read. A few can also be told to do something, and where they can, the
@@ -346,6 +400,7 @@ Today that means:
 |---|---|
 | **QNAP NAS** | Restart · shut down · wake on LAN |
 | **Pi-hole** | Pause blocking for a while · resume blocking |
+| **Bitcoin miner** | Restart — for AxeOS miners (Bitaxe and compatible) only |
 
 Three things happen around every one of them, so no provider has to remember them:
 
