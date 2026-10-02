@@ -1,0 +1,398 @@
+@inject HomeAssistantBridge Bridge
+@inject ConfigStore Config
+@inject Registry Registry
+@inject HealthMonitor Health
+@inject Offload Offload
+@inject IHostApplicationLifetime Lifetime
+@implements IDisposable
+
+@* Home Assistant over MQTT. Its own component, like the outside alarm beside it, because
+   Settings.razor is long enough — and because it is about where LabbyTwo sends things,
+   not about anything it watches. Everything it reads to draw itself is in memory: the
+   connections come from the store's cache, the metrics from the monitor. *@
+
+<div class="widget" id="home-assistant">
+    <div class="widget-head">
+        <h2 class="widget-title">Home Assistant (MQTT)</h2>
+        <span class="tile-meta">@HeadText</span>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            Publish LabbyTwo into Home Assistant through your MQTT broker — the Mosquitto add-on is the usual one.
+            Each connection appears as a device with a connectivity sensor, and the lab as a whole gets sensors for
+            “anything down”, alerts, maintenance, late backups and open incidents, ready for automations.
+            Nothing is sent until you switch it on.
+        </p>
+
+        @if (!_loaded)
+        {
+            <div class="tile-meta">Loading…</div>
+        }
+        else
+        {
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" id="ha-enabled" @bind="_enabled" />
+                <label class="form-check-label" for="ha-enabled">Publish to Home Assistant</label>
+            </div>
+
+            <div class="row g-2">
+                <div class="col-12 col-lg-6">
+                    <label class="form-label" for="ha-host">Broker address</label>
+                    <input id="ha-host" class="form-control" @bind="_host" placeholder="192.168.1.20 or homeassistant.local" autocomplete="off" />
+                </div>
+                <div class="col-6 col-lg-2">
+                    <label class="form-label" for="ha-port">Port</label>
+                    <input id="ha-port" type="number" class="form-control" @bind="_port" min="1" max="65535" />
+                </div>
+                <div class="col-6 col-lg-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="ha-tls" @bind="_tls" />
+                        <label class="form-check-label" for="ha-tls">Use TLS</label>
+                    </div>
+                </div>
+                <div class="col-12 col-lg-6">
+                    <label class="form-label" for="ha-user">Username</label>
+                    <input id="ha-user" class="form-control" @bind="_username" autocomplete="off" />
+                </div>
+                <div class="col-12 col-lg-6">
+                    <label class="form-label" for="ha-password">Password</label>
+                    <input id="ha-password" type="password" class="form-control" @bind="_password" autocomplete="new-password"
+                           placeholder="@(_saved.Password.Length > 0 ? "Unchanged — leave blank to keep it" : "")" />
+                    <div class="form-text">Stored encrypted, like connection passwords, and never shown again.</div>
+                </div>
+                <div class="col-6 col-lg-4">
+                    <label class="form-label" for="ha-prefix">Discovery prefix</label>
+                    <input id="ha-prefix" class="form-control font-monospace" @bind="_prefix" placeholder="@HaSettings.DefaultDiscoveryPrefix" />
+                </div>
+                <div class="col-6 col-lg-4">
+                    <label class="form-label" for="ha-base">Base topic</label>
+                    <input id="ha-base" class="form-control font-monospace" @bind="_base" placeholder="@HaSettings.DefaultBaseTopic" />
+                </div>
+                <div class="col-12 col-lg-4">
+                    <label class="form-label" for="ha-refresh">Send everything again every</label>
+                    <select id="ha-refresh" class="form-select" @bind="_refresh">
+                        @foreach (var (minutes, label) in Refreshes)
+                        {
+                            <option value="@minutes">@label</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="form-text">
+                Leave the discovery prefix as it is unless you changed it in Home Assistant. Changes are sent as they
+                happen; the full resend is only a safety net.
+            </div>
+
+            <h3 class="h6 mt-3">What to publish</h3>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="ha-which" id="ha-all" checked="@_allConnections"
+                       @onchange="() => _allConnections = true" />
+                <label class="form-check-label" for="ha-all">Every connection</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="ha-which" id="ha-chosen" checked="@(!_allConnections)"
+                       @onchange="() => _allConnections = false" />
+                <label class="form-check-label" for="ha-chosen">Only the ones I tick</label>
+            </div>
+            @if (!_allConnections)
+            {
+                <div class="ha-choices border rounded p-2 mt-1" style="max-height: 14rem; overflow-y: auto;">
+                    @foreach (var connection in _connections)
+                    {
+                        var id = connection.Id;
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="ha-c-@id" checked="@_chosen.Contains(id)"
+                                   @onchange="e => Toggle(_chosen, id, e.Value is true)" />
+                            <label class="form-check-label" for="ha-c-@id">@connection.Name</label>
+                        </div>
+                    }
+                </div>
+            }
+
+            <label class="form-label mt-3" for="ha-readings">Readings</label>
+            <select id="ha-readings" class="form-select" @bind="_readings">
+                <option value="@HaReadings.Status">Up or down only</option>
+                <option value="@HaReadings.Chosen">Up or down, and the metrics I tick</option>
+                <option value="@HaReadings.All">Up or down, and every metric</option>
+            </select>
+            @if (_readings == HaReadings.Chosen)
+            {
+                <div class="ha-metrics border rounded p-2 mt-1" style="max-height: 18rem; overflow-y: auto;">
+                    @foreach (var connection in _connections.Where(c => _allConnections || _chosen.Contains(c.Id)))
+                    {
+                        var metrics = MetricsOf(connection);
+                        if (metrics.Count == 0)
+                            continue;
+                        <div class="fw-semibold small mt-1">@connection.Name</div>
+                        @foreach (var spec in metrics)
+                        {
+                            var choice = HaSettings.MetricChoice(connection.Id, spec.Key);
+                            var element = "ha-m-" + HaTopics.Id(choice);
+                            <div class="form-check ms-2">
+                                <input class="form-check-input" type="checkbox" id="@element" checked="@_metrics.Contains(choice)"
+                                       @onchange="e => Toggle(_metrics, choice, e.Value is true)" />
+                                <label class="form-check-label" for="@element">@spec.Label <span class="tile-meta">@spec.Unit.Trim()</span></label>
+                            </div>
+                        }
+                    }
+                </div>
+            }
+            <div class="form-text">
+                Temperatures go out in the unit LabbyTwo stores them in, labelled, and Home Assistant shows them in yours.
+            </div>
+
+            <h3 class="h6 mt-3">Buttons in Home Assistant</h3>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="ha-maint" @bind="_maintenanceButtons" />
+                <label class="form-check-label" for="ha-maint">“Start maintenance (1 hour)” and “End maintenance”</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="ha-actions" @bind="_actionButtons" />
+                <label class="form-check-label" for="ha-actions">Each connection's safe actions, like Wake on LAN or Resume blocking</label>
+            </div>
+            <div class="form-text">
+                Off unless you tick them. Anyone who can use your Home Assistant — or publish to your broker — can press these.
+                Never offered: anything marked dangerous, anything that asks a question first, anything that takes a machine
+                offline, and any container. Every press is written to the change feed.
+            </div>
+
+            @if (_formError is { Length: > 0 })
+            {
+                <div class="alert alert-warning py-2 mt-2 mb-0">@_formError</div>
+            }
+
+            <div class="d-flex gap-2 flex-wrap mt-3">
+                <button class="btn btn-sm btn-primary" disabled="@_busy" @onclick="SaveAsync">Save</button>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(_busy || _host.Trim().Length == 0)" @onclick="TestAsync">
+                    @(_testing ? "Connecting…" : "Test connection")
+                </button>
+                @if (_saved.Password.Length > 0)
+                {
+                    <button class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="ForgetPasswordAsync">Forget password</button>
+                }
+            </div>
+
+            @if (_tested is { } tested)
+            {
+                <div class="small mt-2 @(tested.Ok ? "text-success" : "text-warning")">@tested.Message</div>
+            }
+
+            @if (_saved.Enabled)
+            {
+                var status = Bridge.Status;
+                <dl class="row mb-0 mt-3 small">
+                    <dt class="col-5 col-md-3 tile-meta">Broker</dt>
+                    <dd class="col-7 col-md-9">
+                        @if (status.Connected)
+                        {
+                            <span class="text-success">✓ Connected</span>
+                            @if (status.ConnectedSince is { } since)
+                            {
+                                <span class="tile-meta"> · since @Ago.Since(since)</span>
+                            }
+                        }
+                        else
+                        {
+                            <span class="text-danger">✗ Not connected</span>
+                        }
+                        <span class="tile-meta"> · @_saved.Host:@_saved.Port</span>
+                    </dd>
+
+                    <dt class="col-5 col-md-3 tile-meta">Last publish</dt>
+                    <dd class="col-7 col-md-9">
+                        @if (status.LastPublishAt is { } at)
+                        {
+                            <span>@Ago.Since(at)</span>
+                            <span class="tile-meta"> · @status.Entities entities · @(status.LastPublishSent == 0 ? "nothing had changed" : $"{status.LastPublishSent} messages")</span>
+                        }
+                        else
+                        {
+                            <span class="tile-meta">Not yet.</span>
+                        }
+                    </dd>
+
+                    @if (status.LastError is { } error && status.LastErrorAt is { } errorAt)
+                    {
+                        <dt class="col-5 col-md-3 tile-meta">Last problem</dt>
+                        <dd class="col-7 col-md-9 @(status.Connected ? "tile-meta" : "text-warning")">@Ago.Since(errorAt): @error</dd>
+                    }
+
+                    @if (status.LastCommand is { } command && status.LastCommandAt is { } commandAt)
+                    {
+                        <dt class="col-5 col-md-3 tile-meta">Last button</dt>
+                        <dd class="col-7 col-md-9">@Ago.Since(commandAt): @command</dd>
+                    }
+                </dl>
+                <div class="form-text">
+                    Problems are written to the log and shown here, not sent to your alert channels — one of those may be
+                    Home Assistant itself. Switching this off removes LabbyTwo's entities from Home Assistant.
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private static readonly (int Minutes, string Label)[] Refreshes =
+    [
+        (5, "5 minutes"),
+        (10, "10 minutes"),
+        (30, "30 minutes"),
+        (60, "hour"),
+    ];
+
+    private HaSettings _saved = HaSettings.Off;
+    private IReadOnlyList<Connection> _connections = [];
+    private bool _loaded;
+
+    private bool _enabled;
+    private string _host = "";
+    private int _port = HaSettings.DefaultPort;
+    private bool _tls;
+    private string _username = "";
+    private string _password = "";
+    private string _prefix = HaSettings.DefaultDiscoveryPrefix;
+    private string _base = HaSettings.DefaultBaseTopic;
+    private int _refresh = HaSettings.DefaultRefreshMinutes;
+    private bool _allConnections = true;
+    private HashSet<string> _chosen = [];
+    private HaReadings _readings = HaReadings.Status;
+    private HashSet<string> _metrics = [];
+    private bool _maintenanceButtons;
+    private bool _actionButtons;
+
+    private string? _formError;
+    private (bool Ok, string Message)? _tested;
+    private bool _busy;
+    private bool _testing;
+    private bool _disposed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Bridge.Publisher.StatusChanged += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        (_saved, _connections) = await Offload.Run(async ct =>
+        {
+            var settings = await Bridge.SettingsAsync(ct);
+            var connections = (await Config.ConnectionsAsync(ct)).Where(Health.IsMonitored).ToList();
+            return (settings, (IReadOnlyList<Connection>)connections);
+        });
+
+        _enabled = _saved.Enabled;
+        _host = _saved.Host;
+        _port = _saved.Port;
+        _tls = _saved.Tls;
+        _username = _saved.Username;
+        _password = "";
+        _prefix = _saved.DiscoveryPrefix;
+        _base = _saved.BaseTopic;
+        _refresh = Refreshes.Any(r => r.Minutes == _saved.RefreshMinutes) ? _saved.RefreshMinutes : HaSettings.DefaultRefreshMinutes;
+        _allConnections = _saved.AllConnections;
+        _chosen = [.. _saved.Connections];
+        _readings = _saved.Readings;
+        _metrics = [.. _saved.Metrics];
+        _maintenanceButtons = _saved.MaintenanceButtons;
+        _actionButtons = _saved.ActionButtons;
+        _loaded = true;
+    }
+
+    private string HeadText => !_saved.Enabled
+        ? "Off"
+        : Bridge.Status.Connected ? "On · connected" : "On · not connected";
+
+    /// <summary>What a connection declares and what it has actually reported, once each.</summary>
+    private List<MetricSpec> MetricsOf(Connection connection)
+    {
+        var keys = Registry.MetricsFor(connection).Select(m => m.Key).ToList();
+        if (Health.State(connection.Id)?.Metrics is { } live)
+            keys.AddRange(live.Keys);
+        return [.. keys.Distinct(StringComparer.OrdinalIgnoreCase).Select(k => Registry.Metric(connection, k)).OrderBy(m => m.Label, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    private static void Toggle(HashSet<string> set, string value, bool on)
+    {
+        if (on)
+            set.Add(value);
+        else
+            set.Remove(value);
+    }
+
+    private HaSettings FromForm() => new(
+        _enabled, _host.Trim(), _port, _tls, _username.Trim(), _password, _prefix, _base,
+        _allConnections, _chosen, _readings, _metrics, _maintenanceButtons, _actionButtons, _refresh);
+
+    private async Task SaveAsync()
+    {
+        var chosen = FromForm();
+        if (chosen.Problem() is { } problem)
+        {
+            _formError = problem;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await Offload.Run(async ct => { await Bridge.SaveAsync(chosen, ct: ct); return true; });
+            _formError = null;
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ForgetPasswordAsync()
+    {
+        _busy = true;
+        try
+        {
+            var chosen = FromForm() with { Password = "" };
+            await Offload.Run(async ct => { await Bridge.SaveAsync(chosen, clearPassword: true, ct); return true; });
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TestAsync()
+    {
+        _busy = _testing = true;
+        _tested = null;
+        try
+        {
+            // A blank password in the form means "the one saved", the same as Save.
+            var chosen = FromForm();
+            if (chosen.Password.Length == 0)
+                chosen = chosen with { Password = _saved.Password };
+            _tested = await Task.Run(() => HomeAssistantBridge.TestAsync(chosen, Lifetime.ApplicationStopping));
+        }
+        catch (Exception ex)
+        {
+            _tested = (false, ex.GetBaseException().Message);
+        }
+        finally
+        {
+            _busy = _testing = false;
+        }
+    }
+
+    private void OnChanged()
+    {
+        if (!_disposed)
+            _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Bridge.Publisher.StatusChanged -= OnChanged;
+    }
+}
