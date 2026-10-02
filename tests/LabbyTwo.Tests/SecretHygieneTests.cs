@@ -326,6 +326,12 @@ public sealed class SecretHygieneTests : IAsyncDisposable
 
     private volatile bool _refuseInspect;
 
+    // Inspects in flight, counted here rather than by ScriptedDocker: that one counts every
+    // request the port receives, and on a busy runner a port just freed by another test can
+    // still be reached by that test's pollers, which pushed its count past the cap now and then.
+    private int _inspecting;
+    private int _maxInspecting;
+
     public SecretHygieneTests()
     {
         _docker = new ScriptedDocker(HandleAsync);
@@ -379,8 +385,21 @@ public sealed class SecretHygieneTests : IAsyncDisposable
                 await ScriptedDocker.Forbidden(context);
                 return;
             }
-            // Slow enough that the inspects overlap, so the cap is what limits them.
-            await Task.Delay(30);
+            var now = Interlocked.Increment(ref _inspecting);
+            int seen;
+            while ((seen = Volatile.Read(ref _maxInspecting)) < now &&
+                   Interlocked.CompareExchange(ref _maxInspecting, now, seen) != seen)
+            {
+            }
+            try
+            {
+                // Slow enough that the inspects overlap, so the cap is what limits them.
+                await Task.Delay(30);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inspecting);
+            }
             var id = Uri.UnescapeDataString(path.Split('/')[^2]);
             var name = id.EndsWith("0123456789abcdef", StringComparison.Ordinal) ? id[..^16] : id;
             if (_containers.TryGetValue(name, out var container))
@@ -448,7 +467,7 @@ public sealed class SecretHygieneTests : IAsyncDisposable
         var report = await Get<SecretHygiene>().CheckAsync();
 
         Assert.Equal(17, report.Containers);
-        Assert.InRange(_docker.MaxInFlight, 1, SecretHygiene.Concurrency);
+        Assert.InRange(_maxInspecting, 1, SecretHygiene.Concurrency);
     }
 
     [Fact]
