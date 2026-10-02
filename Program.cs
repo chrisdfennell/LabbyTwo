@@ -253,6 +253,12 @@ builder.Services.AddSingleton<ScheduledActionStore>();
 builder.Services.AddSingleton<IScheduledActionPlans, ScheduledActionPlans>();
 builder.Services.AddSingleton<ScheduledActions>();
 
+// Home Assistant over MQTT discovery: LabbyTwo's connections and the lab's state published
+// to the house's broker, and — only if asked for — a few buttons back. Off until switched on
+// in Settings; it sends nothing at all before then.
+builder.Services.AddSingleton<HomeAssistantBridge>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<HomeAssistantBridge>());
+
 // Anything a module contributed as an IBackgroundJob. One runner for all of them, so a
 // plugin's nightly tidy-up cannot hang startup or take the process down with it.
 builder.Services.AddSingleton<BackgroundJobRunner>();

@@ -97,6 +97,12 @@ public static class ChangeKinds
     /// <summary>Somebody reset a checklist in a note, a Markdown card or a custom page's Markdown block — see <see cref="Checklists"/>.</summary>
     public const string Checklist = "checklist";
 
+    /// <summary>
+    /// A button pressed in Home Assistant reached LabbyTwo — run, failed, refused or ignored.
+    /// See <see cref="LabbyTwo.Services.HomeAssistantBridge"/>.
+    /// </summary>
+    public const string HomeAssistant = "homeassistant";
+
     /// <summary>Every kind, in the order the filter offers them, with the words a person uses.</summary>
     public static readonly IReadOnlyList<(string Key, string Label)> All =
     [
@@ -114,6 +120,7 @@ public static class ChangeKinds
         (Scheduled, "Scheduled actions"),
         (Command, "Commands run from notes"),
         (Checklist, "Checklists reset"),
+        (HomeAssistant, "Buttons pressed in Home Assistant"),
     ];
 
     /// <summary>
@@ -140,6 +147,7 @@ public static class ChangeKinds
             "scheduled" or "schedule" or "schedules" => Scheduled,
             "command" or "commands" or "ssh" or "runbook" or "runbooks" => Command,
             "checklist" or "checklists" => Checklist,
+            "homeassistant" or "home-assistant" or "ha" or "hass" => HomeAssistant,
             _ => null,
         };
     }
