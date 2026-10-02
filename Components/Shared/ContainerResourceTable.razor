@@ -1,0 +1,216 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject SharedSeries Series
+
+@* The Containers tab's "Resources" view: every running container's CPU, memory, disk and
+   network from the resource poller's last round, sortable, with the last hour drawn for the
+   ones that are kept in history.
+
+   Drawn from memory: the readings are ContainerResourceSnapshots, which the poller keeps.
+   The only database reads are the sparklines, through SharedSeries — off the render thread,
+   shared with every other card asking for the same series, and reused for most of a minute
+   (a new point lands once a round) — and only for the handful of recorded containers. *@
+
+@if (_snapshot is null)
+{
+    <p class="tile-meta" data-resources-empty>
+        @if (Seconds == 0)
+        {
+            @("Resource polling is off for this Docker connection — turn it on under its advanced settings.")
+        }
+        else
+        {
+            @($"No readings yet. The first arrive within {Seconds} seconds, and CPU and rates the round after, since they are worked out from two readings.")
+        }
+    </p>
+}
+else
+{
+    @if (_snapshot.Error is { } error)
+    {
+        <div class="alert alert-warning py-2" role="status">@error</div>
+    }
+    var rows = Sorted();
+    <div class="table-responsive">
+        <table class="table table-sm align-middle ct-resources mb-1" data-resources>
+            <thead>
+                <tr>
+                    @Header(Column.Name, "Container")
+                    @Header(Column.Cpu, "CPU")
+                    @Header(Column.Memory, "Memory")
+                    @Header(Column.Read, "Disk read")
+                    @Header(Column.Write, "Disk write")
+                    @Header(Column.Network, "Network")
+                    @Header(Column.Pids, "PIDs")
+                    <th scope="col" class="tile-meta fw-normal">Last hour</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in rows)
+                {
+                    var recorded = _snapshot.Recorded.Contains(row.Name);
+                    <tr @key="row.Id" data-row="@row.Name">
+                        <td class="text-truncate" style="max-width: 14rem">
+                            <strong>@row.Name</strong>
+                            @if (recorded)
+                            {
+                                <span class="tile-meta" title="Among the busiest (or pinned), so kept in history and chartable as container_cpu:@VolumeMetric.Slug(row.Name)"> ●</span>
+                            }
+                        </td>
+                        <td data-cpu>@(row.CpuPercent is { } cpu ? $"{cpu:0.0}%" : "–")</td>
+                        <td>
+                            @DockerContainers.Bytes(row.MemoryUsed)
+                            @if (row.MemoryPercent(_snapshot.HostMemory) is { } percent)
+                            {
+                                <span class="tile-meta">(@percent.ToString("0")% of limit)</span>
+                            }
+                        </td>
+                        <td data-read>@Rate(row.ReadPerSecond)</td>
+                        <td data-write>@Rate(row.WritePerSecond)</td>
+                        <td class="text-nowrap">
+                            @if (row.RxPerSecond is { } rx && row.TxPerSecond is { } tx)
+                            {
+                                <span>↓@ContainerUsage.Rate(rx) ↑@ContainerUsage.Rate(tx)</span>
+                            }
+                            else
+                            {
+                                <span class="tile-meta">–</span>
+                            }
+                        </td>
+                        <td>@(row.Pids?.ToString() ?? "–")</td>
+                        <td style="min-width: 7rem">
+                            @if (_sparks.TryGetValue(row.Name, out var spark) && spark.Count > 1)
+                            {
+                                <Sparkline Values="spark" Unit="%" Decimals="0" Label="@($"{row.Name} CPU, last hour")" />
+                            }
+                            else
+                            {
+                                <span class="tile-meta" title="Only the busiest containers, and any pinned, are kept in history.">—</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="tile-meta mb-0" data-resources-cost>
+        @rows.Count running · read every @((int)_snapshot.Interval.TotalSeconds) s, last round @Ago.Since(_snapshot.At.ToLocalTime())
+        took @_snapshot.Took.TotalMilliseconds.ToString("0") ms for @_snapshot.Requests request@(_snapshot.Requests == 1 ? "" : "s").
+        ● marks the @_snapshot.Recorded.Count kept in history: the busiest by CPU or disk, and any pinned.
+    </p>
+}
+
+@code {
+    [Parameter, EditorRequired] public Connection Docker { get; set; } = default!;
+
+    private enum Column { Name, Cpu, Memory, Read, Write, Network, Pids }
+
+    private ContainerResourceSnapshot? _snapshot;
+    private Column _sort = Column.Cpu;
+    private bool _descending = true;
+    private Dictionary<string, IReadOnlyList<double>> _sparks = [];
+    private long _sparkRound = -1;
+    private readonly CancellationTokenSource _gone = new();
+
+    private int Seconds => ContainerUsage.Seconds(Docker.Settings.GetInt("stats_seconds", ContainerUsage.DefaultSeconds));
+
+    protected override void OnInitialized() => Health.Updated += OnSweep;
+
+    protected override void OnParametersSet() => Refresh();
+
+    private void OnSweep() => _ = InvokeAsync(() =>
+    {
+        if (_gone.IsCancellationRequested)
+            return;
+        Refresh();
+        StateHasChanged();
+    });
+
+    private void Refresh()
+    {
+        _snapshot = ContainerResourceSnapshots.Get(Docker.Id);
+        if (_snapshot is { } snapshot && snapshot.Round != _sparkRound && RendererInfo.IsInteractive)
+        {
+            _sparkRound = snapshot.Round;
+            _ = LoadSparksAsync(snapshot);
+        }
+    }
+
+    /// <summary>The recorded containers' last hour, off the render thread, a few seconds behind the table at most.</summary>
+    private async Task LoadSparksAsync(ContainerResourceSnapshot snapshot)
+    {
+        var sparks = new Dictionary<string, IReadOnlyList<double>>();
+        try
+        {
+            foreach (var name in snapshot.Recorded)
+            {
+                var samples = await Series.SamplesAsync(Docker.Id, ContainerUsage.KeyFor(ContainerUsage.CpuMetric, name),
+                    TimeSpan.FromHours(1), TimeSpan.FromSeconds(55), _gone.Token);
+                sparks[name] = [.. samples.Select(s => s.Value)];
+            }
+            await InvokeAsync(() =>
+            {
+                _sparks = sparks;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private IReadOnlyList<ContainerReading> Sorted()
+    {
+        var running = _snapshot!.Running.ToList();
+        Func<ContainerReading, double> key = _sort switch
+        {
+            Column.Cpu => r => r.CpuPercent ?? -1,
+            Column.Memory => r => r.MemoryUsed,
+            Column.Read => r => r.ReadPerSecond ?? -1,
+            Column.Write => r => r.WritePerSecond ?? -1,
+            Column.Network => r => (r.RxPerSecond ?? 0) + (r.TxPerSecond ?? 0),
+            Column.Pids => r => r.Pids ?? 0,
+            _ => _ => 0,
+        };
+        if (_sort == Column.Name)
+            return _descending
+                ? [.. running.OrderByDescending(r => r.Name, StringComparer.OrdinalIgnoreCase)]
+                : [.. running.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)];
+        return _descending
+            ? [.. running.OrderByDescending(key).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)]
+            : [.. running.OrderBy(key).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    private void SortBy(Column column)
+    {
+        if (_sort == column)
+            _descending = !_descending;
+        else
+        {
+            _sort = column;
+            _descending = column != Column.Name;
+        }
+    }
+
+    private RenderFragment Header(Column column, string label) => __builder =>
+    {
+        <th scope="col" aria-sort="@(_sort == column ? (_descending ? "descending" : "ascending") : "none")">
+            <button type="button" class="btn btn-link btn-sm p-0 text-reset text-decoration-none fw-semibold"
+                    data-sort="@column.ToString().ToLowerInvariant()" @onclick="() => SortBy(column)">
+                @label@(_sort == column ? (_descending ? " ↓" : " ↑") : "")
+            </button>
+        </th>
+    };
+
+    private static string Rate(double? bytesPerSecond) => bytesPerSecond is { } rate ? ContainerUsage.Rate(rate) : "–";
+
+    public void Dispose()
+    {
+        Health.Updated -= OnSweep;
+        _gone.Cancel();
+        _gone.Dispose();
+    }
+}

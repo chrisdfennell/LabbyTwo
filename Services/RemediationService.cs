@@ -489,7 +489,7 @@ public sealed class RemediationService(
     }
 
     private static string Subject(Remediation remediation) =>
-        remediation.Kind == RemediationKind.RestartContainer ? remediation.Container : remediation.ActionId;
+        remediation.IsContainer ? remediation.Container : remediation.ActionId;
 
     /// <summary>The trigger a stored alert key answers to: <c>status:{c}</c> → <c>down:{c}</c>, <c>rule:{r}:{c}</c> → <c>rule:{r}</c>.</summary>
     public static string TriggerOf(string alertKey)

@@ -28,6 +28,14 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
         /// </summary>
         public bool Transcoding { get; init; }
 
+        /// <summary>
+        /// Whether that conversion is running on the GPU (Quick Sync, VAAPI, NVENC). Plex's
+        /// <c>transcodeHwRequested</c> only says hardware was <em>allowed</em> — a session it
+        /// fell back to software on still carries it — so this goes by what is actually doing
+        /// the work: a hardware decoder or encoder named, or the full hardware pipeline.
+        /// </summary>
+        public bool HardwareTranscode { get; init; }
+
         /// <summary>The series, for an episode; null for a film or a track.</summary>
         public string? Series { get; init; }
 
@@ -42,6 +50,8 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
     public IReadOnlyList<MetricSpec> Metrics =>
     [
         new("stream_count", "Active streams"),
+        new("transcodes_hw", "Hardware transcodes"),
+        new("transcodes_sw", "Software transcodes"),
         new("latency_ms", "Response time", " ms"),
     ];
 
@@ -66,6 +76,9 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
             {
                 ["latency_ms"] = stopwatch.Elapsed.TotalMilliseconds,
                 ["stream_count"] = sessions.Count,
+                // Counted from the same answer, for the GPU card: who is on Quick Sync.
+                ["transcodes_hw"] = sessions.Count(s => s.HardwareTranscode),
+                ["transcodes_sw"] = sessions.Count(s => s.Transcoding && !s.HardwareTranscode),
             };
             var message = sessions.Count switch
             {
@@ -106,6 +119,9 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
             // A show reports the episode as title and the series as grandparentTitle; a
             // movie has neither, so fall back to the year for the second line.
             var series = video.Attribute("grandparentTitle")?.Value;
+            var transcode = video.Element("TranscodeSession");
+            var transcoding = transcode is not null
+                              && (Is(transcode, "videoDecision", "transcode") || Is(transcode, "audioDecision", "transcode"));
             sessions.Add(new Session(
                 video.Attribute("title")?.Value ?? "Unknown",
                 series ?? video.Attribute("year")?.Value ?? "",
@@ -114,13 +130,31 @@ public sealed class PlexProvider(IHttpClientFactory httpFactory) : IConnectionPr
                 duration > 0 ? offset / duration * 100 : 0)
             {
                 Series = series,
-                Transcoding = video.Element("TranscodeSession") is { } transcode
-                              && (string.Equals(transcode.Attribute("videoDecision")?.Value, "transcode", StringComparison.OrdinalIgnoreCase)
-                                  || string.Equals(transcode.Attribute("audioDecision")?.Value, "transcode", StringComparison.OrdinalIgnoreCase)),
+                Transcoding = transcoding,
+                HardwareTranscode = transcoding && IsHardware(transcode!),
             });
         }
         return sessions;
     }
+
+    private static bool Is(XElement element, string attribute, string value) =>
+        string.Equals(element.Attribute(attribute)?.Value, value, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A transcode the GPU is doing. <c>transcodeHwDecoding</c> and <c>transcodeHwEncoding</c>
+    /// name the codec in use ("qsv", "vaapi") when hardware is really engaged and are absent
+    /// when Plex fell back to software; <c>transcodeHwFullPipeline="1"</c> is both at once.
+    /// Hardware decoding with a software encode still counts — the GPU is still busy.
+    /// </summary>
+    private static bool IsHardware(XElement transcode) =>
+        Is(transcode, "transcodeHwFullPipeline", "1")
+        || Is(transcode, "transcodeHwFullPipeline", "true")
+        || Named(transcode, "transcodeHwDecoding")
+        || Named(transcode, "transcodeHwEncoding");
+
+    private static bool Named(XElement element, string attribute) =>
+        element.Attribute(attribute)?.Value.Trim() is { Length: > 0 } value
+        && value is not ("0" or "false" or "none");
 
     private async Task<XElement> GetAsync(Connection connection, string path, CancellationToken ct)
     {

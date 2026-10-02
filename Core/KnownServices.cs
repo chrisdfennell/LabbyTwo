@@ -76,6 +76,7 @@ public static class KnownServices
         S("ersatztv", 8409, "jasongdove/ersatztv", "*/ersatztv"),
         S("unmanic", 8888, "josh5/unmanic", "*/unmanic"),
         S("tdarr", 8265, "haveagitgat/tdarr", "*/tdarr"),
+        S("tunarr", 8000, "chrisbenincasa/tunarr", "*/tunarr"),
         S("audiobookshelf", 80, "advplyr/audiobookshelf", "*/audiobookshelf"),
         S("komga", 25600, "gotson/komga", "*/komga"),
         S("navidrome", 4533, "deluan/navidrome", "*/navidrome"),

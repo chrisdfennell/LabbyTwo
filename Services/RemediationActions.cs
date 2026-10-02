@@ -125,8 +125,8 @@ public sealed class RemediationActions(ConfigStore config, ActionRunner runner, 
 
     public async Task<string> DescribeAsync(Remediation remediation, CancellationToken ct)
     {
-        if (remediation.Kind == RemediationKind.RestartContainer)
-            return $"restart {remediation.Container}";
+        if (remediation.IsContainer)
+            return $"{Words(remediation.ContainerVerb).Present} {Remediation.Describe(remediation.Container)}";
 
         var connection = await config.ConnectionAsync(remediation.TargetConnectionId, ct);
         var action = connection is null ? null : runner.ActionsFor(connection).FirstOrDefault(a => Is(a, remediation.ActionId));
@@ -134,12 +134,12 @@ public sealed class RemediationActions(ConfigStore config, ActionRunner runner, 
     }
 
     public async Task<RemediationPlan> PrepareAsync(Remediation remediation, CancellationToken ct) =>
-        remediation.Kind == RemediationKind.RestartContainer
-            ? await PrepareRestartAsync(remediation, ct)
+        remediation.IsContainer
+            ? await PrepareContainerRemediationAsync(remediation, ct)
             : await PrepareActionAsync(remediation, ct);
 
-    private Task<RemediationPlan> PrepareRestartAsync(Remediation remediation, CancellationToken ct) =>
-        PrepareContainerAsync(remediation.TargetConnectionId, remediation.Container, ContainerAction.Restart,
+    private Task<RemediationPlan> PrepareContainerRemediationAsync(Remediation remediation, CancellationToken ct) =>
+        PrepareContainerAsync(remediation.TargetConnectionId, remediation.Container, remediation.ContainerVerb,
             remediation.AllowProtected, "this remediation", "Self-healing", ct);
 
     /// <summary>
@@ -155,11 +155,28 @@ public sealed class RemediationActions(ConfigStore config, ActionRunner runner, 
     {
         var name = container.Trim();
         var (present, verbs, past, done) = Words(verb);
-        var doing = $"{present} {name}";
-        var did = $"{past} {name}";
+        var doing = $"{present} {Remediation.Describe(name)}";
+        var did = $"{past} {Remediation.Describe(name)}";
 
         if (await config.ConnectionAsync(dockerConnectionId, ct) is not { Provider: "docker" } docker)
             return RemediationPlan.Refuse(doing, did, $"The Docker connection it {verbs} through no longer exists.");
+
+        // "The busiest container" is decided now, from the resource poller's last round in
+        // memory: whichever container is eating the NAS at the moment the alert has held long
+        // enough, not whichever was busiest when the rule was written.
+        if (Remediation.IsBusiestToken(name))
+        {
+            var snapshot = ContainerResourceSnapshots.Get(docker.Id);
+            var busiest = snapshot is null || !snapshot.IsFresh(DateTimeOffset.UtcNow) ? null
+                : name == Remediation.BusiestByDisk ? ContainerUsage.BusiestByDisk(snapshot.Readings)
+                : ContainerUsage.BusiestByCpu(snapshot.Readings);
+            if (busiest is null)
+                return RemediationPlan.Refuse(doing, did,
+                    $"There is no recent reading of the containers on {docker.Name} to tell which is busiest. Is resource polling on?");
+            name = busiest.Name;
+            doing = $"{present} {name}";
+            did = $"{past} {name}";
+        }
 
         var endpoint = docker.Settings.Get("endpoint", DockerSocket.DefaultEndpoint);
         IReadOnlyList<ContainerRow> rows;
@@ -202,6 +219,8 @@ public sealed class RemediationActions(ConfigStore config, ActionRunner runner, 
     {
         ContainerAction.Start => ("start", "starts", "Started", "started"),
         ContainerAction.Stop => ("stop", "stops", "Stopped", "stopped"),
+        ContainerAction.Pause => ("pause", "pauses", "Paused", "paused"),
+        ContainerAction.Unpause => ("unpause", "unpauses", "Unpaused", "unpaused"),
         _ => ("restart", "restarts", "Restarted", "restarted"),
     };
 

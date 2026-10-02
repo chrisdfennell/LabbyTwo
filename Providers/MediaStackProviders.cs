@@ -129,6 +129,8 @@ public sealed class TautulliProvider(IHttpClientFactory httpFactory) : IConnecti
         new("stream_count", "Active streams"),
         new("transcode_count", "Transcoding"),
         new("direct_play_count", "Direct play"),
+        new("transcodes_hw", "Hardware transcodes"),
+        new("transcodes_sw", "Software transcodes"),
         new("bandwidth_mbps", "Total bandwidth", " Mbps", 1),
         new("latency_ms", "Response time", " ms"),
     ];
@@ -181,6 +183,10 @@ public sealed class TautulliProvider(IHttpClientFactory httpFactory) : IConnecti
             if (AsNumber(data, "total_bandwidth") is { } kbps)
                 metrics["bandwidth_mbps"] = kbps / 1000;
 
+            var (hardware, software) = CountTranscodes(data);
+            metrics["transcodes_hw"] = hardware;
+            metrics["transcodes_sw"] = software;
+
             var message = streams == 0
                 ? "Nothing playing"
                 : $"{streams:0} stream(s), {metrics["transcode_count"]:0} transcoding";
@@ -227,6 +233,47 @@ public sealed class TautulliProvider(IHttpClientFactory httpFactory) : IConnecti
                 decision.Length == 0 ? null : string.Equals(decision, "transcode", StringComparison.OrdinalIgnoreCase)));
         }
         return streams;
+    }
+
+    /// <summary>
+    /// The transcodes in <c>get_activity</c>'s sessions, split by what is doing the work.
+    /// Tautulli's <c>stream_count_transcode</c> cannot tell the GPU from the CPU; each
+    /// session's <c>transcode_hw_decoding</c> and <c>transcode_hw_encoding</c> can (1 when
+    /// Plex has the hardware engaged, 0 when it fell back to software). A hardware decode
+    /// with a software encode counts as hardware — the GPU is busy either way. Audio-only
+    /// transcodes are software: they never touch the GPU.
+    /// </summary>
+    public static (int Hardware, int Software) CountTranscodes(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("sessions", out var sessions)
+            || sessions.ValueKind != JsonValueKind.Array)
+        {
+            return (0, 0);
+        }
+
+        int hardware = 0, software = 0;
+        foreach (var session in sessions.EnumerateArray())
+        {
+            if (session.ValueKind != JsonValueKind.Object)
+                continue;
+            var video = Text(session, "stream_video_decision");
+            var overall = Text(session, "transcode_decision");
+            var transcoding = string.Equals(overall, "transcode", StringComparison.OrdinalIgnoreCase)
+                              || string.Equals(video, "transcode", StringComparison.OrdinalIgnoreCase);
+            if (!transcoding)
+                continue;
+
+            // An older Tautulli without the per-stream video decision is taken at its hw flags.
+            var onGpu = (video.Length == 0 || string.Equals(video, "transcode", StringComparison.OrdinalIgnoreCase))
+                        && (AsNumber(session, "transcode_hw_decoding") > 0
+                            || AsNumber(session, "transcode_hw_encoding") > 0
+                            || AsNumber(session, "transcode_hw_full_pipeline") > 0);
+            if (onGpu)
+                hardware++;
+            else
+                software++;
+        }
+        return (hardware, software);
     }
 
     private static string Text(JsonElement element, string name) =>

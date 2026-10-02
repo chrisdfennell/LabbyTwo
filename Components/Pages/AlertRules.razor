@@ -889,7 +889,7 @@ else
     /// <summary>"self-healing: restart plex" under a rule that has one.</summary>
     private string? FixNote(AlertRule rule) =>
         Remediations.Current.FirstOrDefault(f => f.Trigger == Remediation.RuleTrigger(rule.Id)) is { Enabled: true, IsComplete: true } fix
-            ? fix.Kind == RemediationKind.RestartContainer ? $"self-healing: restart {fix.Container}" : "self-healing: runs an action"
+            ? fix.IsContainer ? $"self-healing: {Remediation.StoredKind(fix.Kind)} {Remediation.Describe(fix.Container)}" : "self-healing: runs an action"
             : null;
 
     private string ChannelName(string id) => _channels.FirstOrDefault(c => c.Id == id)?.Name ?? "a deleted channel";

@@ -66,6 +66,8 @@
     </div>
 </div>
 
+<HostPressureCard SuggestPause="@PauseQuery" />
+
 <div class="row g-3">
     <div class="col-lg-6">
         <div class="widget h-100">
@@ -420,6 +422,9 @@
 </div>
 
 @code {
+    /// <summary>From a "the NAS is struggling" notification: the container it suggests pausing.</summary>
+    [SupplyParameterFromQuery(Name = "pause")] public string? PauseQuery { get; set; }
+
     private SystemHealth.LiveStatus _live = null!;
     private SystemHealth.DatabaseStatus? _db;
     private IReadOnlyDictionary<string, string> _names = new Dictionary<string, string>();

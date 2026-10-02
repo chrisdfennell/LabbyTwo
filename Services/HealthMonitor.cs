@@ -336,8 +336,12 @@ public sealed partial class HealthMonitor(
             log.LogError(ex, "A probe listener threw for {Connection}", connection.Name);
         }
 
-        if (result.Metrics is { Count: > 0 } metrics)
+        if (result.Metrics is { Count: > 0 } reported)
         {
+            // Live state keeps everything; history only what the provider says is new.
+            IReadOnlyDictionary<string, double> metrics = result.NotRecorded is { Count: > 0 } skip
+                ? reported.Where(pair => !skip.Contains(pair.Key)).ToDictionary()
+                : reported;
             try
             {
                 await history.RecordAsync(connection.Id, metrics, ct);
