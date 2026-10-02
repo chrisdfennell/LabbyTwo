@@ -31,6 +31,17 @@
             theme of your own from any of them.
         </p>
         <ThemeGallery />
+
+        <hr class="my-3" />
+        <ThemeModePicker />
+
+        <hr class="my-3" />
+        <h3 class="theme-section-title" id="screen-themes">Per screen</h3>
+        <p class="tile-meta mt-0">
+            The wall, the phone view and the family page wear the dashboard's theme unless you
+            give them their own here — and each can have its own light or dark too.
+        </p>
+        <ScreenThemes />
     </div>
 </div>
 
@@ -39,18 +50,8 @@
         <div class="widget h-100">
             <div class="widget-head"><h2 class="widget-title">Colour</h2></div>
             <div class="widget-body">
-                <label class="form-label">Theme</label>
-                <div class="d-flex gap-2 flex-wrap mb-3">
-                    @foreach (var (value, label, hint) in Themes)
-                    {
-                        <button class="btn btn-sm @(_look.Theme == value ? "btn-primary" : "btn-outline-secondary")"
-                                title="@hint" @onclick="() => SaveLiveAsync(Appearance.ThemeKey, value)">@label</button>
-                    }
-                </div>
-
-                <div class="form-text mb-3">
-                    Which end of the theme to show. A theme with only one end, like Dracula, uses it
-                    whatever this says.
+                <div class="form-text mt-0 mb-3">
+                    Light, dark, or switching with the sun or the clock: <a href="settings/appearance#day-night">Day and night</a>, under Themes.
                 </div>
 
                 <label class="form-label" for="accent">Accent colour</label>
@@ -403,7 +404,7 @@
 @if (_confirmReset)
 {
     <ConfirmDialog Title="Reset the appearance?"
-                   Message="Theme, accent, corners, cards, density, text size and typeface all go back to their defaults. The dashboard's name, your units and any themes you made are left alone."
+                   Message="Theme, light and dark, accent, corners, cards, density, text size and typeface all go back to their defaults, and every screen goes back to wearing the dashboard's theme. The dashboard's name, your units and any themes you made are left alone."
                    ConfirmText="Reset it"
                    OnCancel="() => _confirmReset = false"
                    OnConfirm="ResetAsync" />
@@ -428,13 +429,6 @@
     /// </summary>
     private static string Hint((string Value, string Label, string Hint)[] options, string value) =>
         options.FirstOrDefault(option => option.Value == value).Hint ?? "";
-
-    private static readonly (string Value, string Label, string Hint)[] Themes =
-    [
-        ("system", "Follow the OS", "Light or dark, whichever this device is set to"),
-        ("dark", "Dark", "Always dark"),
-        ("light", "Light", "Always light"),
-    ];
 
     private WallOptions _wall = WallOptions.Default;
     private IReadOnlyList<Tab> _tabs = [];
@@ -675,6 +669,13 @@
             [Appearance.TextScaleKey] = defaults.TextScale,
             [Appearance.FontKey] = defaults.Font,
             [Appearance.WideScreensKey] = defaults.WideScreens,
+            // Every screen back to wearing the dashboard's theme and mode.
+            [ThemeService.WallThemeKey] = "",
+            [ThemeService.WallModeKey] = "",
+            [ThemeService.PhoneThemeKey] = "",
+            [ThemeService.PhoneModeKey] = "",
+            [ThemeService.FamilyThemeKey] = "",
+            [ThemeService.FamilyModeKey] = "",
         });
 
         Nav.NavigateTo(Nav.Uri, forceLoad: true);

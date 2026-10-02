@@ -1,0 +1,152 @@
+@implements IDisposable
+@inject ThemeService Themes
+@inject AppSettingsStore AppSettings
+@inject Offload Offload
+
+@* When the dashboard shows its light end and when its dark one: follow the device, always one
+   or the other, follow the sun, or a schedule. Saved without a reload — ThemeSync moves every
+   open page, and ThemeScheduler moves them again at each switch — and the line at the bottom
+   says what that comes to right now and when it next changes, so "follow the sun" is not a
+   promise you have to wait until evening to check. *@
+
+<div class="theme-mode" id="day-night">
+    <h3 class="theme-section-title">Day and night</h3>
+    <div class="d-flex gap-2 flex-wrap mb-1" role="group" aria-label="When to use light and dark">
+        @foreach (var (value, label, hint) in ThemeModes.All)
+        {
+            <button type="button" class="btn btn-sm @(_mode == value ? "btn-primary" : "btn-outline-secondary")"
+                    aria-pressed="@(_mode == value ? "true" : "false")" title="@hint"
+                    @onclick="() => SaveAsync(Appearance.ThemeKey, value)">@label</button>
+        }
+    </div>
+    <div class="form-text mb-2">
+        @(ThemeModes.All.FirstOrDefault(m => m.Value == _mode).Hint)
+        A theme with only one end, like Dracula, uses it whatever this says.
+    </div>
+
+    @if (_mode == ThemeModes.Sun)
+    {
+        @if (!_home.IsSet)
+        {
+            <div class="alert alert-warning py-2 mb-2" role="alert">
+                @ThemeSchedule.NoLocation <a href="settings">Go to Settings</a>
+            </div>
+        }
+        else
+        {
+            <div class="form-text mt-0 mb-2">Sunrise and sunset at @_home.Describe(), worked out here — nothing is looked up online.</div>
+        }
+        <div class="theme-mode-fields mb-2">
+            <label class="form-label mb-0" for="theme-sunrise-offset">Light from</label>
+            <span class="d-flex align-items-center gap-2">
+                <input id="theme-sunrise-offset" type="number" class="form-control form-control-sm theme-mode-number"
+                       min="@(-ThemeTimes.MaxOffsetMinutes)" max="@ThemeTimes.MaxOffsetMinutes" step="5"
+                       value="@_times.SunriseOffsetMinutes" @onchange="e => SaveOffsetAsync(ThemeTimes.SunriseOffsetKey, e.Value)" />
+                <span class="tile-meta">minutes after sunrise</span>
+            </span>
+            <label class="form-label mb-0" for="theme-sunset-offset">Dark from</label>
+            <span class="d-flex align-items-center gap-2">
+                <input id="theme-sunset-offset" type="number" class="form-control form-control-sm theme-mode-number"
+                       min="@(-ThemeTimes.MaxOffsetMinutes)" max="@ThemeTimes.MaxOffsetMinutes" step="5"
+                       value="@_times.SunsetOffsetMinutes" @onchange="e => SaveOffsetAsync(ThemeTimes.SunsetOffsetKey, e.Value)" />
+                <span class="tile-meta">minutes after sunset</span>
+            </span>
+        </div>
+        <div class="form-text mb-2">
+            A negative number is before: −30 for “dark half an hour before sunset”. Up to three hours either way.
+        </div>
+    }
+    else if (_mode == ThemeModes.Schedule)
+    {
+        <div class="theme-mode-fields mb-2">
+            <label class="form-label mb-0" for="theme-light-from">Light from</label>
+            <input id="theme-light-from" type="time" class="form-control form-control-sm theme-mode-time"
+                   value="@ThemeTimes.Format(_times.LightFrom)" @onchange="e => SaveTimeAsync(ThemeTimes.LightFromKey, e.Value)" />
+            <label class="form-label mb-0" for="theme-light-to">until</label>
+            <input id="theme-light-to" type="time" class="form-control form-control-sm theme-mode-time"
+                   value="@ThemeTimes.Format(_times.LightTo)" @onchange="e => SaveTimeAsync(ThemeTimes.LightToKey, e.Value)" />
+        </div>
+        <div class="form-text mb-2">
+            @if (_timeError is { Length: > 0 })
+            {
+                <span class="text-warning">@_timeError</span>
+            }
+            else
+            {
+                <text>Dark the rest of the time. A window can run past midnight — light from 22:00 until 06:00 for somebody on nights.</text>
+            }
+        </div>
+    }
+
+    <p class="theme-mode-now mb-0" role="status">@_status</p>
+</div>
+
+@code {
+    private string _mode = ThemeModes.Auto;
+    private ThemeTimes _times = ThemeTimes.Default;
+    private HomeLocation _home = HomeLocation.None;
+    private string _status = "";
+    private string? _timeError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        Themes.Changed += OnChanged;
+    }
+
+    private async Task LoadAsync()
+    {
+        var settings = await Offload.Run(ct => AppSettings.AllAsync(ct));
+        _mode = ThemeService.ModeFor(settings);
+        _times = ThemeTimes.From(settings);
+        _home = HomeLocation.From(settings);
+        var now = Themes.Now;
+        _status = ThemeSchedule.Describe(ThemeService.DecideMode(settings, ThemeSurface.Dashboard, Themes.Zone, now), Themes.Zone, now);
+    }
+
+    /// <summary>
+    /// A save here, a save from another tab, or a switch at sunset: all of them come through
+    /// ThemeService, so the line saying what happens next stays true while the page is open.
+    /// </summary>
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private async Task SaveAsync(string key, string value)
+    {
+        if (key == Appearance.ThemeKey && !ThemeModes.IsKnown(value))
+            return;
+        await Offload.Run(async ct => { await AppSettings.SaveAsync(key, value, ct); return true; });
+        await LoadAsync();
+    }
+
+    private Task SaveOffsetAsync(string key, object? value) =>
+        int.TryParse(value?.ToString(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var minutes)
+            ? SaveAsync(key, ThemeTimes.ClampOffset(minutes).ToString(System.Globalization.CultureInfo.InvariantCulture))
+            : Task.CompletedTask;
+
+    /// <summary>
+    /// Refused rather than stored when it would make the two times the same: a window from
+    /// 07:00 until 07:00 is no window, and quietly going dark for good is not what anybody
+    /// typing a time meant.
+    /// </summary>
+    private async Task SaveTimeAsync(string key, object? value)
+    {
+        _timeError = null;
+        var time = ThemeTimes.Time(value?.ToString() ?? "", TimeOnly.MinValue);
+        if (value?.ToString() is not { Length: > 0 } typed || ThemeTimes.Time(typed, new TimeOnly(23, 59, 59)) != time)
+            return; // not a time at all
+
+        var other = key == ThemeTimes.LightFromKey ? _times.LightTo : _times.LightFrom;
+        if (time == other)
+        {
+            _timeError = "Light from and until cannot be the same time.";
+            return;
+        }
+        await SaveAsync(key, ThemeTimes.Format(time));
+    }
+
+    public void Dispose() => Themes.Changed -= OnChanged;
+}
