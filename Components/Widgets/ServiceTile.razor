@@ -44,7 +44,7 @@ else
     @if (ShowSparkline)
     {
         <div class="mt-1">
-            <Sparkline Values="_series" Color="@(_state?.IsUp == false ? "#ff5c6c" : "#4da3ff")"
+            <Sparkline Values="_series" Color="@(_state?.IsUp == false ? "var(--down)" : "var(--chart-1)")"
                        Label="@($"{Context.Connection.Name} response time")"
                        Unit=" ms" Decimals="0" From="_from" To="_to" />
         </div>

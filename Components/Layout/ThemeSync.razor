@@ -1,0 +1,65 @@
+@implements IDisposable
+@inject ThemeService Themes
+@inject IJSRuntime JS
+
+@* Draws nothing. Keeps an open page's colours in step with the theme setting: when the
+   theme, its mode or the accent changes — from the Appearance page in this tab, from
+   another device, or (later) from a schedule — the new theme block is pushed into this
+   page's <head> and the html element's attributes are updated, so a wall on the other side
+   of the house restyles without anybody touching it.
+
+   Subscribes only once interactive. During prerender there is no browser to push to, and
+   the page being rendered already has the current theme in its head. *@
+
+@code {
+    /// <summary>Which screen this page is — see <see cref="ThemeSurface"/>.</summary>
+    [Parameter] public ThemeSurface Surface { get; set; } = ThemeSurface.Dashboard;
+
+    private ThemeSnapshot? _shown;
+    private bool _subscribed;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        // What the page was rendered with: anything different from here on is a change.
+        _shown = await Themes.SnapshotAsync(Surface);
+        Themes.Changed += OnChanged;
+        _subscribed = true;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(PushAsync);
+
+    private async Task PushAsync()
+    {
+        try
+        {
+            var now = await Themes.SnapshotAsync(Surface);
+            if (now == _shown)
+                return;
+
+            _shown = now;
+            await JS.InvokeVoidAsync("labbyTheme.apply", new
+            {
+                css = now.Css,
+                mode = now.Mode,
+                accent = now.Accent,
+                meta = now.Meta,
+            });
+        }
+        catch (JSDisconnectedException)
+        {
+            // The tab closed between the change and the push; nothing to restyle.
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_subscribed)
+            Themes.Changed -= OnChanged;
+    }
+}

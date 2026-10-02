@@ -1,0 +1,214 @@
+@implements IDisposable
+@inject ThemeService Themes
+@inject ThemeStore Store
+@inject AppSettingsStore AppSettings
+@inject Offload Offload
+
+@* The theme gallery: every theme as a live miniature, in its dark and its light colours.
+
+   Clicking a tile applies it at once and for good — the setting is saved, and ThemeSync
+   restyles this page and every other open one without a reload. The dark/light/follow-the-OS
+   choice still decides which end is shown; a theme with only one end says so on its tile
+   and is used for both.
+
+   Reads and writes go through Offload, so a slow disk never holds up the page that drew
+   this; the gallery itself is drawn from memory (built-ins are code, user themes a cached
+   table). *@
+
+<div class="theme-gallery" role="list">
+    @foreach (var theme in _themes)
+    {
+        var current = theme.Id == _activeId;
+        <div class="theme-tile @(current ? "is-active" : "")" role="listitem">
+            <button type="button" class="theme-tile-pick" aria-pressed="@(current ? "true" : "false")"
+                    title="Use @theme.Name" disabled="@_busy" @onclick="() => ApplyAsync(theme.Id)">
+                <span class="theme-tile-previews">
+                    @foreach (var (dark, variant) in theme.Variants)
+                    {
+                        <ThemePreview Variant="variant" Dark="dark" Title="@theme.Name" />
+                    }
+                </span>
+                <span class="theme-tile-name">
+                    @theme.Name
+                    @if (current)
+                    {
+                        <span class="theme-tile-check" aria-label="in use">✓</span>
+                    }
+                </span>
+                <span class="theme-tile-meta">@theme.Author · @theme.Coverage</span>
+            </button>
+            <div class="theme-tile-actions">
+                <a class="btn btn-sm btn-outline-secondary" href="@($"settings/appearance/themes/{Uri.EscapeDataString(theme.Id)}")">Customise</a>
+                <a class="btn btn-sm btn-outline-secondary" href="@($"api/share/theme?id={Uri.EscapeDataString(theme.Id)}")" download>Export</a>
+                @if (!theme.BuiltIn)
+                {
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => _deleting = theme">Delete</button>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+<details class="theme-import mt-3" open="@(_errors.Count > 0 || _paste.Length > 0)">
+    <summary>Import a theme</summary>
+    <div class="mt-2">
+        <p class="form-text mt-0">
+            A LabbyTwo theme file (from Export), or any <strong>base16</strong> colour scheme in YAML
+            or JSON — there are hundreds published for editors and terminals. Only colours are
+            read; a file with anything else in it is refused, whole.
+        </p>
+        <label class="form-label" for="theme-paste">Paste it here</label>
+        <textarea id="theme-paste" class="form-control font-monospace" rows="6" maxlength="@ThemeJson.MaxBytes"
+                  placeholder="scheme: &quot;Tomorrow Night&quot;&#10;author: &quot;Chris Kempson&quot;&#10;base00: &quot;1d1f21&quot;&#10;…"
+                  @bind="_paste" @bind:event="oninput"></textarea>
+        <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+            <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || _paste.Trim().Length == 0)"
+                    @onclick="ImportPasteAsync">Import</button>
+            <span class="tile-meta">or</span>
+            <InputFile class="form-control form-control-sm theme-import-file" accept=".json,.yaml,.yml"
+                       OnChange="ImportFileAsync" disabled="@_busy" aria-label="Import a theme file" />
+        </div>
+        @if (_errors.Count > 0)
+        {
+            <div class="alert alert-warning mt-2 mb-0" role="alert">
+                <div class="fw-semibold mb-1">That was not imported:</div>
+                <ul class="mb-0">
+                    @foreach (var error in _errors.Take(12))
+                    {
+                        <li>@error</li>
+                    }
+                    @if (_errors.Count > 12)
+                    {
+                        <li>…and @(_errors.Count - 12) more.</li>
+                    }
+                </ul>
+            </div>
+        }
+        @if (_imported is { Length: > 0 })
+        {
+            <div class="alert alert-success mt-2 mb-0" role="status">Imported “@_imported” and switched to it.</div>
+        }
+    </div>
+</details>
+
+@if (_deleting is { } doomed)
+{
+    <ConfirmDialog Title="Delete this theme?"
+                   Message="@($"“{doomed.Name}” goes for good. If it is the one in use, the dashboard goes back to LabbyTwo.")"
+                   OnCancel="() => _deleting = null"
+                   OnConfirm="DeleteAsync" />
+}
+
+@code {
+    private IReadOnlyList<Theme> _themes = BuiltInThemes.All;
+    private string _activeId = BuiltInThemes.DefaultId;
+    private bool _busy;
+    private string _paste = "";
+    private List<string> _errors = [];
+    private string? _imported;
+    private Theme? _deleting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        Themes.Changed += OnThemesChanged;
+    }
+
+    private async Task LoadAsync()
+    {
+        var (themes, settings) = await Offload.Run(async ct => (await Themes.AllAsync(ct), await AppSettings.AllAsync(ct)));
+        _themes = themes;
+        var id = ThemeService.ThemeIdFor(settings);
+        // A theme that has gone resolves to the default, and the tile that says "in use" should agree.
+        _activeId = themes.Any(t => t.Id == id) ? id : BuiltInThemes.DefaultId;
+    }
+
+    private void OnThemesChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private async Task ApplyAsync(string id)
+    {
+        _busy = true;
+        try
+        {
+            await Offload.Run(async ct => { await Themes.ApplyAsync(id, ct); return true; });
+            _activeId = id;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task ImportPasteAsync() => ImportAsync(_paste);
+
+    private async Task ImportFileAsync(InputFileChangeEventArgs args)
+    {
+        _errors = [];
+        _imported = null;
+        if (args.File.Size > ThemeJson.MaxBytes)
+        {
+            _errors = [$"That file is {args.File.Size / 1024} KB — a theme is a few, and the limit is {ThemeJson.MaxBytes / 1024}."];
+            return;
+        }
+
+        await using var stream = args.File.OpenReadStream(ThemeJson.MaxBytes);
+        using var reader = new StreamReader(stream);
+        await ImportAsync(await reader.ReadToEndAsync());
+    }
+
+    /// <summary>
+    /// Validated in full before anything is written; a theme that passes is saved as the
+    /// user's own and applied, which is almost always why somebody imported it.
+    /// </summary>
+    private async Task ImportAsync(string text)
+    {
+        _errors = [];
+        _imported = null;
+        var result = ThemeJson.ImportAny(text);
+        if (result.Theme is not { } theme)
+        {
+            _errors = [.. result.Errors];
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await Offload.Run(async ct =>
+            {
+                var id = await Store.SaveAsync(theme, ct);
+                await Themes.ApplyAsync(id, ct);
+                return id;
+            });
+            _imported = theme.Name;
+            _paste = "";
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_deleting is not { } doomed)
+            return;
+        _deleting = null;
+
+        await Offload.Run(async ct =>
+        {
+            if (_activeId == doomed.Id)
+                await Themes.ApplyAsync(BuiltInThemes.DefaultId, ct);
+            await Store.DeleteAsync(doomed.Id, ct);
+            return true;
+        });
+        await LoadAsync();
+    }
+
+    public void Dispose() => Themes.Changed -= OnThemesChanged;
+}

@@ -1,0 +1,373 @@
+@page "/settings/appearance/themes/{Id}"
+@rendermode InteractiveServer
+@inject ThemeService Themes
+@inject ThemeStore Store
+@inject Offload Offload
+@inject NavigationManager Nav
+
+@* Customising a theme: every token, grouped, with a picker and a box to type into, a live
+   preview drawn by the same component the gallery uses, and the contrast of every pair that
+   matters worked out as you go.
+
+   Customising a built-in makes a copy — built-ins are code and cannot be saved over — and
+   customising one of your own saves over it unless you ask for a copy. Nothing is applied
+   to the dashboard until it is saved, so trying colours out costs nothing. *@
+
+<PageTitle>Customise a theme · LabbyTwo</PageTitle>
+
+@if (_notFound)
+{
+    <div class="empty-state">
+        There is no theme with that id. <a href="settings/appearance">Back to Appearance</a>
+    </div>
+    return;
+}
+
+@if (_base is null || (_dark ?? _light) is null)
+{
+    <p class="tile-meta">Loading…</p>
+    return;
+}
+
+<div class="page-head">
+    <div>
+        <h1>🎨 @(_isCopy ? $"Customise {_base?.Name}" : $"Edit {_base?.Name}")</h1>
+        <p class="subtitle">
+            @if (_isCopy)
+            {
+                <text>A built-in theme cannot be changed, so this saves as a theme of your own.</text>
+            }
+            else
+            {
+                <text>Saving replaces this theme. Tick “save as a copy” to keep the original.</text>
+            }
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="settings/appearance">Back to Appearance</a>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div class="widget">
+            <div class="widget-head">
+                <h2 class="widget-title">Colours</h2>
+                <div class="size-seg" role="group" aria-label="Which end">
+                    <button type="button" class="seg-btn @(_editingDark ? "is-on" : "")" aria-pressed="@(_editingDark ? "true" : "false")"
+                            @onclick="() => _editingDark = true">Dark</button>
+                    <button type="button" class="seg-btn @(!_editingDark ? "is-on" : "")" aria-pressed="@(!_editingDark ? "true" : "false")"
+                            @onclick="() => _editingDark = false">Light</button>
+                </div>
+            </div>
+            <div class="widget-body">
+                @if (Current is null)
+                {
+                    <p class="tile-meta">
+                        This theme has no @(_editingDark ? "dark" : "light") end, so the
+                        @(_editingDark ? "light" : "dark") one is used everywhere.
+                    </p>
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="AddEnd">
+                        Add a @(_editingDark ? "dark" : "light") end
+                    </button>
+                    <div class="form-text">Starts from LabbyTwo's own @(_editingDark ? "dark" : "light") colours.</div>
+                }
+                else
+                {
+                    @foreach (var group in Enum.GetValues<ThemeGroup>())
+                    {
+                        <fieldset class="theme-token-group">
+                            <legend>@group</legend>
+                            @foreach (var token in ThemeTokens.All.Where(t => t.Group == group))
+                            {
+                                var name = token.Name;
+                                var own = Current[name];
+                                var shown = Current.Effective(name);
+                                var id = $"tok-{name}";
+                                <div class="theme-token">
+                                    <label class="theme-token-label" for="@id">
+                                        @token.Label
+                                        @if (token.Hint.Length > 0)
+                                        {
+                                            <span class="theme-token-hint">@token.Hint</span>
+                                        }
+                                    </label>
+                                    <input type="color" class="form-control form-control-color form-control-sm"
+                                           value="@(shown?.Hex6 ?? "")" aria-label="@($"{token.Label}, picker")"
+                                           @onchange="e => Pick(name, e.Value?.ToString())" />
+                                    <input id="@id" class="form-control form-control-sm font-monospace theme-token-text @(_typos.ContainsKey(name) ? "is-invalid" : "")"
+                                           value="@(_typos.GetValueOrDefault(name) ?? own?.Css ?? "")" maxlength="64" spellcheck="false"
+                                           placeholder="@(token.Required ? "required" : $"inherits: {token.Fallback}")"
+                                           @onchange="e => Type(name, e.Value?.ToString())" />
+                                    <button type="button" class="tool-btn" title="Back to the original" aria-label="@($"Reset {token.Label}")"
+                                            disabled="@(!Changed(name))" @onclick="() => Reset(name)">↺</button>
+                                </div>
+                            }
+                        </fieldset>
+                    }
+                    @if (_dark is not null && _light is not null)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-danger mt-2" @onclick="RemoveEnd">
+                            Remove the @(_editingDark ? "dark" : "light") end
+                        </button>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="theme-editor-side">
+            <div class="widget mb-3">
+                <div class="widget-head"><h2 class="widget-title">Preview</h2></div>
+                <div class="widget-body">
+                    <ThemePreview Variant="Shown" Dark="ShownIsDark" Title="@(_name.Length > 0 ? _name : "Your theme")" Large />
+                </div>
+            </div>
+
+            <div class="widget mb-3">
+                <div class="widget-head"><h2 class="widget-title">Contrast</h2></div>
+                <div class="widget-body">
+                    <p class="form-text mt-0">
+                        WCAG 2.1: reading text needs 4.5:1 for AA and 7:1 for AAA; something only
+                        to be seen, like a focus ring, needs 3:1.
+                    </p>
+                    <table class="table table-sm theme-contrast mb-0">
+                        <tbody>
+                            @foreach (var result in Contrast.Check(Shown))
+                            {
+                                <tr class="@(result.PassesAA ? "" : "is-fail")">
+                                    <td>@result.Pair.Label</td>
+                                    <td class="text-end font-monospace">@result.RatioText</td>
+                                    <td class="text-end">
+                                        <span class="contrast-grade grade-@result.Level.ToString().ToLowerInvariant()">
+                                            @(result.Level == Contrast.Level.Fail ? "Fails" : result.Level.ToString())
+                                        </span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="widget">
+                <div class="widget-head"><h2 class="widget-title">Save</h2></div>
+                <div class="widget-body">
+                    <label class="form-label" for="theme-name">Name</label>
+                    <input id="theme-name" class="form-control mb-2" maxlength="@ThemeJson.MaxName" @bind="_name" @bind:event="oninput" />
+                    <label class="form-label" for="theme-author">Author</label>
+                    <input id="theme-author" class="form-control mb-2" maxlength="@ThemeJson.MaxName" @bind="_author" />
+                    @if (!_isCopy)
+                    {
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="theme-copy" @bind="_saveAsCopy" />
+                            <label class="form-check-label" for="theme-copy">Save as a copy</label>
+                        </div>
+                    }
+                    @if (_message is { Length: > 0 })
+                    {
+                        <div class="alert alert-success py-2" role="status">@_message</div>
+                    }
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(!CanSave)" @onclick="() => SaveAsync(apply: true)">Save and use</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanSave)" @onclick="() => SaveAsync(apply: false)">Save</button>
+                    </div>
+                    @if (_typos.Count > 0)
+                    {
+                        <div class="form-text text-warning">Fix the boxes marked in red first — they are not colours.</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_failures is { Count: > 0 } failures)
+{
+    <Modal Title="Some text will be hard to read" Size="sm" OnClose="() => _failures = null">
+        <ChildContent>
+            <p>These pairs fall short of WCAG AA:</p>
+            <ul class="mb-0">
+                @foreach (var (end, result) in failures)
+                {
+                    <li>@end: @result.Pair.Label (@result.RatioText)</li>
+                }
+            </ul>
+        </ChildContent>
+        <Footer>
+            <button class="btn btn-secondary btn-sm" @onclick="() => _failures = null">Keep editing</button>
+            <button class="btn btn-primary btn-sm" @onclick="() => SaveAsync(_pendingApply, confirmed: true)">Save anyway</button>
+        </Footer>
+    </Modal>
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = "";
+
+    private Theme? _base;
+    private bool _notFound;
+    private bool _isCopy;
+    private bool _saveAsCopy;
+    private string _name = "";
+    private string _author = "";
+    private ThemeVariant? _dark;
+    private ThemeVariant? _light;
+    private bool _editingDark = true;
+    private string? _message;
+    private bool _pendingApply;
+    private List<(string End, Contrast.Result Result)>? _failures;
+
+    /// <summary>Text typed into a token's box that is not a colour, kept so the box shows what was typed.</summary>
+    private readonly Dictionary<string, string> _typos = new(StringComparer.Ordinal);
+
+    private ThemeVariant? Current => _editingDark ? _dark : _light;
+
+    /// <summary>What the preview shows: the end being edited, or the one there is.</summary>
+    private ThemeVariant Shown => Current ?? (_dark ?? _light)!;
+
+    private bool ShownIsDark => Current is not null ? _editingDark : _dark is not null;
+
+    private bool CanSave => _typos.Count == 0 && (_dark ?? _light) is not null
+        && (_dark?.Missing.Count ?? 0) == 0 && (_light?.Missing.Count ?? 0) == 0;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _base = await Offload.Run(ct => Themes.FindAsync(Id, ct));
+        if (_base is null)
+        {
+            _notFound = true;
+            return;
+        }
+
+        _isCopy = _base.BuiltIn;
+        _name = _isCopy ? $"{_base.Name} (custom)" : _base.Name;
+        _author = _isCopy ? "" : _base.Author;
+        _dark = _base.Dark;
+        _light = _base.Light;
+        _editingDark = _dark is not null;
+        _typos.Clear();
+    }
+
+    private void Set(string name, ThemeColor? colour)
+    {
+        _message = null;
+        if (_editingDark && _dark is not null)
+            _dark = _dark.With(name, colour);
+        else if (!_editingDark && _light is not null)
+            _light = _light.With(name, colour);
+    }
+
+    /// <summary>A picker has no alpha, so a translucent token keeps the opacity it had.</summary>
+    private void Pick(string name, string? value)
+    {
+        if (!ThemeColor.TryParse(value, out var picked))
+            return;
+        var alpha = Current?.Effective(name)?.A ?? 1;
+        _typos.Remove(name);
+        Set(name, picked.WithAlpha(alpha));
+    }
+
+    /// <summary>Empty clears an optional token back to its fallback; a required one cannot be cleared.</summary>
+    private void Type(string name, string? value)
+    {
+        var text = value?.Trim() ?? "";
+        if (text.Length == 0 && ThemeTokens.Find(name) is { Required: false })
+        {
+            _typos.Remove(name);
+            Set(name, null);
+            return;
+        }
+
+        if (ThemeColor.TryParse(text, out var colour))
+        {
+            _typos.Remove(name);
+            Set(name, colour);
+        }
+        else
+        {
+            _typos[name] = text;
+        }
+    }
+
+    private ThemeColor? Original(string name) =>
+        (_editingDark ? _base?.Dark : _base?.Light)?[name];
+
+    private bool Changed(string name) => _typos.ContainsKey(name) || Current?[name] != Original(name);
+
+    private void Reset(string name)
+    {
+        _typos.Remove(name);
+        if ((_editingDark ? _base?.Dark : _base?.Light) is null)
+            return;
+        Set(name, Original(name));
+    }
+
+    private void AddEnd()
+    {
+        if (_editingDark)
+            _dark = BuiltInThemes.LabbyTwo.Dark;
+        else
+            _light = BuiltInThemes.LabbyTwo.Light;
+    }
+
+    private void RemoveEnd()
+    {
+        if (_editingDark)
+            _dark = null;
+        else
+            _light = null;
+        _editingDark = !_editingDark;
+    }
+
+    private async Task SaveAsync(bool apply, bool confirmed = false)
+    {
+        if (!CanSave || _base is null)
+            return;
+
+        // Warn, not refuse: a theme is somebody's own, and a low-contrast one for a dim
+        // room at night is a reasonable thing to want. They are told what will be hard to
+        // read first.
+        if (!confirmed)
+        {
+            var failures = new List<(string, Contrast.Result)>();
+            foreach (var (end, variant) in new[] { ("Dark", _dark), ("Light", _light) })
+            {
+                if (variant is null)
+                    continue;
+                failures.AddRange(Contrast.Check(variant)
+                    .Where(r => r.Pair.Use == Contrast.Use.Text && !r.PassesAA)
+                    .Select(r => (end, r)));
+            }
+
+            if (failures.Count > 0)
+            {
+                _pendingApply = apply;
+                _failures = failures;
+                return;
+            }
+        }
+        _failures = null;
+
+        var id = _isCopy || _saveAsCopy ? "" : _base.Id;
+        var theme = new Theme(id, ThemeJson.CleanText(_name), ThemeJson.CleanText(_author), _dark, _light, _base.Description);
+
+        var saved = await Offload.Run(async ct =>
+        {
+            var newId = await Store.SaveAsync(theme, ct);
+            if (apply)
+                await Themes.ApplyAsync(newId, ct);
+            return newId;
+        });
+
+        if (saved != Id)
+        {
+            // Now editing the saved theme itself, so a second save updates it rather than
+            // making another copy.
+            Nav.NavigateTo($"settings/appearance/themes/{saved}");
+            return;
+        }
+
+        _message = apply ? "Saved, and in use." : "Saved.";
+    }
+}

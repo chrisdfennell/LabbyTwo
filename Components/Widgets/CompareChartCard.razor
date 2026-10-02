@@ -82,15 +82,9 @@ else
 
     private string Format(double shown) => shown.ToString($"F{_spec.Decimals}") + _unit;
 
-    /// <summary>
-    /// Distinct hues rather than the accent colour, since telling the lines apart is the
-    /// entire point of the card. Ordered so the first few stay far apart on the wheel.
-    /// </summary>
-    private static readonly string[] Palette =
-    [
-        "var(--accent)", "#ffb84d", "#35d07f", "#c792ea", "#ff8a65", "#4dd0e1",
-        "#f06292", "#aed581", "#9575cd", "#4db6ac", "#ffd54f", "#90a4ae",
-    ];
+    // Distinct hues rather than the accent colour, since telling the lines apart is the
+    // entire point of the card: the theme's chart tokens, ordered so the first few stay far
+    // apart on the wheel (see ThemeTokens.ChartColour, which also covers a ninth line on).
 
     protected override void OnInitialized()
     {
@@ -167,7 +161,7 @@ else
                 entry.Connection.Name,
                 Plot(entry.Samples, offset, scale),
                 entry.Samples[^1].Value,
-                Palette[index % Palette.Length])),
+                ThemeTokens.ChartColour(index))),
         ];
 
         // Every line is named after a connection, so the tooltip is the only place you can
@@ -175,7 +169,7 @@ else
         _hover = ChartHover.Attribute(
             [.. loaded.Select((entry, index) => new ChartHover.Series(
                 entry.Connection.Name,
-                Palette[index % Palette.Length],
+                ThemeTokens.ChartColour(index),
                 [.. entry.Samples.Select(s => s.Value)]))],
             // Converted with everything else above, so the tooltip and the number beside
             // it agree.

@@ -170,13 +170,18 @@ public sealed class HomeAssistantBrokerTests : IAsyncLifetime
         var source = Source();
         await using var running = await StartedAsync(Publisher(source));
 
+        // Let the first publish land before watching. A client subscribed while it is still
+        // being sent receives the live copy, which MQTT delivers without the retain flag —
+        // the very thing this test checks — so on a busy machine it failed now and then.
+        Assert.True(await EventuallyAsync(() => running.Publisher.Status.LastPublishAt is not null));
+
         // A client that arrives later — Home Assistant starting after LabbyTwo — still gets them.
         var seen = await WatchAsync("homeassistant/#");
         Assert.True(await EventuallyAsync(() => seen.Any(m => m.Topic == "homeassistant/binary_sensor/labbytwo/c_nas1_status/config")));
         var config = seen.First(m => m.Topic == "homeassistant/binary_sensor/labbytwo/c_nas1_status/config");
         Assert.True(config.Retain);
         Assert.Contains("\"unique_id\":\"labbytwo_c_nas1_status\"", config.Payload);
-        Assert.Contains(seen, m => m.Topic == "homeassistant/sensor/labbytwo/hub_summary/config");
+        Assert.True(await EventuallyAsync(() => seen.Any(m => m.Topic == "homeassistant/sensor/labbytwo/hub_summary/config")));
 
         var states = await WatchAsync("labbytwo/#");
         Assert.True(await EventuallyAsync(() => states.Any(m => m.Topic == "labbytwo/conn/nas1/status" && m.Payload == "ON" && m.Retain)));

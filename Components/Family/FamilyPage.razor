@@ -11,7 +11,7 @@
    nothing a visitor typed is ever shown back except in the form's own fields. *@
 
 <!DOCTYPE html>
-<html lang="en" data-theme="@Look.ThemeAttribute" data-palette="@Look.PaletteAttribute" style="@Look.StyleAttribute">
+<html lang="en" data-theme="@(Theme?.ModeAttribute(Look) ?? Look.ThemeAttribute)" style="@Look.StyleAttribute">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -26,8 +26,13 @@
     <title>@PageTitle</title>
     <link rel="stylesheet" href="/app.css" />
     <link rel="stylesheet" href="/family.css" />
+    @if (Theme is not null)
+    {
+        @* Token names and parsed colours only — see ThemeCss, and the note in App.razor. *@
+        <style>@((MarkupString)Theme.Css)</style>
+    }
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <meta name="theme-color" content="@(Look.Theme == "light" ? "#f2f5f9" : "#0a0e13")" />
+    <meta name="theme-color" content="@((Theme ?? ActiveTheme.For(BuiltInThemes.LabbyTwo)).MetaColour(Look))" />
 </head>
 <body class="family-body">
     <main class="family">
@@ -178,6 +183,12 @@
     [Parameter] public FamilyView? View { get; set; }
 
     [Parameter] public Appearance Look { get; set; } = Appearance.Default;
+
+    /// <summary>
+    /// The owner's theme, so the household sees the same colours the dashboard has. Null
+    /// leaves app.css's own defaults, which is also what a refusal page gets.
+    /// </summary>
+    [Parameter] public ActiveTheme? Theme { get; set; }
 
     /// <summary>Where this page lives: <c>/family/{token}</c>, or <c>/family</c> on the home network.</summary>
     [Parameter] public string Base { get; set; } = "/family";

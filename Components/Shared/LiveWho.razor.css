@@ -12,12 +12,12 @@
     flex: 0 0 4rem;
     height: .3rem;
     border-radius: .15rem;
-    background: var(--bs-border-color, rgba(127, 127, 127, .3));
+    background: var(--edge);
     overflow: hidden;
 }
 
 .md-who-progress > span {
     display: block;
     height: 100%;
-    background: var(--bs-primary, currentColor);
+    background: var(--accent);
 }

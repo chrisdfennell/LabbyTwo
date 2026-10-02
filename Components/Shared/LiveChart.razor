@@ -112,11 +112,8 @@ else
 
     private static readonly double[] Gridlines = [0.25, 0.5, 0.75];
 
-    /// <summary>The compare card's colours, so a line is the same colour in both.</summary>
-    private static readonly string[] Palette =
-    [
-        "var(--accent)", "#ffb84d", "#35d07f", "#c792ea", "#ff8a65", "#4dd0e1", "#f06292", "#aed581",
-    ];
+    // The colours are the theme's chart tokens (ThemeTokens.ChartColour), the same ones the
+    // compare card uses, so a line is the same colour in both and a theme recolours both.
 
     private sealed record Resolved(string Id, string Connection, string Key, MetricSpec Spec);
 
@@ -266,7 +263,7 @@ else
             var line = _resolved[i];
             var converted = samples[i].Select(s => Units.Display(s.Value, line.Spec.Unit, units, spec.Unit).Value).ToList();
             var name = sameConnection ? line.Spec.Label : sameMetric ? line.Connection : $"{line.Connection} · {line.Spec.Label}";
-            var colour = Palette[i % Palette.Length];
+            var colour = ThemeTokens.ChartColour(i);
             var now = converted.Count > 0 ? Format(converted[^1], shownUnits[i], decimals) : "—";
             drawn.Add(new Drawn(name, colour, now));
 

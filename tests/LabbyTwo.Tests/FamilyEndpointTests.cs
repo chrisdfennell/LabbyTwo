@@ -164,6 +164,33 @@ public sealed partial class FamilyEndpointTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, (await GetAsync(app.Client, sheet)).Status);
     }
 
+    /// <summary>
+    /// The household sees the owner's theme, and so does every page of the app — the theme
+    /// block is in the head of both, built from memory. A theme's export is behind the login.
+    /// </summary>
+    [Fact]
+    public async Task The_family_page_and_the_app_wear_the_owners_theme()
+    {
+        var (app, token) = await StartAsync();
+        await app.Get<ThemeService>().ApplyAsync(BuiltInThemes.Dracula.Id);
+
+        var (_, family, _) = await GetAsync(app.Client, $"/family/{token}");
+        Assert.Contains("--ink: #21222c;", family);
+        Assert.Contains("data-theme=\"dark\"", family);
+        Assert.Contains("content=\"#21222c\"", family);
+
+        var (status, login, _) = await GetAsync(app.Client, "/login");
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Contains("<style id=\"labby-theme\">", login);
+        Assert.Contains("--ink: #21222c;", login);
+        // Dracula has no light end, so the page is stamped dark whatever the setting says.
+        Assert.Contains("data-theme=\"dark\"", login);
+        Assert.Contains("data-bs-theme=\"dark\"", login);
+
+        var (export, _, _) = await GetAsync(app.Client, "/api/share/theme?id=nord");
+        Assert.NotEqual(HttpStatusCode.OK, export);
+    }
+
     [Fact]
     public async Task A_wrong_link_a_switched_off_page_and_an_old_link_are_all_the_same_404()
     {

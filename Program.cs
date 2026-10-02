@@ -126,6 +126,8 @@ builder.Services.AddSingleton<ChecklistStore>();
 builder.Services.AddSingleton<MarkdownChecklists>();
 builder.Services.AddSingleton<WidgetHistoryStore>();
 builder.Services.AddSingleton<FontStore>();
+builder.Services.AddSingleton<ThemeStore>();
+builder.Services.AddSingleton<ThemeService>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
@@ -410,6 +412,20 @@ var shareTemplate = app.MapGet("/api/share/template", async (TabTemplates templa
     }
 });
 
+// A theme as a file (see ThemeJson for the format). Built-ins export too, so one can be
+// handed to somebody else or used as the start of a theme written by hand.
+var shareTheme = app.MapGet("/api/share/theme", async (ThemeService themes, string id, CancellationToken ct) =>
+{
+    if (await themes.FindAsync(id, ct) is not { } theme)
+        return Results.NotFound("There is no theme with that id.");
+
+    var json = ThemeJson.Export(theme);
+    // The file name is the id, which is ours (a built-in's word or "user-" and hex), never
+    // the name somebody typed.
+    var safe = new string([.. theme.Id.Where(c => char.IsAsciiLetterOrDigit(c) || c == '-')]);
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", $"labbytwo-theme-{safe}.json");
+});
+
 var backup = app.MapGet("/api/backup", async (Db db, CancellationToken ct) =>
 {
     var temp = Path.Combine(Path.GetTempPath(), $"labbytwo-{Guid.NewGuid():N}.db");
@@ -442,6 +458,7 @@ if (authEnabled)
     shareTab.RequireAuthorization();
     shareWidget.RequireAuthorization();
     shareTemplate.RequireAuthorization();
+    shareTheme.RequireAuthorization();
     // The icon endpoint fetches a URL the caller supplies. That is the same reach a
     // connection already has, but it should not be available to an unauthenticated
     // caller on an install that has a login.

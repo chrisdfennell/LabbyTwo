@@ -2212,13 +2212,10 @@ dashboard-managed tunnel instead of a config file, add a public hostname with th
 
 **Settings → Appearance** holds the things that are yours rather than your lab's:
 
-- **Theme** — follow the OS, or pin light or dark.
-- **Dark shade** — midnight, slate, or true black. Only the dark end has variants, because
-  light is already "a white page" and the thing people actually want to change is how dark
-  dark should be. True black is for an OLED wall panel, where the background then draws no
-  power at all.
-- **Accent colour** — fourteen swatches or your own, and links, buttons, the active tab,
-  charts and focus rings all follow it.
+- **Theme** — a gallery of themes, below; and whether to follow the OS, or pin light or dark.
+- **Accent colour** — the theme's own, or fourteen swatches or your own, and links, buttons,
+  the active tab, the first line of every chart and focus rings all follow it. Choosing a
+  theme puts the theme's own accent back.
 - **Corners** — sharp, rounded or soft.
 - **Cards** — outlined, raised or flat. A line around it, a shadow under it, or a different
   fill: those are the only three honest answers, and outlined is the default because it is
@@ -2255,6 +2252,67 @@ units — resetting the appearance is not asking to be renamed.
 
 It is stored in the database, not the browser, so every device that opens the dashboard
 sees the same thing and a backup carries it.
+
+### Themes
+
+**Settings → Appearance → Themes** is a gallery: every theme drawn as a small live
+dashboard — a card, text, a dot of each status colour, a little chart, a button and a link —
+in its dark and its light colours. Click one and it is in use, saved, and every screen that
+has the dashboard open changes straight away, wall included, with no reload.
+
+Built in: **LabbyTwo** (the default, exactly as it always looked), **Slate** and **True
+black** (the old "dark shade" choices — an existing install keeps whichever it had),
+**Catppuccin** (Mocha by night, Latte by day), **Dracula**, **GitHub**, **Gruvbox**,
+**Nord**, **One Dark**, **Solarized**, **Tokyo Night** and **High contrast**, which passes
+WCAG AAA for every piece of text on every surface. The named themes use their published
+palettes' colours. Dracula and One Dark only have a dark end, and the tile says so — they
+are used dark whatever the light/dark setting says.
+
+**Customise** on any tile opens the editor: a picker and a box to type in for every colour,
+grouped into surfaces, text, accent, status, charts and code, with a reset for each and a
+larger live preview beside them. A **contrast checker** works out the WCAG 2.1 ratio for the
+pairs that matter — text, secondary text and links on cards, the label on a primary button,
+the status colours, the focus ring — and marks each AA, AAA or failing; saving a theme with
+text that fails AA asks first. Built-in themes cannot be changed, so customising one saves a
+theme of your own.
+
+**Export** downloads a theme as a small JSON file, and **Import a theme** takes one back —
+from a file or pasted — along with any **base16** colour scheme in YAML or JSON, of which
+there are hundreds for editors and terminals. A theme is colours and nothing else:
+anything in the file that is not a known colour name with a valid colour (hex, `rgb()`,
+`hsl()`) gets the whole file refused, with the reasons listed. Nothing a theme contains
+can ever become CSS other than a colour.
+
+The file format, version 1:
+
+```json
+{
+  "labbytwo-theme": 1,
+  "name": "Midnight Oil",
+  "author": "Somebody",
+  "dark":  { "ink": "#0a0e13", "panel": "#121821", "text": "#dde5f0", "...": "..." },
+  "light": { "ink": "#f2f5f9", "panel": "#ffffff", "text": "#16202e", "...": "..." }
+}
+```
+
+Either `dark` or `light` may be left out. Each must give the required colours — `ink`
+(the page), `panel` (cards), `panel-2` (raised surfaces), `edge` (borders), `text`, `muted`,
+`placeholder`, `accent`, `accent-ink` (text on the accent), `up`, `down`, `warn`, `code` and
+`shadow` — and may give any of the optional ones, which otherwise follow from those:
+`input-bg`, `input-border`, `tooltip-bg`, `overlay`, `link`, `selection`, `accent-2`,
+`focus`, `neutral`, `neutral-ink`, `info`, `up-soft`, `down-soft`, `warn-soft` and
+`chart-1` to `chart-8`. The full list, with what each is for, is `Core/ThemeTokens.cs`.
+
+A base16 scheme maps like this: `base00` page, `base01` cards, `base02` raised surfaces and
+selection (the border is `base02` a third of the way to `base03`), `base03` placeholder,
+`base04` secondary text, `base05` text, `base0D` accent and links, `base0B` up, `base08`
+down, `base0A` warning, `base0C` info, `base09` code, `base0E` the second accent, and the
+accents again for the chart series, with `base0F` as the eighth. A scheme becomes a light
+theme if its background is light and a dark one otherwise — base16 describes one look, so
+the other end is not invented.
+
+The active theme costs nothing per page: it is turned into CSS once when it changes and held
+in memory. The household's family status page wears it too.
 
 ### Wall mode
 

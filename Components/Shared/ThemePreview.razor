@@ -1,0 +1,67 @@
+@* A miniature dashboard drawn in one theme's colours, whatever theme the page itself is in.
+
+   The theme's tokens are set inline on the .theme-scope element (from ThemeCss.Declarations,
+   the same string the page's own theme block is made of), and everything inside reads them
+   through var() like the real dashboard does — so a tile cannot show colours the theme
+   would not produce. The derived tints and Bootstrap's variables are redeclared on
+   .theme-scope in app.css for the same reason.
+
+   Spans rather than a real button and link: a gallery tile is itself a button, and a
+   control inside a control is something neither a browser nor a screen reader can use. *@
+
+<div class="theme-preview theme-scope @(Large ? "is-large" : "")" style="@ThemeCss.Declarations(Variant, Dark)" aria-hidden="true">
+    <div class="tp-card">
+        <div class="tp-head">
+            <span class="tp-diamond">◆</span>
+            <span class="tp-title">@Title</span>
+        </div>
+        <div class="tp-value">457<span class="tp-unit">Mbps</span></div>
+        <div class="tp-row">
+            <span class="tp-dot" style="background: var(--up)"></span>
+            <span class="tp-dot" style="background: var(--warn)"></span>
+            <span class="tp-dot" style="background: var(--down)"></span>
+            <span class="tp-muted">3 services</span>
+        </div>
+        <svg class="tp-chart" viewBox="0 0 100 30" preserveAspectRatio="none">
+            <polyline points="0,22 15,18 30,20 45,10 60,14 75,6 100,9" fill="none" stroke="var(--chart-1)" stroke-width="2" vector-effect="non-scaling-stroke" />
+            <polyline points="0,26 15,24 30,16 45,20 60,22 75,17 100,19" fill="none" stroke="var(--chart-2)" stroke-width="2" vector-effect="non-scaling-stroke" />
+            <polyline points="0,14 15,12 30,25 45,24 60,8 75,12 100,4" fill="none" stroke="var(--chart-3)" stroke-width="2" vector-effect="non-scaling-stroke" />
+        </svg>
+        <div class="tp-row">
+            <span class="tp-btn">Button</span>
+            <span class="tp-link">a link</span>
+            @if (Large)
+            {
+                <span class="tp-code">code</span>
+            }
+        </div>
+        @if (Large)
+        {
+            <div class="tp-field">A text box</div>
+            <div class="tp-callouts">
+                <span style="color: var(--up)">● up</span>
+                <span style="color: var(--warn)">● warning</span>
+                <span style="color: var(--down)">● down</span>
+                <span style="color: var(--info)">● info</span>
+            </div>
+            <div class="tp-chart-keys">
+                @for (var i = 1; i <= ThemeTokens.ChartSeries; i++)
+                {
+                    <span style="@($"background: var(--chart-{i})")"></span>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ThemeVariant Variant { get; set; } = default!;
+
+    /// <summary>Which end this is, for color-scheme — native controls and scrollbars follow it.</summary>
+    [Parameter] public bool Dark { get; set; } = true;
+
+    [Parameter] public string Title { get; set; } = "Internet";
+
+    /// <summary>The editor's preview: adds a field, code, every status colour and the whole chart palette.</summary>
+    [Parameter] public bool Large { get; set; }
+}

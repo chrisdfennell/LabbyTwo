@@ -1,9 +1,10 @@
 @inject AppSettingsStore AppSettings
 @inject FontStore Fonts
+@inject ThemeService Themes
 
 <!DOCTYPE html>
-<html lang="en" data-theme="@_look.ThemeAttribute" data-bs-theme="@BootstrapTheme"
-      data-palette="@_look.PaletteAttribute" data-surface="@_look.SurfaceAttribute"
+<html lang="en" data-theme="@_mode" data-bs-theme="@BootstrapTheme"
+      data-surface="@_look.SurfaceAttribute"
       data-wide="@_look.WideAttribute" style="@_look.StyleAttribute">
 
 <head>
@@ -13,6 +14,15 @@
     <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
     <link rel="stylesheet" href="@Assets["LabbyTwo.styles.css"]" />
+
+    @* The active theme's colours, as custom properties. After app.css so they win over its
+       built-in defaults, which are only there for a page with no theme block at all. Built
+       once per change by ThemeService and held in memory, so this costs no query; the text
+       is generated from token names and parsed colours only (see ThemeCss), never from
+       anything a theme's author typed, which is why it can be written out unencoded — and
+       must be, since quotes inside a style element are not entity-decoded. ThemeSync
+       replaces its contents on open pages when the theme changes. *@
+    <style id="labby-theme">@((MarkupString)_theme.Css)</style>
 
     @* A hosted web font, if somebody asked for one. Last of the stylesheets so it cannot be
        overridden by ours, and only ever emitted for an https absolute URL — see
@@ -38,23 +48,24 @@
        on the dashboard. Both are static files with the same id, so switching is the same
        app opening somewhere else rather than a second one on the home screen. *@
     <link rel="manifest" href="@_manifest" />
-    <meta name="theme-color" content="@(_look.Theme == "light" ? "#f2f5f9" : "#0a0e13")" />
+    <meta name="theme-color" content="@_theme.MetaColour(_look)" />
     <HeadOutlet />
     @* Bootstrap picks its own palette from data-bs-theme, and on "system" the server has
        no way to know which the browser wants — so the one thing that must happen before
        first paint is copying the OS preference onto that attribute. The app's own colours
-       need no script: CSS handles "system" with prefers-color-scheme. *@
-    @if (_look.ThemeAttribute is null)
-    {
-        <script>
-            (function () {
-                var dark = window.matchMedia('(prefers-color-scheme: dark)');
-                var apply = function (m) { document.documentElement.dataset.bsTheme = m.matches ? 'dark' : 'light'; };
-                apply(dark);
-                dark.addEventListener('change', apply);
-            })();
-        </script>
-    }
+       need no script: CSS handles "system" with prefers-color-scheme. Always present, and
+       reading data-theme each time rather than baked in, because an open page can change
+       theme (ThemeSync) from one with a fixed end to one that follows the OS. *@
+    <script>
+        (function () {
+            var html = document.documentElement;
+            var dark = window.matchMedia('(prefers-color-scheme: dark)');
+            var sync = function () { html.dataset.bsTheme = html.dataset.theme || (dark.matches ? 'dark' : 'light'); };
+            sync();
+            dark.addEventListener('change', sync);
+            window.labbyThemeSync = sync;
+        })();
+    </script>
 </head>
 
 <body>
@@ -70,6 +81,7 @@
     <script src="@Assets["_framework/blazor.web.js"]"></script>
     <script src="@Assets["reconnect.js"]"></script>
     <script src="@Assets["palette.js"]"></script>
+    <script src="@Assets["theme.js"]"></script>
     <script src="@Assets["widget-drag.js"]"></script>
     <script src="@Assets["chart-hover.js"]"></script>
     <script src="@Assets["wall.js"]"></script>
@@ -82,11 +94,13 @@
 
 @code {
     private Appearance _look = Appearance.Default;
+    private ActiveTheme _theme = ActiveTheme.For(BuiltInThemes.LabbyTwo);
+    private string? _mode;
     private string _face = "";
     private string _manifest = "manifest.webmanifest";
 
     /// <summary>On "system" the script above takes over; this is the pre-script value.</summary>
-    private string BootstrapTheme => _look.Theme == "light" ? "light" : "dark";
+    private string BootstrapTheme => _mode ?? "dark";
 
     protected override async Task OnInitializedAsync()
     {
@@ -98,5 +112,8 @@
         // a font exists can be wrong; the file cannot.
         _look = look with { HasUploadedFont = look.Font == "custom" && Fonts.Current() is not null };
         _face = _look.HasUploadedFont ? Fonts.FaceRule() : "";
+
+        _theme = await Themes.ActiveAsync();
+        _mode = _theme.ModeAttribute(_look);
     }
 }

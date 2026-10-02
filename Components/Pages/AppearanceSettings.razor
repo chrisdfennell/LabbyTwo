@@ -4,6 +4,7 @@
 @inject NavigationManager Nav
 @inject FontStore Fonts
 @inject ConfigStore Config
+@inject Offload Offload
 
 <PageTitle>Appearance · LabbyTwo</PageTitle>
 
@@ -18,6 +19,21 @@
     </div>
 </div>
 
+@* The gallery first: picking a theme is the biggest change on this page and the one most
+   people come here for. *@
+<div class="widget mb-3" id="themes">
+    <div class="widget-head">
+        <h2 class="widget-title">Themes</h2>
+    </div>
+    <div class="widget-body">
+        <p class="tile-meta mt-0">
+            Click one to use it — every open screen changes straight away. “Customise” starts a
+            theme of your own from any of them.
+        </p>
+        <ThemeGallery />
+    </div>
+</div>
+
 <div class="row g-3">
     <div class="col-lg-4">
         <div class="widget h-100">
@@ -28,28 +44,20 @@
                     @foreach (var (value, label, hint) in Themes)
                     {
                         <button class="btn btn-sm @(_look.Theme == value ? "btn-primary" : "btn-outline-secondary")"
-                                title="@hint" @onclick="() => SetAsync(Appearance.ThemeKey, value)">@label</button>
+                                title="@hint" @onclick="() => SaveLiveAsync(Appearance.ThemeKey, value)">@label</button>
                     }
                 </div>
 
-                @* Only meaningful once something dark is on screen, so it says so rather than
-                   sitting there looking broken for somebody who chose light. *@
-                <label class="form-label" for="palette">Dark shade</label>
-                <select id="palette" class="form-select mb-1" value="@_look.DarkPalette"
-                        @onchange="e => SetAsync(Appearance.DarkPaletteKey, e.Value?.ToString(), Appearance.DarkPalettes)">
-                    @foreach (var (value, label, hint) in Appearance.DarkPalettes)
-                    {
-                        <option value="@value">@label</option>
-                    }
-                </select>
                 <div class="form-text mb-3">
-                    @(_look.Theme == "light"
-                        ? "Nothing to see while the theme is light — this changes the dark end only."
-                        : Hint(Appearance.DarkPalettes, _look.DarkPalette)
-                          + " Only the surfaces change; text and the up/down colours stay as they are.")
+                    Which end of the theme to show. A theme with only one end, like Dracula, uses it
+                    whatever this says.
                 </div>
 
                 <label class="form-label" for="accent">Accent colour</label>
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <button class="btn btn-sm @(_look.AccentOverride is null ? "btn-primary" : "btn-outline-secondary")"
+                            @onclick="ClearAccentAsync">The theme's own</button>
+                </div>
                 <div class="swatches mb-2">
                     @foreach (var (value, name) in Appearance.AccentPresets)
                     {
@@ -60,10 +68,13 @@
                 </div>
                 <div class="d-flex align-items-center gap-2">
                     <input type="color" id="accent" class="form-control form-control-color"
-                           value="@_look.Accent" @onchange="e => SetAccentAsync(e.Value?.ToString())" />
+                           value="@(_look.AccentOverride ?? BuiltInThemes.LabbyTwo.Accent.Hex6)" @onchange="e => SetAccentAsync(e.Value?.ToString())" />
                     <span class="tile-meta">or pick your own</span>
                 </div>
-                <div class="form-text">Used for links, buttons, the active tab and every chart.</div>
+                <div class="form-text">
+                    Used for links, buttons, the active tab and the first line of every chart. Picking
+                    one here overrides the theme's; choosing a theme puts its own back.
+                </div>
             </div>
         </div>
     </div>
@@ -92,8 +103,8 @@
                 </select>
                 <div class="form-text mb-3">
                     @Hint(Appearance.Surfaces, _look.Surface)
-                    On true black a raised card keeps its border, because nothing is darker than
-                    #000 for a shadow to fall on.
+                    On a pure-black theme a raised card keeps its border, because nothing is darker
+                    than black for a shadow to fall on.
                 </div>
 
                 <label class="form-label" for="density">Density</label>
@@ -392,7 +403,7 @@
 @if (_confirmReset)
 {
     <ConfirmDialog Title="Reset the appearance?"
-                   Message="Theme, accent, corners, cards, density, text size and typeface all go back to their defaults. The dashboard's name and your units are left alone."
+                   Message="Theme, accent, corners, cards, density, text size and typeface all go back to their defaults. The dashboard's name, your units and any themes you made are left alone."
                    ConfirmText="Reset it"
                    OnCancel="() => _confirmReset = false"
                    OnConfirm="ResetAsync" />
@@ -549,7 +560,21 @@
         if (!Appearance.IsValidColor(value))
             return;
 
-        await SaveAsync(Appearance.AccentKey, value!);
+        await SaveLiveAsync(Appearance.AccentKey, value!);
+    }
+
+    private Task ClearAccentAsync() => SaveLiveAsync(Appearance.AccentKey, "");
+
+    /// <summary>
+    /// For the colour choices — the dark/light mode and the accent — which need no reload:
+    /// ThemeSync pushes them to this page and every other open one as soon as they are saved.
+    /// The rest of this page still reloads, because what it changes (the font, the density)
+    /// is drawn into the document itself.
+    /// </summary>
+    private async Task SaveLiveAsync(string key, string value)
+    {
+        await Offload.Run(async ct => { await AppSettings.SaveAsync(key, value, ct); return true; });
+        _look = Appearance.From(await AppSettings.AllAsync());
     }
 
     /// <summary>A picker returns "#4DA3FF" for the swatch that stored "#4da3ff".</summary>
@@ -641,6 +666,7 @@
         await AppSettings.SaveAsync(new Dictionary<string, string>
         {
             [Appearance.ThemeKey] = defaults.Theme,
+            [ThemeService.ThemeIdKey] = BuiltInThemes.DefaultId,
             [Appearance.AccentKey] = defaults.Accent,
             [Appearance.DensityKey] = defaults.Density,
             [Appearance.RadiusKey] = defaults.Radius,

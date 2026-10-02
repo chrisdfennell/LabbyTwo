@@ -80,6 +80,7 @@ public static class FamilyEndpoints
             [nameof(FamilyPage.Screen)] = FamilyPage.Screens.Status,
             [nameof(FamilyPage.View)] = view,
             [nameof(FamilyPage.Look)] = await LookAsync(settings, ct),
+            [nameof(FamilyPage.Theme)] = await ThemeAsync(context, ct),
             [nameof(FamilyPage.Base)] = path,
             [nameof(FamilyPage.Sent)] = sent,
         });
@@ -154,6 +155,7 @@ public static class FamilyEndpoints
             [nameof(FamilyPage.Screen)] = FamilyPage.Screens.Report,
             [nameof(FamilyPage.View)] = view,
             [nameof(FamilyPage.Look)] = await LookAsync(settings, ct),
+            [nameof(FamilyPage.Theme)] = await ThemeAsync(context, ct),
             [nameof(FamilyPage.Base)] = path,
             [nameof(FamilyPage.AntiforgeryField)] = tokens.FormFieldName,
             [nameof(FamilyPage.AntiforgeryValue)] = tokens.RequestToken ?? "",
@@ -166,6 +168,17 @@ public static class FamilyEndpoints
 
     private static async Task<Appearance> LookAsync(AppSettingsStore settings, CancellationToken ct) =>
         Appearance.From(await settings.AllAsync(ct));
+
+    /// <summary>
+    /// The owner's theme, from memory (see ThemeService). Asked of the request's services
+    /// rather than taken as a handler parameter so the handlers' signatures — and the
+    /// refusal paths, which deliberately show nothing that depends on settings — stay as
+    /// they are.
+    /// </summary>
+    private static async Task<ActiveTheme?> ThemeAsync(HttpContext context, CancellationToken ct) =>
+        context.RequestServices.GetService<ThemeService>() is { } themes
+            ? await themes.ActiveAsync(ThemeSurface.Family, ct)
+            : null;
 
     private static RazorComponentResult<FamilyPage> Page(Dictionary<string, object?> parameters, int status = 200) =>
         new(parameters) { StatusCode = status };
