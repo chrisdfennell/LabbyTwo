@@ -128,6 +128,8 @@ builder.Services.AddSingleton<WidgetHistoryStore>();
 builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<ThemeStore>();
 builder.Services.AddSingleton<ThemeService>();
+builder.Services.AddSingleton<BackdropImageStore>();
+builder.Services.AddSingleton<BackdropService>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
@@ -425,6 +427,10 @@ var shareTheme = app.MapGet("/api/share/theme", async (ThemeService themes, stri
     var safe = new string([.. theme.Id.Where(c => char.IsAsciiLetterOrDigit(c) || c == '-')]);
     return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", $"labbytwo-theme-{safe}.json");
 });
+
+// The uploaded background picture. Behind the fallback login policy like the pages that
+// draw it; cached for a year, because its address is its content hash (see BackdropEndpoints).
+app.MapBackdrop();
 
 var backup = app.MapGet("/api/backup", async (Db db, CancellationToken ct) =>
 {

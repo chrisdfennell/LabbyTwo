@@ -1,6 +1,7 @@
 @inject AppSettingsStore AppSettings
 @inject FontStore Fonts
 @inject ThemeService Themes
+@inject BackdropService Backdrops
 
 <!DOCTYPE html>
 <html lang="en" data-theme="@_mode" data-bs-theme="@BootstrapTheme"
@@ -23,6 +24,12 @@
        must be, since quotes inside a style element are not entity-decoded. ThemeSync
        replaces its contents on open pages when the theme changes. *@
     <style id="labby-theme">@((MarkupString)_theme.Css)</style>
+
+    @* The background and frosted glass, if any — empty by default. Same guarantees as the
+       theme block: built by BackdropCss from enums, clamped numbers, parsed colours and a
+       server-made picture URL, cached by BackdropService, and replaced on open pages by
+       BackdropSync. Always present, even empty, so there is a block to replace. *@
+    <style id="labby-backdrop">@((MarkupString)_backdrop.Css)</style>
 
     @* A hosted web font, if somebody asked for one. Last of the stylesheets so it cannot be
        overridden by ours, and only ever emitted for an https absolute URL — see
@@ -82,6 +89,7 @@
     <script src="@Assets["reconnect.js"]"></script>
     <script src="@Assets["palette.js"]"></script>
     <script src="@Assets["theme.js"]"></script>
+    <script src="@Assets["backdrop.js"]"></script>
     <script src="@Assets["widget-drag.js"]"></script>
     <script src="@Assets["chart-hover.js"]"></script>
     <script src="@Assets["wall.js"]"></script>
@@ -95,6 +103,7 @@
 @code {
     private Appearance _look = Appearance.Default;
     private ActiveTheme _theme = ActiveTheme.For(BuiltInThemes.LabbyTwo);
+    private ActiveBackdrop _backdrop = ActiveBackdrop.Empty;
     private string? _mode;
     private string _face = "";
     private string _manifest = "manifest.webmanifest";
@@ -115,5 +124,6 @@
 
         _theme = await Themes.ActiveAsync();
         _mode = _theme.ModeAttribute(_look);
+        _backdrop = await Backdrops.ActiveAsync();
     }
 }

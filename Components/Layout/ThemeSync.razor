@@ -11,6 +11,9 @@
    Subscribes only once interactive. During prerender there is no browser to push to, and
    the page being rendered already has the current theme in its head. *@
 
+@* The background and glass follow along the same way, on every screen this is on. *@
+<BackdropSync />
+
 @code {
     /// <summary>Which screen this page is — see <see cref="ThemeSurface"/>.</summary>
     [Parameter] public ThemeSurface Surface { get; set; } = ThemeSurface.Dashboard;
