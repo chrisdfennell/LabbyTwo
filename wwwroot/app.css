@@ -1,6 +1,17 @@
 /* ---------- theme ----------
+   Every colour in this stylesheet is a custom property — a token — and nothing else. A
+   theme is a set of values for those tokens; the active one is rendered by ThemeService
+   into a <style id="labby-theme"> block in <head>, after this file, so it wins. The token
+   catalogue, with what each one is for, is Core/ThemeTokens.cs. The test suite holds this
+   file to that: a colour literal anywhere but a token definition fails the build (see
+   ThemeTokenAuditTests for the short allow-list of colours that are genuinely fixed).
+
+   What follows is the default theme, LabbyTwo, written out once more so the stylesheet
+   stands on its own — a page rendered without a theme block, or a mock opened from disk,
+   must not fall back to "unset". A test keeps these values identical to BuiltInThemes.
+
    Dark is the base because that is what a wall-mounted dashboard usually wants, and
-   because defaulting to it means no flash of white before the theme script runs.
+   because defaulting to it means no flash of white before anything else loads.
 
    Three states, in this order:
      :root                         dark
@@ -9,8 +20,8 @@
 
    The light palette is written twice on purpose: one copy has to live inside the media
    query and one outside it, and CSS has no way to share a token block across that line.
-   Change one, change the other. --accent is set inline on <html> from the user's choice,
-   so it is deliberately absent from the overrides below. */
+   The theme block repeats the same structure (ThemeCss.Render). --accent may also be set
+   inline on <html> when somebody picked an accent over their theme's; inline beats both. */
 
 :root {
     --ink: #0a0e13;
@@ -64,54 +75,55 @@
     --shadow: rgba(22, 32, 46, .18);
 }
 
-/* ---------- dark palette variants ----------
-
-   Only the dark end has these, and on purpose: light is already "a white page", and the
-   variations people actually want are all about how dark dark should be. Each one redefines
-   the surface tokens only — text, accent and the status colours are shared, so a variant
-   cannot quietly break contrast on something it was not thinking about.
-
-   Guarded with :not([data-theme="light"]) inside the media query for the same reason the
-   base palette is: somebody on a light OS who has explicitly chosen dark must still get it,
-   and somebody who chose light must not be given a dark variant by their OS. */
-
-:root[data-palette="slate"],
-:root[data-palette="slate"]:not([data-theme="light"]) {
-    --ink: #14181d;
-    --panel: #1c2229;
-    --panel-2: #242b34;
-    --edge: #333c47;
-    --muted: #9aa7b6;
-}
-
-/* True black, for a wall-mounted OLED. The point is the background costing no power, so the
-   page colour really is #000 rather than a very dark grey — and the panels have to lift a
-   little more than usual or every edge in the layout vanishes into it. */
-:root[data-palette="black"],
-:root[data-palette="black"]:not([data-theme="light"]) {
-    --ink: #000000;
-    --panel: #0b0b0d;
-    --panel-2: #15161a;
-    --edge: #262a31;
-    --shadow: rgba(0, 0, 0, .9);
-}
-
-/* A light-themed page ignores both: they are dark palettes, and a "true black" light theme
-   is not a thing anybody asked for. */
-:root[data-theme="light"][data-palette] {
-    --ink: #f2f5f9;
-    --panel: #ffffff;
-    --panel-2: #eef2f7;
-    --edge: #d5dde8;
-}
-
-/* Tints derived from whatever accent the user picked, so changing one colour restyles
-   focus rings, the active nav item and the chart fill together. */
+/* The optional tokens: ones a theme may set but need not, each defaulting to something
+   that fits whatever the required ones are. The theme block always writes all of them
+   (its own value, or exactly these), so these only matter without one. Same list, same
+   order, as ThemeTokens.All — a test checks. */
 :root {
+    --input-bg: var(--panel-2);
+    --input-border: var(--edge);
+    --tooltip-bg: var(--panel-2);
+    --overlay: rgba(0, 0, 0, 0.5);
+    --link: var(--accent);
+    --selection: initial;
+    --accent-2: #9a6bf0;
+    --focus: var(--accent);
+    --neutral: #6c757d;
+    --neutral-ink: #ffffff;
+    --info: var(--accent);
+    --up-soft: color-mix(in srgb, var(--up) 14%, transparent);
+    --down-soft: color-mix(in srgb, var(--down) 14%, transparent);
+    --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
+    --chart-1: var(--accent);
+    --chart-2: #ffb84d;
+    --chart-3: #35d07f;
+    --chart-4: #c792ea;
+    --chart-5: #ff8a65;
+    --chart-6: #4dd0e1;
+    --chart-7: #f06292;
+    --chart-8: #aed581;
+
+    /* Not a colour of its own: the border a raised card keeps. Transparent unless the page
+       is pure black, where a shadow cannot render — ThemeCss decides per theme. */
+    --raised-edge: transparent;
+}
+
+/* Tints derived from whatever accent is in force, so changing one colour restyles focus
+   rings, the active nav item and the chart fill together.
+
+   Declared on .theme-scope as well as :root because a custom property that refers to
+   another is worked out where it is declared, not where it is used. The theme gallery's
+   preview tiles set a whole theme inline on a .theme-scope element; without redeclaring
+   these there, a tile would get the page's tints rather than its own. */
+:root, .theme-scope {
     --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
     --accent-line: color-mix(in srgb, var(--accent) 45%, transparent);
-    --down-soft: color-mix(in srgb, var(--down) 14%, transparent);
     --down-line: color-mix(in srgb, var(--down) 38%, transparent);
+    --up-line: color-mix(in srgb, var(--up) 38%, transparent);
+    --warn-line: color-mix(in srgb, var(--warn) 38%, transparent);
+}
+
+:root {
     --pad: calc(1rem * var(--density));
     --gap: calc(1rem * var(--density));
 
@@ -127,6 +139,170 @@
     --radius-inner: calc(var(--radius) * .66);
 }
 
+/* ---------- Bootstrap, on the tokens ----------
+   Bootstrap brings its own palette — its own blue, its own greys, its own reds — and the
+   components built from it ignore ours unless told. Pointing its variables at the tokens
+   makes every Bootstrap piece (forms, buttons, alerts, list groups, dropdowns, progress
+   bars, modals) follow the theme, without restyling each component by hand.
+
+   On [data-bs-theme] as well as :root because Bootstrap declares its own on that attribute,
+   and on .theme-scope so the gallery's previews get their tile's colours, not the page's.
+   The utility classes (.text-danger and friends) are built from rgb triplets that no
+   custom property can be split into, so those are restated below instead. */
+:root, [data-bs-theme], .theme-scope {
+    --bs-body-bg: var(--ink);
+    --bs-body-color: var(--text);
+    --bs-emphasis-color: var(--text);
+    --bs-heading-color: inherit;
+    --bs-secondary-color: var(--muted);
+    --bs-tertiary-color: var(--placeholder);
+    --bs-secondary-bg: var(--panel-2);
+    --bs-tertiary-bg: var(--panel-2);
+    --bs-border-color: var(--edge);
+    --bs-border-color-translucent: var(--edge);
+    --bs-link-color: var(--link);
+    --bs-link-hover-color: var(--link);
+    --bs-code-color: var(--code);
+    --bs-highlight-color: var(--text);
+    --bs-highlight-bg: var(--warn-soft);
+
+    --bs-primary: var(--accent);
+    --bs-secondary: var(--neutral);
+    --bs-success: var(--up);
+    --bs-danger: var(--down);
+    --bs-warning: var(--warn);
+    --bs-info: var(--info);
+
+    --bs-primary-text-emphasis: var(--accent);
+    --bs-secondary-text-emphasis: var(--muted);
+    --bs-success-text-emphasis: var(--up);
+    --bs-danger-text-emphasis: var(--down);
+    --bs-warning-text-emphasis: var(--warn);
+    --bs-info-text-emphasis: var(--info);
+
+    --bs-primary-bg-subtle: var(--accent-soft);
+    --bs-secondary-bg-subtle: var(--panel-2);
+    --bs-success-bg-subtle: var(--up-soft);
+    --bs-danger-bg-subtle: var(--down-soft);
+    --bs-warning-bg-subtle: var(--warn-soft);
+    --bs-info-bg-subtle: color-mix(in srgb, var(--info) 14%, transparent);
+
+    --bs-primary-border-subtle: var(--accent-line);
+    --bs-secondary-border-subtle: var(--edge);
+    --bs-success-border-subtle: var(--up-line);
+    --bs-danger-border-subtle: var(--down-line);
+    --bs-warning-border-subtle: var(--warn-line);
+    --bs-info-border-subtle: color-mix(in srgb, var(--info) 38%, transparent);
+
+    --bs-form-valid-color: var(--up);
+    --bs-form-valid-border-color: var(--up);
+    --bs-form-invalid-color: var(--down);
+    --bs-form-invalid-border-color: var(--down);
+    --bs-focus-ring-color: var(--accent-soft);
+}
+
+.text-primary { color: var(--accent) !important; }
+.text-secondary, .text-body-secondary { color: var(--muted) !important; }
+.text-success { color: var(--up) !important; }
+.text-danger { color: var(--down) !important; }
+.text-warning { color: var(--warn) !important; }
+.text-info { color: var(--info) !important; }
+
+.text-bg-primary { color: var(--accent-ink) !important; background-color: var(--accent) !important; }
+.text-bg-secondary { color: var(--neutral-ink) !important; background-color: var(--neutral) !important; }
+.text-bg-success { color: var(--ink) !important; background-color: var(--up) !important; }
+.text-bg-danger { color: var(--ink) !important; background-color: var(--down) !important; }
+.text-bg-warning { color: var(--ink) !important; background-color: var(--warn) !important; }
+.text-bg-info { color: var(--ink) !important; background-color: var(--info) !important; }
+
+.border-danger { border-color: var(--down) !important; }
+.border-warning { border-color: var(--warn) !important; }
+.border-success { border-color: var(--up) !important; }
+
+/* The buttons. Each Bootstrap variant hard-codes its colours in its own class, so each is
+   restated here from one token: solid buttons fill with it and take the page colour for
+   their label, outlined ones draw in it and fill with it on hover. */
+.btn-secondary, .btn-outline-secondary { --btn-tone: var(--neutral); }
+.btn-success, .btn-outline-success { --btn-tone: var(--up); }
+.btn-danger, .btn-outline-danger { --btn-tone: var(--down); }
+.btn-warning, .btn-outline-warning { --btn-tone: var(--warn); }
+.btn-info, .btn-outline-info { --btn-tone: var(--info); }
+.btn-outline-primary { --btn-tone: var(--accent); }
+.btn-outline-light { --btn-tone: var(--text); }
+
+.btn-secondary, .btn-success, .btn-danger, .btn-warning, .btn-info {
+    --bs-btn-bg: var(--btn-tone);
+    --bs-btn-border-color: var(--btn-tone);
+    --bs-btn-color: var(--ink);
+    --bs-btn-hover-bg: color-mix(in srgb, var(--btn-tone) 85%, var(--text));
+    --bs-btn-hover-border-color: color-mix(in srgb, var(--btn-tone) 85%, var(--text));
+    --bs-btn-hover-color: var(--ink);
+    --bs-btn-active-bg: color-mix(in srgb, var(--btn-tone) 75%, var(--text));
+    --bs-btn-active-border-color: color-mix(in srgb, var(--btn-tone) 75%, var(--text));
+    --bs-btn-active-color: var(--ink);
+    --bs-btn-disabled-bg: var(--btn-tone);
+    --bs-btn-disabled-border-color: var(--btn-tone);
+    --bs-btn-disabled-color: var(--ink);
+}
+
+/* Secondary is labelled in its own ink: its tone is a mid-grey in most themes, and the
+   page colour on mid-grey is the one combination nobody can read. */
+.btn-secondary {
+    --bs-btn-color: var(--neutral-ink);
+    --bs-btn-hover-color: var(--neutral-ink);
+    --bs-btn-active-color: var(--neutral-ink);
+    --bs-btn-disabled-color: var(--neutral-ink);
+}
+
+.btn-outline-primary, .btn-outline-secondary, .btn-outline-success, .btn-outline-danger,
+.btn-outline-warning, .btn-outline-info, .btn-outline-light {
+    --bs-btn-color: var(--btn-tone);
+    --bs-btn-border-color: var(--btn-tone);
+    --bs-btn-hover-color: var(--ink);
+    --bs-btn-hover-bg: var(--btn-tone);
+    --bs-btn-hover-border-color: var(--btn-tone);
+    --bs-btn-active-color: var(--ink);
+    --bs-btn-active-bg: var(--btn-tone);
+    --bs-btn-active-border-color: var(--btn-tone);
+    --bs-btn-disabled-color: var(--btn-tone);
+    --bs-btn-disabled-border-color: var(--btn-tone);
+}
+
+/* Likewise a grey outline button once hovered: filled with the neutral grey, so labelled
+   in the neutral ink. */
+.btn-outline-secondary {
+    --bs-btn-hover-color: var(--neutral-ink);
+    --bs-btn-active-color: var(--neutral-ink);
+}
+
+.progress, .progress-stacked {
+    --bs-progress-bg: var(--panel-2);
+    --bs-progress-bar-bg: var(--accent);
+    --bs-progress-bar-color: var(--accent-ink);
+}
+
+.list-group {
+    --bs-list-group-active-bg: var(--accent);
+    --bs-list-group-active-border-color: var(--accent);
+    --bs-list-group-active-color: var(--accent-ink);
+    --bs-list-group-bg: var(--panel);
+}
+
+.dropdown-menu {
+    --bs-dropdown-bg: var(--panel);
+    --bs-dropdown-link-active-bg: var(--accent);
+    --bs-dropdown-link-active-color: var(--accent-ink);
+    --bs-dropdown-header-color: var(--muted);
+}
+
+.modal { --bs-modal-bg: var(--panel); }
+
+.btn-close { --bs-btn-close-focus-shadow: 0 0 0 .25rem var(--accent-soft); }
+
+::selection {
+    background-color: var(--selection, Highlight);
+}
+
 html {
     font-size: calc(100% * var(--text-scale));
 }
@@ -138,7 +314,7 @@ html, body {
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-a { color: var(--accent); text-decoration: none; }
+a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 /* Interactive things get a visible ring — Bootstrap's own is tuned for its palette and
@@ -152,7 +328,7 @@ select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 [role="button"]:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--focus);
     outline-offset: 2px;
 }
 
@@ -287,7 +463,7 @@ h1[tabindex]:focus { outline: none; }
 
 :root[data-surface="raised"] .widget,
 :root[data-surface="raised"] .panel {
-    border-color: transparent;
+    border-color: var(--raised-edge);
     box-shadow: 0 1px 2px var(--shadow), 0 8px 24px var(--shadow);
 }
 
@@ -310,14 +486,10 @@ h1[tabindex]:focus { outline: none; }
 :root[data-theme="light"][data-surface="flat"] .widget,
 :root[data-theme="light"][data-surface="flat"] .panel { background: var(--panel); }
 
-/* Raised on true black keeps its border. A shadow is a darkening of what is behind it, and
-   nothing is darker than #000 — so on an OLED panel the lift simply does not render and the
-   card loses every edge it had. Rather than let one combination be quietly broken, this is
-   the one place raised and outlined agree. */
-:root[data-palette="black"][data-surface="raised"] .widget,
-:root[data-palette="black"][data-surface="raised"] .panel {
-    border-color: var(--edge);
-}
+/* Raised on a pure-black page keeps its border: --raised-edge is the edge colour there
+   and transparent everywhere else. A shadow is a darkening of what is behind it, and
+   nothing is darker than black — so on an OLED panel the lift simply does not render and
+   the card would lose every edge it had. ThemeCss works out which pages that is. */
 
 /* ---------- widgets ---------- */
 
@@ -477,7 +649,7 @@ h1[tabindex]:focus { outline: none; }
     justify-content: center;
     overflow: hidden;
     border-radius: .5rem;
-    background: #000;
+    background: #000; /* allow-colour: a letterbox is black whatever the theme, like a TV's */
 }
 
 .camera-frame img,
@@ -805,7 +977,7 @@ h1[tabindex]:focus { outline: none; }
     z-index: 1080;
     margin: 0;
     pointer-events: none;
-    box-shadow: 0 18px 40px rgb(0 0 0 / .45);
+    box-shadow: 0 18px 40px var(--shadow);
     opacity: .95;
     cursor: grabbing;
     will-change: transform;
@@ -1137,12 +1309,12 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
    select arrow as background images that rely on no-repeat. With it reset, a 2em switch
    tiled its 1em knob into two dots and the select arrow repeated along the field. */
 .form-control, .form-select, .form-check-input {
-    background-color: var(--panel-2);
-    border-color: var(--edge);
+    background-color: var(--input-bg);
+    border-color: var(--input-border);
     color: var(--text);
 }
 .form-control:focus, .form-select:focus {
-    background-color: var(--panel-2);
+    background-color: var(--input-bg);
     border-color: var(--accent);
     color: var(--text);
     box-shadow: 0 0 0 .2rem var(--accent-soft);
@@ -1229,7 +1401,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     width: 100%;
     border: 1px solid var(--edge);
     border-radius: var(--radius);
-    background: #fff;
+    background: #fff; /* allow-colour: an embedded page was designed against white, not our theme */
 }
 
 /* ---------- command palette ---------- */
@@ -1237,7 +1409,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .palette-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, .5);
+    background: var(--overlay);
     z-index: 1090;
 }
 .palette {
@@ -1379,6 +1551,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     position: relative;
     height: 6px;
     border-radius: 3px;
+    /* allow-colour: the EPA's own band colours, which is what lets the bar need no key */
     background: linear-gradient(to right, #35d07f 0%, #facc15 33%, #ff8a5c 50%, #ff5c6c 67%, #a855f7 100%);
 }
 .aqi-scale > span {
@@ -1749,7 +1922,7 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     padding: .4rem .55rem;
     border: 1px solid var(--edge);
     border-radius: var(--radius-inner);
-    background: var(--panel-2);
+    background: var(--tooltip-bg);
     box-shadow: 0 8px 24px var(--shadow);
     font-size: .8rem;
     line-height: 1.35;
@@ -2452,8 +2625,9 @@ html.wall-cursor-hidden * { cursor: none !important; }
     background: color-mix(in srgb, var(--callout) 9%, transparent);
 }
 .md-callout-tip { --callout: var(--up); }
-/* No token for purple, so it is mixed towards the text colour: lighter on dark, darker on light. */
-.md-callout-important { --callout: color-mix(in srgb, #9a6bf0 78%, var(--text)); }
+/* The theme's second accent (a purple, by default), mixed towards the text colour: lighter
+   on dark, darker on light. */
+.md-callout-important { --callout: color-mix(in srgb, var(--accent-2) 78%, var(--text)); }
 .md-callout-warning { --callout: var(--warn); }
 .md-callout-caution { --callout: var(--down); }
 .markdown-body .md-callout-title,
@@ -2768,3 +2942,153 @@ a.md-diagram-node:focus { outline: none; }
 .md-diagram-node.is-maintenance .md-diagram-bar { fill: var(--accent); }
 .md-diagram-node.is-maintenance .md-diagram-box { stroke: var(--accent-line); stroke-dasharray: 5 3; }
 .md-diagram-node.is-paused { opacity: .6; }
+
+/* ---------- themes: gallery, previews and the editor ----------
+   A preview is a .theme-scope with a whole theme set inline on it (see ThemePreview), so
+   everything in here is written against the tokens like the rest of the page — it just
+   finds a different set of them. */
+
+.theme-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+    gap: .85rem;
+}
+
+.theme-tile {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    padding: .5rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+}
+.theme-tile.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+.theme-tile-pick {
+    display: flex;
+    flex-direction: column;
+    gap: .3rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    text-align: left;
+    border-radius: var(--radius-inner);
+}
+.theme-tile-pick:disabled { opacity: .7; }
+.theme-tile-previews { display: flex; gap: .35rem; }
+.theme-tile-previews > .theme-preview { flex: 1 1 0; min-width: 0; }
+.theme-tile-name { font-weight: 650; display: flex; align-items: center; gap: .35rem; }
+.theme-tile-check { color: var(--accent); }
+.theme-tile-meta { color: var(--muted); font-size: .75rem; }
+.theme-tile-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
+.theme-tile-actions .btn { --bs-btn-padding-y: .1rem; --bs-btn-font-size: .75rem; }
+
+.theme-preview {
+    background: var(--ink);
+    color: var(--text);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-inner);
+    padding: .4rem;
+    font-size: .7rem;
+    line-height: 1.3;
+}
+.theme-preview .tp-card {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: calc(var(--radius-inner) * .8);
+    padding: .4rem .45rem;
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+    box-shadow: 0 2px 6px var(--shadow);
+}
+.theme-preview .tp-head { display: flex; align-items: center; gap: .3rem; overflow: hidden; }
+.theme-preview .tp-diamond { color: var(--accent); }
+.theme-preview .tp-title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.theme-preview .tp-value { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.theme-preview .tp-unit { color: var(--muted); font-size: .65rem; font-weight: 500; margin-left: .15rem; }
+.theme-preview .tp-row { display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.theme-preview .tp-dot { width: .5rem; height: .5rem; border-radius: 50%; display: inline-block; }
+.theme-preview .tp-muted { color: var(--muted); }
+.theme-preview .tp-chart { width: 100%; height: 1.6rem; display: block; }
+.theme-preview .tp-btn {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-radius: .3rem;
+    padding: .05rem .4rem;
+    font-weight: 600;
+}
+.theme-preview .tp-link { color: var(--link); text-decoration: underline; }
+.theme-preview .tp-code {
+    color: var(--code);
+    background: var(--panel-2);
+    border-radius: .25rem;
+    padding: 0 .3rem;
+    font-family: var(--bs-font-monospace, monospace);
+}
+.theme-preview .tp-field {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: var(--placeholder);
+    border-radius: .3rem;
+    padding: .2rem .4rem;
+}
+.theme-preview .tp-callouts { display: flex; gap: .6rem; flex-wrap: wrap; font-weight: 600; }
+.theme-preview .tp-chart-keys { display: grid; grid-template-columns: repeat(8, 1fr); gap: .2rem; }
+.theme-preview .tp-chart-keys > span { height: .45rem; border-radius: .2rem; }
+
+.theme-preview.is-large { font-size: .9rem; padding: .75rem; }
+.theme-preview.is-large .tp-card { padding: .75rem; gap: .5rem; }
+.theme-preview.is-large .tp-value { font-size: 1.6rem; }
+.theme-preview.is-large .tp-dot { width: .7rem; height: .7rem; }
+.theme-preview.is-large .tp-chart { height: 3rem; }
+
+.theme-import > summary { cursor: pointer; font-weight: 600; }
+.theme-import-file { max-width: 22rem; }
+
+.theme-token-group { margin: 0 0 1rem; }
+.theme-token-group > legend {
+    color: var(--muted);
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: .35rem;
+}
+.theme-token {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 2.5rem minmax(7rem, 11rem) auto;
+    align-items: center;
+    gap: .5rem;
+    padding: .2rem 0;
+    border-bottom: 1px solid var(--edge);
+}
+.theme-token:last-child { border-bottom: 0; }
+.theme-token-label { margin: 0; font-size: .85rem; }
+.theme-token-hint { display: block; color: var(--muted); font-size: .72rem; }
+.theme-token .form-control-color { width: 2.5rem; padding: .15rem; }
+
+.theme-editor-side { position: sticky; top: 1rem; }
+
+.theme-contrast td { vertical-align: middle; font-size: .82rem; }
+.theme-contrast tr.is-fail td { color: var(--down); }
+.contrast-grade {
+    display: inline-block;
+    min-width: 3rem;
+    text-align: center;
+    border-radius: .3rem;
+    padding: 0 .35rem;
+    font-weight: 700;
+    font-size: .75rem;
+}
+.contrast-grade.grade-aaa { background: var(--up-soft); color: var(--up); }
+.contrast-grade.grade-aa { background: var(--accent-soft); color: var(--accent); }
+.contrast-grade.grade-fail { background: var(--down-soft); color: var(--down); }
+
+@media (max-width: 575.98px) {
+    .theme-token { grid-template-columns: minmax(0, 1fr) 2.5rem auto; }
+    .theme-token-text { grid-column: 1 / -1; }
+    .theme-editor-side { position: static; }
+}

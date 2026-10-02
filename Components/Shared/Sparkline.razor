@@ -20,7 +20,8 @@ else
 
 @code {
     [Parameter, EditorRequired] public IReadOnlyList<double> Values { get; set; } = [];
-    [Parameter] public string Color { get; set; } = "#4da3ff";
+    /// <summary>A CSS colour — normally a token, so the line follows the theme.</summary>
+    [Parameter] public string Color { get; set; } = "var(--chart-1)";
     [Parameter] public bool Filled { get; set; } = true;
     [Parameter] public string Label { get; set; } = "trend";
 

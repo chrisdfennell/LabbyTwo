@@ -97,6 +97,7 @@ public sealed record Appearance(
     string UnitSystem,
     string Radius,
     string Surface,
+    // Read only to carry an old "dark shade" choice over to its theme — see ThemeService.ThemeIdFor.
     string DarkPalette,
     string TextScale,
     string Font,
@@ -119,7 +120,7 @@ public sealed record Appearance(
     public const string WideScreensKey = "wide_screens";
 
     public static Appearance Default => new(
-        "system", "#4da3ff", "comfortable", "LabbyTwo", Core.Units.Imperial,
+        "system", "", "comfortable", "LabbyTwo", Core.Units.Imperial,
         "rounded", "outlined", "midnight", "normal", "sans", "", "", "columns");
 
     public static Appearance From(SettingsBag settings) => new(
@@ -153,13 +154,6 @@ public sealed record Appearance(
         ("outlined", "Outlined", "A hairline border and no shadow. The default."),
         ("raised", "Raised", "No border — cards lift off the page with a soft shadow."),
         ("flat", "Flat", "No border and no shadow; cards are told apart by their fill alone."),
-    ];
-
-    public static readonly (string Value, string Label, string Hint)[] DarkPalettes =
-    [
-        ("midnight", "Midnight", "Blue-black. The default."),
-        ("slate", "Slate", "Warmer and lighter — easier to read in a lit room."),
-        ("black", "True black", "For an OLED wall panel: the background draws no power and the edges disappear."),
     ];
 
     public static readonly (string Value, string Label, string Hint)[] TextScales =
@@ -252,14 +246,6 @@ public sealed record Appearance(
     /// </summary>
     public string? ThemeAttribute => Theme is "light" or "dark" ? Theme : null;
 
-    /// <summary>
-    /// The dark palette variant, as an attribute rather than a custom property, because it
-    /// swaps a whole block of tokens rather than setting one — the same reason the theme is
-    /// an attribute. Absent for the default, so the stylesheet's own values stand.
-    /// </summary>
-    public string? PaletteAttribute =>
-        DarkPalettes.Any(p => p.Value == DarkPalette) && DarkPalette != "midnight" ? DarkPalette : null;
-
     /// <summary>Card treatment, for the same reason: it is a set of rules, not a value.</summary>
     public string? SurfaceAttribute =>
         Surfaces.Any(s => s.Value == Surface) && Surface != "outlined" ? Surface : null;
@@ -279,12 +265,17 @@ public sealed record Appearance(
     /// one value that comes from a text box, the accent, is checked by
     /// <see cref="IsValidColor"/> first, because this string goes into a style attribute and
     /// anything unvalidated in it is an injection point rather than a colour.
+    ///
+    /// The accent is only here when somebody chose one over their theme's. Inline on the html
+    /// element it outranks every rule in the theme block, which is exactly what an override
+    /// is for; left out, the theme's own accent stands — per end, so a theme whose light
+    /// accent is darker than its dark one keeps both.
     /// </summary>
     public string StyleAttribute
     {
         get
         {
-            var accent = IsValidColor(Accent) ? Accent : Default.Accent;
+            var accent = AccentOverride is { } chosen ? $"--accent: {chosen}; " : "";
 
             var density = Density switch { "compact" => "0.86", "roomy" => "1.12", _ => "1" };
 
@@ -312,7 +303,7 @@ public sealed record Appearance(
                 _ => "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
             };
 
-            return $"--accent: {accent}; --density: {density}; --radius: {radius}; "
+            return $"{accent}--density: {density}; --radius: {radius}; "
                  + $"--text-scale: {text}; --font-body: {font};";
         }
     }
@@ -352,6 +343,13 @@ public sealed record Appearance(
     /// <summary>The stylesheet to pull in, or null. Only ever set for the custom typeface.</summary>
     public string? WebFontUrl =>
         Font == "custom" && IsValidFontUrl(FontUrl) ? FontUrl : null;
+
+    /// <summary>
+    /// The accent somebody picked over their theme's, or null to use the theme's. Empty is
+    /// "the theme's" by design — choosing a theme clears it — and anything stored that is not
+    /// a plain hex colour is treated the same way rather than reaching the page.
+    /// </summary>
+    public string? AccentOverride => IsValidColor(Accent) ? Accent : null;
 
     /// <summary>
     /// Only #rgb and #rrggbb get through. The value goes into a style attribute, so

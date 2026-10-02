@@ -76,9 +76,14 @@ public class AppearanceTests
     [Fact]
     public void AnInvalidStoredAccentFallsBackRatherThanReachingTheStyleAttribute()
     {
+        // An accent that is not a colour is no override at all: the theme's own accent stands.
         var look = Appearance.From(new SettingsBag { [Appearance.AccentKey] = "javascript:alert(1)" });
-        Assert.Contains(Appearance.Default.Accent, look.StyleAttribute);
+        Assert.Null(look.AccentOverride);
+        Assert.DoesNotContain("--accent", look.StyleAttribute);
         Assert.DoesNotContain("javascript", look.StyleAttribute);
+
+        var chosen = Appearance.From(new SettingsBag { [Appearance.AccentKey] = "#ef4444" });
+        Assert.Contains("--accent: #ef4444;", chosen.StyleAttribute);
     }
 
     [Fact]

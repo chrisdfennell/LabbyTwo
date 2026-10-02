@@ -902,6 +902,20 @@ public sealed class Db
         CREATE INDEX IF NOT EXISTS ix_widget_versions_kept ON widget_versions (kept_at);
         CREATE INDEX IF NOT EXISTS ix_widget_versions_deleted ON widget_versions (tab_id, kept_at) WHERE reason = 'deleted';
         """,
+
+        // 41 — themes somebody made: customised from a built-in, imported from a file or
+        // pasted from a base16 scheme. The theme itself is the same versioned JSON the export
+        // writes (see ThemeJson), so there is one format, one validator, and a row that reads
+        // back exactly as a file would — re-validated on the way out, so a row edited by hand
+        // can never put anything but colours into a stylesheet. The name is copied out only
+        // to order by.
+        """
+        CREATE TABLE IF NOT EXISTS user_themes (
+            id         TEXT    PRIMARY KEY,
+            name       TEXT    NOT NULL,
+            json       TEXT    NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT 0);
+        """,
     ];
 
     /// <summary>
