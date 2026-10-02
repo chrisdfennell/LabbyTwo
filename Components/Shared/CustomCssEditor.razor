@@ -1,0 +1,391 @@
+@implements IAsyncDisposable
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Options
+@inject CustomCssService Styles
+@inject IOptions<LabbyOptions> Options
+@inject IJSRuntime JS
+@inject Offload Offload
+
+@* Appearance → Advanced → Custom CSS. The owner's own stylesheet, after the theme on every
+   page: a code box, Save / Preview / Revert, the switch that turns it all off, and the last
+   twenty saves to go back to.
+
+   The text never travels as a bound value. A stylesheet can be 100 KB and a message from the
+   browser to the circuit is capped at 32 KB, so the box is left to the browser and read as a
+   stream when a button needs it (custom-css.js). That also means typing costs nothing on the
+   server — no round trip per key. *@
+
+<div class="widget mt-3" id="custom-css">
+    <div class="widget-head">
+        <h2 class="widget-title">Custom CSS <span class="badge text-bg-secondary ms-1">Advanced</span></h2>
+    </div>
+    <div class="widget-body">
+        @if (!CanEdit)
+        {
+            <p class="tile-meta mb-0">Only the signed-in owner can change custom CSS.</p>
+        }
+        else
+        {
+            <p class="tile-meta mt-0">
+                Your own rules, applied after the theme on every page — so they win, and can use the
+                theme's colours as <code>var(--accent)</code>, <code>var(--panel)</code> and so on.
+                The README lists the tokens and the class names worth targeting.
+                If a change makes a page unusable, open any address with <a href="settings/appearance?safe=1"><code>?safe=1</code></a>
+                on the end: custom CSS is skipped in that browser until it is closed.
+            </p>
+
+            <div class="form-check form-switch custom-css-switch mb-2">
+                <input class="form-check-input" type="checkbox" role="switch" id="custom-css-on"
+                       checked="@_state.Enabled" @onchange="e => SetEnabledAsync(e.Value is true)" />
+                <label class="form-check-label" for="custom-css-on">
+                    @(_state.Enabled ? "Custom CSS is on" : "Custom CSS is off — saved, but on no page")
+                </label>
+            </div>
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" role="switch" id="custom-css-family"
+                       checked="@_state.OnFamily" @onchange="e => SetFamilyAsync(e.Value is true)" />
+                <label class="form-check-label" for="custom-css-family">Also on the family page</label>
+            </div>
+
+            <label class="form-label" for="custom-css-text">Stylesheet</label>
+            <div class="custom-css-box">
+                <pre class="custom-css-gutter" aria-hidden="true" @ref="_gutter"></pre>
+                <textarea id="custom-css-text" class="custom-css-text" @ref="_area" spellcheck="false" wrap="off"
+                          autocomplete="off" autocapitalize="off" aria-describedby="custom-css-help"
+                          placeholder="/* For example */&#10;.nav-brand-text { display: none; }"></textarea>
+            </div>
+            <div class="form-text" id="custom-css-help">
+                Tab indents; press Escape then Tab to move on. Up to @(CustomCss.MaxBytes / 1024) KB.
+                No <code>@@import</code>, and no addresses outside this dashboard — paths like
+                <code>/icon.svg</code> and small <code>data:</code> images only.
+            </div>
+
+            <div class="d-flex flex-wrap gap-2 mt-2">
+                <button type="button" class="btn btn-sm btn-primary" disabled="@_busy" @onclick="SaveAsync">Save</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="PreviewAsync">Preview</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="RevertAsync">Revert</button>
+            </div>
+
+            @if (_errors.Count > 0)
+            {
+                <div class="alert alert-danger mt-3 mb-0" role="alert">
+                    <div class="fw-semibold">Not saved:</div>
+                    <ul class="mb-0">
+                        @foreach (var error in _errors)
+                        {
+                            <li>@error</li>
+                        }
+                    </ul>
+                </div>
+            }
+            @if (_warnings.Count > 0)
+            {
+                <div class="alert alert-warning mt-3 mb-0" role="status">
+                    <ul class="mb-0">
+                        @foreach (var warning in _warnings)
+                        {
+                            <li>@warning</li>
+                        }
+                    </ul>
+                </div>
+            }
+            @if (_status is { Length: > 0 })
+            {
+                <div class="tile-meta mt-2" role="status">@_status</div>
+            }
+
+            <h3 class="h6 mt-4 mb-2">Earlier saves</h3>
+            @if (!_listed)
+            {
+                <div class="tile-meta">Loading…</div>
+            }
+            else if (_history.Count == 0)
+            {
+                <div class="tile-meta">Nothing saved yet. The last @CustomCss.HistoryLimit saves are kept here.</div>
+            }
+            else
+            {
+                <ul class="list-unstyled custom-css-history mb-0">
+                    @foreach (var version in _history)
+                    {
+                        var current = version.Css == _state.Css;
+                        <li class="custom-css-version">
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <span class="fw-semibold">@version.SavedAt.ToLocalTime().ToString("d MMM yyyy HH:mm")</span>
+                                <span class="tile-meta">@Who(version.SavedBy)@(version.Note.Length > 0 ? " · " + version.Note : "")</span>
+                                @if (current)
+                                {
+                                    <span class="badge text-bg-secondary">in use</span>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto"
+                                            @onclick="() => ToggleCompare(version.Id)">@(_comparing == version.Id ? "Hide changes" : "Compare with current")</button>
+                                    <button type="button" class="btn btn-sm btn-outline-primary" disabled="@_busy"
+                                            @onclick="() => RestoreAsync(version.Id)">Restore</button>
+                                }
+                            </div>
+                            @if (_comparing == version.Id)
+                            {
+                                var diff = LineDiff.Compare(version.Css, _state.Css);
+                                <div class="custom-css-diff" role="table" aria-label="Changes from this save to the current one">
+                                    @foreach (var line in diff)
+                                    {
+                                        <div class="custom-css-diff-line custom-css-diff-@line.Kind.ToString().ToLowerInvariant()" role="row">
+                                            <span class="custom-css-diff-sign" aria-hidden="true">@(line.Kind switch { DiffKind.Added => "+", DiffKind.Removed => "−", _ => " " })</span>
+                                            <span class="visually-hidden">@(line.Kind switch { DiffKind.Added => "Added: ", DiffKind.Removed => "Removed: ", _ => "" })</span>
+                                            <span>@line.Text</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? Auth { get; set; }
+
+    private ElementReference _area;
+    private ElementReference _gutter;
+    private CustomCssState _state = CustomCssState.Empty;
+    private IReadOnlyList<CustomCssVersion> _history = [];
+    private bool _listed;
+    private bool _busy;
+    private bool _previewing;
+    private long? _comparing;
+    private string? _me;
+    private bool _signedIn;
+    private string _status = "";
+    private IReadOnlyList<string> _errors = [];
+    private IReadOnlyList<string> _warnings = [];
+
+    /// <summary>
+    /// The owner, which on an install with a login is whoever signed in (there is one
+    /// account), and on one without is anybody who can reach it — the same rule as every
+    /// other setting. Pages are behind the login already; this is the second lock, so the
+    /// editor never draws for a request that somehow arrived without one.
+    /// </summary>
+    private bool CanEdit => !Options.Value.Auth.Enabled || _signedIn;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Auth is not null && (await Auth).User.Identity is { IsAuthenticated: true } identity)
+        {
+            _signedIn = true;
+            _me = identity.Name;
+        }
+        _state = await Styles.CurrentAsync();
+        // The prerender is thrown away a moment later; only the live page reads the history.
+        if (RendererInfo.IsInteractive)
+            _ = LoadHistoryAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || !CanEdit)
+            return;
+        try
+        {
+            await JS.InvokeVoidAsync("labbyCustomCss.attach", _area, _gutter);
+            await JS.InvokeVoidAsync("labbyCustomCss.setValue", _area, _state.Css);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        try
+        {
+            var history = await Offload.Run(ct => Styles.HistoryAsync(ct));
+            await InvokeAsync(() =>
+            {
+                _history = history;
+                _listed = true;
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // The page was left while the history was on its way.
+        }
+    }
+
+    private static string Who(string savedBy) => savedBy.Length > 0 ? savedBy : "no login set up";
+
+    /// <summary>The box's text, read from the browser as a stream — see the note at the top.</summary>
+    private async Task<string> ReadAsync()
+    {
+        var stream = await JS.InvokeAsync<IJSStreamReference>("labbyCustomCss.read", _area);
+        if (stream is null)
+            return "";
+        await using (stream)
+        {
+            // Read a little past the limit, so the check can say how far over it is rather
+            // than the read failing with a framework error.
+            await using var read = await stream.OpenReadStreamAsync(maxAllowedSize: CustomCss.MaxBytes * 4L);
+            using var reader = new StreamReader(read, System.Text.Encoding.UTF8);
+            return await reader.ReadToEndAsync();
+        }
+    }
+
+    private void Report(CustomCss.Check check, string ok)
+    {
+        _errors = check.Errors;
+        _warnings = check.Warnings;
+        _status = check.Ok ? ok : "";
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanEdit)
+            return;
+        _busy = true;
+        try
+        {
+            var text = await ReadAsync();
+            var check = await Offload.Run(ct => Styles.SaveAsync(text, _me ?? "", "", ct));
+            Report(check, check.Ok ? $"Saved ({Size(check.Bytes)}). Open pages have it now." : "");
+            if (check.Ok)
+            {
+                _previewing = false;
+                _state = await Styles.CurrentAsync();
+                // The push to other pages skips this one when nothing changed for it, and a
+                // preview may be showing — put the saved version back explicitly.
+                await JS.InvokeVoidAsync("labbyCustomCss.apply", await Styles.CssForAsync(ThemeSurface.Dashboard, false));
+                await LoadHistoryAsync();
+            }
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase))
+        {
+            _errors = [$"It is far over the {CustomCss.MaxBytes / 1024} KB limit."];
+            _status = "";
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Checked like a save and shown in this tab only — nothing is stored, and no other screen changes.</summary>
+    private async Task PreviewAsync()
+    {
+        _busy = true;
+        try
+        {
+            var check = CustomCss.Validate(await ReadAsync());
+            Report(check, "Previewing in this browser only. Save to put it on every screen, or Revert to drop it.");
+            if (check.Ok)
+            {
+                _previewing = true;
+                await JS.InvokeVoidAsync("labbyCustomCss.preview", LabbyTwo.Core.CustomCss.ForStyleElement(check.Css));
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Back to what is saved: the box, and this page's styles if a preview was showing.</summary>
+    private async Task RevertAsync()
+    {
+        try
+        {
+            _state = await Styles.CurrentAsync();
+            await JS.InvokeVoidAsync("labbyCustomCss.setValue", _area, _state.Css);
+            await JS.InvokeVoidAsync("labbyCustomCss.apply", await Styles.CssForAsync(ThemeSurface.Dashboard, false));
+            _previewing = false;
+            _errors = [];
+            _warnings = [];
+            _status = "Back to the saved version.";
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private async Task RestoreAsync(long id)
+    {
+        if (!CanEdit)
+            return;
+        _busy = true;
+        try
+        {
+            var check = await Offload.Run(ct => Styles.RestoreAsync(id, _me ?? "", ct));
+            if (check is null)
+            {
+                _errors = ["That save has been tidied away since the list was drawn."];
+                _status = "";
+            }
+            else
+            {
+                Report(check, "Restored. Open pages have it now.");
+                _state = await Styles.CurrentAsync();
+                _comparing = null;
+                _previewing = false;
+                await JS.InvokeVoidAsync("labbyCustomCss.setValue", _area, _state.Css);
+                await JS.InvokeVoidAsync("labbyCustomCss.apply", await Styles.CssForAsync(ThemeSurface.Dashboard, false));
+            }
+            await LoadHistoryAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ToggleCompare(long id) => _comparing = _comparing == id ? null : id;
+
+    private async Task SetEnabledAsync(bool on)
+    {
+        if (!CanEdit)
+            return;
+        await Offload.Run(async ct => { await Styles.SetEnabledAsync(on, ct); return true; });
+        _state = await Styles.CurrentAsync();
+        _status = on ? "Custom CSS is back on every page." : "Custom CSS is off on every page. It is still saved here.";
+    }
+
+    private async Task SetFamilyAsync(bool on)
+    {
+        if (!CanEdit)
+            return;
+        await Offload.Run(async ct => { await Styles.SetOnFamilyAsync(on, ct); return true; });
+        _state = await Styles.CurrentAsync();
+    }
+
+    private static string Size(int bytes) =>
+        bytes < 1024 ? $"{bytes} bytes" : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / 1024.0:0.#} KB");
+
+    /// <summary>A preview is for this visit to this page; leaving puts the saved CSS back.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (!_previewing)
+            return;
+        try
+        {
+            await JS.InvokeVoidAsync("labbyCustomCss.apply", await Styles.CssForAsync(ThemeSurface.Dashboard, false));
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+}

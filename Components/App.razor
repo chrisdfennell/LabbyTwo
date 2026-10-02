@@ -1,11 +1,14 @@
 @inject AppSettingsStore AppSettings
 @inject FontStore Fonts
 @inject ThemeService Themes
+@inject CustomCssService CustomStyles
+@inject BackdropService Backdrops
 
 <!DOCTYPE html>
 <html lang="en" data-theme="@_mode" data-bs-theme="@BootstrapTheme"
       data-surface="@_look.SurfaceAttribute"
-      data-wide="@_look.WideAttribute" style="@_look.StyleAttribute">
+      data-wide="@_look.WideAttribute" style="@_look.StyleAttribute"
+      data-safe="@(_safe ? "1" : null)">
 
 <head>
     <meta charset="utf-8" />
@@ -23,6 +26,18 @@
        must be, since quotes inside a style element are not entity-decoded. ThemeSync
        replaces its contents on open pages when the theme changes. *@
     <style id="labby-theme">@((MarkupString)_theme.Css)</style>
+
+    @* The background and frosted glass, if any — empty by default. Same guarantees as the
+       theme block: built by BackdropCss from enums, clamped numbers, parsed colours and a
+       server-made picture URL, cached by BackdropService, and replaced on open pages by
+       BackdropSync. Always present, even empty, so there is a block to replace. Empty in safe mode. *@
+    <style id="labby-backdrop">@((MarkupString)_backdrop.Css)</style>
+    @* The owner's own CSS (Appearance → Advanced), after the theme so it wins over both
+       app.css and the theme and can use every token. Always present, even empty, so
+       CustomCssSync can fill it on an open page after a save. Unlike the theme block this
+       is text somebody typed, which is why CustomCss refuses "</style" on save and
+       ForStyleElement neutralises it again on the way here. Empty in safe mode (?safe=1). *@
+    <style id="labby-custom">@((MarkupString)_custom)</style>
 
     @* A hosted web font, if somebody asked for one. Last of the stylesheets so it cannot be
        overridden by ours, and only ever emitted for an https absolute URL — see
@@ -69,6 +84,13 @@
 </head>
 
 <body>
+    @if (_safe)
+    {
+        <div class="safe-mode-banner" role="status">
+            Custom CSS is off for this visit — fix or turn it off in <a href="settings/appearance#custom-css">Appearance</a>.
+            <a href="?safe=0">Leave safe mode</a>
+        </div>
+    }
     <Routes />
     @* Blazor finds this by id and swaps its classes as the connection drops and returns.
        app.css keeps it hidden through a short blip; reconnect.js keeps retrying after
@@ -82,6 +104,8 @@
     <script src="@Assets["reconnect.js"]"></script>
     <script src="@Assets["palette.js"]"></script>
     <script src="@Assets["theme.js"]"></script>
+    <script src="@Assets["custom-css.js"]"></script>
+    <script src="@Assets["backdrop.js"]"></script>
     <script src="@Assets["widget-drag.js"]"></script>
     <script src="@Assets["chart-hover.js"]"></script>
     <script src="@Assets["wall.js"]"></script>
@@ -95,9 +119,14 @@
 @code {
     private Appearance _look = Appearance.Default;
     private ActiveTheme _theme = ActiveTheme.For(BuiltInThemes.LabbyTwo);
+    private ActiveBackdrop _backdrop = ActiveBackdrop.Empty;
     private string? _mode;
     private string _face = "";
     private string _manifest = "manifest.webmanifest";
+    private string _custom = "";
+    private bool _safe;
+
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
     /// <summary>On "system" the script above takes over; this is the pre-script value.</summary>
     private string BootstrapTheme => _mode ?? "dark";
@@ -117,8 +146,12 @@
         // comes from the address, so the first paint matches what ThemeSync keeps it in.
         _theme = await Themes.ActiveAsync(ThemeService.SurfaceForPath(HttpContext?.Request.Path.Value));
         _mode = _theme.ModeAttribute(_look);
-    }
 
-    /// <summary>Present on every server render of the document, which is the only time this runs.</summary>
-    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+        // Every screen but the family page (which is a page of its own) gets the same CSS.
+        _safe = SafeMode.IsOn(HttpContext);
+        _custom = await CustomStyles.CssForAsync(ThemeSurface.Dashboard, _safe);
+        // Safe mode is for getting out of a look that broke the page, and a picture behind
+        // everything is part of the look — so it goes too, like the custom CSS.
+        _backdrop = _safe ? new ActiveBackdrop("", "") : await Backdrops.ActiveAsync();
+    }
 }

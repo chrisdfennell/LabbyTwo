@@ -2091,6 +2091,27 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
    the services are probably fine, and red would say otherwise. */
 .blind-banner .tile-meta { font-size: .85rem; }
 
+/* Safe mode (?safe=1): custom CSS is off for this visit. Fixed at the foot of the screen
+   rather than in the flow, so it sits over every layout — dashboard, wall, phone, login —
+   without pushing any of them about. Panel-backed so it stays readable over anything. */
+.safe-mode-banner {
+    position: fixed;
+    left: 50%;
+    bottom: 1rem;
+    transform: translateX(-50%);
+    z-index: 1090;
+    max-width: calc(100vw - 2rem);
+    padding: .5rem .9rem;
+    border: 1px solid var(--warn);
+    border-radius: .5rem;
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: 0 4px 16px var(--shadow);
+    font-size: .875rem;
+}
+
+.safe-mode-banner a + a { margin-left: .75rem; }
+
 /* The end of a stuck update helper's log: a few lines, kept from pushing the page wide. */
 .update-helper-log {
     max-height: 10rem;
@@ -2417,6 +2438,14 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 @keyframes wall-in {
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
+}
+
+/* The same arrival without the fade, used when cards are frosted glass (see BackdropCss).
+   A translucent ancestor stops backdrop-filter at itself, so during a fade the glass would
+   show nothing behind it and then snap to the blurred background when the fade ended. */
+@keyframes wall-in-glass {
+    from { transform: translateY(6px); }
+    to { transform: none; }
 }
 
 .wall-progress {
@@ -3120,3 +3149,49 @@ a.md-diagram-node:focus { outline: none; }
     .theme-token-text { grid-column: 1 / -1; }
     .theme-editor-side { position: static; }
 }
+
+/* ---------- backgrounds ----------
+   The live preview on the Appearance page. The layer inside is given the very declarations
+   the page's background gets (BackdropCss.LayerDeclarations), inline, so the preview is the
+   background rather than an approximation of it; the sample card gets the glass ones. */
+.backdrop-preview {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    min-height: 12rem;
+    padding: 1.25rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--ink);
+    display: flex;
+    flex-direction: column;
+    gap: .75rem;
+    justify-content: center;
+}
+.backdrop-preview-layer {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+}
+.backdrop-preview .page-head h1 { font-size: 1.15rem; }
+.backdrop-preview .widget { max-width: 18rem; }
+
+.backdrop-swatches { display: flex; flex-wrap: wrap; gap: .5rem; }
+.backdrop-swatch {
+    width: 4.5rem;
+    height: 2.75rem;
+    border: 2px solid var(--edge);
+    border-radius: var(--radius-inner);
+    color: var(--text);
+    font-size: .7rem;
+    font-weight: 600;
+    display: flex;
+    align-items: flex-end;
+    padding: .15rem .3rem;
+}
+.backdrop-swatch.is-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+.backdrop-stop { display: flex; align-items: center; gap: .5rem; margin-bottom: .4rem; }
+.backdrop-stop .form-select { max-width: 12rem; }
+.backdrop-stop .form-control-color { width: 2.5rem; padding: .15rem; }

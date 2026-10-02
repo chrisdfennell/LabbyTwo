@@ -1,0 +1,527 @@
+@implements IDisposable
+@inject AppSettingsStore AppSettings
+@inject BackdropService Backdrops
+@inject BackdropImageStore Images
+@inject ThemeService Themes
+@inject Offload Offload
+@inject IJSRuntime JS
+
+@* Background and frosted glass, on the Appearance page.
+
+   Every change is saved at once and needs no reload: BackdropSync pushes the new block to
+   this page and every other open one, so the page behind this form is itself the preview —
+   and the box below shows it again even when the dashboard is not one of the screens it is
+   on. The box is drawn from the same declarations as the page (BackdropCss), not an
+   imitation of them.
+
+   Readability is estimated with the theme editor's WCAG arithmetic against the active
+   theme, in each end it has. A picture is judged by a grid of its colours, measured by the
+   browser that drew it; until those arrive the estimate says it is waiting rather than
+   guessing. *@
+
+<div class="widget mt-3" id="background">
+    <div class="widget-head">
+        <h2 class="widget-title">Background</h2>
+    </div>
+    <div class="widget-body">
+        <div class="row g-3">
+            <div class="col-lg-7">
+                <label class="form-label">Behind the cards</label>
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    @foreach (var (kind, label) in Kinds)
+                    {
+                        <button type="button" class="btn btn-sm @(_backdrop.Kind == kind ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="() => UpdateAsync(b => b with { Kind = kind })">@label</button>
+                    }
+                </div>
+
+                @switch (_backdrop.Kind)
+                {
+                    case BackdropKind.Solid:
+                        <label class="form-label" for="backdrop-solid">Colour</label>
+                        <div class="backdrop-stop">
+                            <select id="backdrop-solid" class="form-select form-select-sm" value="@ChoiceOf(_backdrop.Solid)"
+                                    @onchange="e => SetSolidAsync(e.Value?.ToString())">
+                                @ColourOptions
+                            </select>
+                            @if (_backdrop.Solid.Token is null)
+                            {
+                                <input id="backdrop-solid-colour" type="color" class="form-control form-control-color"
+                                       value="@_backdrop.Solid.Stored" @onchange="e => SetSolidAsync(e.Value?.ToString())" />
+                            }
+                        </div>
+                        <div class="form-text mb-3">One of the theme's colours follows the theme, in both its ends.</div>
+                        break;
+
+                    case BackdropKind.Gradient:
+                        <label class="form-label">Start from</label>
+                        <div class="backdrop-swatches mb-3">
+                            @foreach (var preset in Backdrop.Presets)
+                            {
+                                var active = SamePreset(preset);
+                                <button type="button" class="backdrop-swatch @(active ? "is-active" : "")"
+                                        style="background: @BackdropCss.Gradient(preset.Angle, preset.Stops)"
+                                        aria-pressed="@(active ? "true" : "false")"
+                                        @onclick="() => UpdateAsync(b => b with { Stops = preset.Stops, Angle = preset.Angle })">@preset.Name</button>
+                            }
+                        </div>
+
+                        <label class="form-label">Colours</label>
+                        @for (var i = 0; i < _backdrop.Stops.Count; i++)
+                        {
+                            var index = i;
+                            var stop = _backdrop.Stops[index];
+                            <div class="backdrop-stop">
+                                <select id="@($"backdrop-stop-{index}")" class="form-select form-select-sm" value="@ChoiceOf(stop)"
+                                        aria-label="@($"Colour {index + 1}")" @onchange="e => SetStopAsync(index, e.Value?.ToString())">
+                                    @ColourOptions
+                                </select>
+                                @if (stop.Token is null)
+                                {
+                                    <input id="@($"backdrop-stop-colour-{index}")" type="color" class="form-control form-control-color"
+                                           aria-label="@($"Colour {index + 1}")"
+                                           value="@stop.Stored" @onchange="e => SetStopAsync(index, e.Value?.ToString())" />
+                                }
+                            </div>
+                        }
+                        <div class="d-flex gap-2 mb-3">
+                            @if (_backdrop.Stops.Count < Backdrop.MaxStops)
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="AddStopAsync">Add a third colour</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="RemoveStopAsync">Back to two colours</button>
+                            }
+                        </div>
+
+                        <label class="form-label" for="backdrop-angle">Direction: @_backdrop.Angle°</label>
+                        <input id="backdrop-angle" type="range" class="form-range mb-3" min="0" max="345" step="15"
+                               value="@_backdrop.Angle" @onchange="e => SetNumberAsync(e.Value, (b, n) => b with { Angle = Math.Clamp(n, 0, 359) })" />
+                        break;
+
+                    case BackdropKind.Image:
+                        <label class="form-label" for="backdrop-file">Picture</label>
+                        @if (_image is { } image)
+                        {
+                            <div class="d-flex align-items-center gap-2 mb-1">
+                                <span class="tile-meta">@image.Width × @image.Height, @Size(image.Bytes)</span>
+                                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="RemoveImageAsync">Remove</button>
+                            </div>
+                        }
+                        <InputFile id="backdrop-file" class="form-control" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                                   OnChange="OnImageChosenAsync" disabled="@_uploading" />
+                        <div class="form-text mb-3">
+                            @if (_error.Length > 0)
+                            {
+                                <span class="text-warning">@_error</span>
+                            }
+                            else
+                            {
+                                <text>
+                                    JPEG, PNG or WebP, up to @(BackdropImageFile.MaxBytes / 1024 / 1024)&nbsp;MB. Kept in your data
+                                    volume and served by LabbyTwo itself, so nothing is fetched from the internet. Where it
+                                    was taken and what took it are removed when it is stored.
+                                </text>
+                            }
+                        </div>
+
+                        <div class="row g-2 mb-3">
+                            <div class="col-sm-6">
+                                <label class="form-label" for="backdrop-fit">Fit</label>
+                                <select id="backdrop-fit" class="form-select form-select-sm" value="@Backdrop.Name(_backdrop.Fit)"
+                                        @onchange="e => SetEnumAsync<BackdropFit>(e.Value, (b, v) => b with { Fit = v })">
+                                    @foreach (var (value, label, _) in Backdrop.Fits)
+                                    {
+                                        <option value="@Backdrop.Name(value)">@label</option>
+                                    }
+                                </select>
+                                <div class="form-text">@Backdrop.Fits.First(f => f.Value == _backdrop.Fit).Hint</div>
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label" for="backdrop-position">Keep in view</label>
+                                <select id="backdrop-position" class="form-select form-select-sm" value="@Backdrop.Name(_backdrop.Position)"
+                                        @onchange="e => SetEnumAsync<BackdropPosition>(e.Value, (b, v) => b with { Position = v })">
+                                    @foreach (var (value, label) in Backdrop.Positions)
+                                    {
+                                        <option value="@Backdrop.Name(value)">@label</option>
+                                    }
+                                </select>
+                            </div>
+                        </div>
+
+                        <label class="form-label" for="backdrop-blur">Blur: @_backdrop.Blur&nbsp;px</label>
+                        <input id="backdrop-blur" type="range" class="form-range mb-3" min="0" max="@Backdrop.MaxBlur" step="2"
+                               value="@_backdrop.Blur" @onchange="e => SetNumberAsync(e.Value, (b, n) => b with { Blur = Math.Clamp(n, 0, Backdrop.MaxBlur) })" />
+                        break;
+                }
+
+                @if (_backdrop.Kind != BackdropKind.None)
+                {
+                    <div class="row g-2 mb-3">
+                        <div class="col-sm-7">
+                            <label class="form-label" for="backdrop-dim">Dim: @_backdrop.Dim%</label>
+                            <input id="backdrop-dim" type="range" class="form-range" min="0" max="@Backdrop.MaxDim" step="5"
+                                   value="@_backdrop.Dim" @onchange="e => SetNumberAsync(e.Value, (b, n) => b with { Dim = Math.Clamp(n, 0, Backdrop.MaxDim) })" />
+                        </div>
+                        <div class="col-sm-5">
+                            <label class="form-label" for="backdrop-dim-with">Towards</label>
+                            <select id="backdrop-dim-with" class="form-select form-select-sm" value="@Backdrop.Name(_backdrop.DimWith)"
+                                    @onchange="e => SetEnumAsync<BackdropDimWith>(e.Value, (b, v) => b with { DimWith = v })">
+                                <option value="page">The page colour</option>
+                                <option value="overlay">Dark (the dialog shade)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <label class="form-label">Show it on</label>
+                    <div class="d-flex gap-3 flex-wrap mb-1">
+                        @foreach (var (screen, label) in ScreenChoices)
+                        {
+                            var id = $"backdrop-screen-{Backdrop.Name(screen)}";
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@id" checked="@_backdrop.Screens.HasFlag(screen)"
+                                       @onchange="e => ToggleScreenAsync(screen, e.Value is true)" />
+                                <label class="form-check-label" for="@id">@label</label>
+                            </div>
+                        }
+                    </div>
+                    <div class="form-text mb-3">The dashboard includes these settings pages.</div>
+
+                    <label class="form-label" for="backdrop-theme">With</label>
+                    <select id="backdrop-theme" class="form-select form-select-sm mb-1" value="@_backdrop.ThemeOnly"
+                            @onchange="e => SetThemeOnlyAsync(e.Value?.ToString())">
+                        <option value="">Any theme</option>
+                        @foreach (var theme in _themes)
+                        {
+                            <option value="@theme.Id">Only with @theme.Name</option>
+                        }
+                    </select>
+                    <div class="form-text mb-3">
+                        Tie it to one theme and it goes away when you switch to another — a photo picked for
+                        a dark theme can be wrong for a light one.
+                    </div>
+
+                    <hr class="my-3" />
+
+                    <div class="form-check form-switch mb-1">
+                        <input class="form-check-input" type="checkbox" role="switch" id="glass" checked="@_backdrop.Glass"
+                               @onchange="e => UpdateAsync(b => b with { Glass = e.Value is true })" />
+                        <label class="form-check-label" for="glass">Frosted glass cards</label>
+                    </div>
+                    <div class="form-text mb-2">
+                        Cards let the background show through, blurred. Browsers that cannot blur, and anyone
+                        whose system is set to reduce transparency, get ordinary solid cards.
+                    </div>
+
+                    @if (_backdrop.Glass)
+                    {
+                        <label class="form-label" for="glass-opacity">How solid: @_backdrop.GlassOpacity%</label>
+                        <input id="glass-opacity" type="range" class="form-range mb-2" min="@Backdrop.MinGlassOpacity" max="@Backdrop.MaxGlassOpacity" step="1"
+                               value="@_backdrop.GlassOpacity" @onchange="e => SetNumberAsync(e.Value, (b, n) => b with { GlassOpacity = Math.Clamp(n, Backdrop.MinGlassOpacity, Backdrop.MaxGlassOpacity) })" />
+
+                        <label class="form-label" for="glass-blur">Frost: @_backdrop.GlassBlur&nbsp;px</label>
+                        <input id="glass-blur" type="range" class="form-range mb-2" min="0" max="@Backdrop.MaxGlassBlur" step="1"
+                               value="@_backdrop.GlassBlur" @onchange="e => SetNumberAsync(e.Value, (b, n) => b with { GlassBlur = Math.Clamp(n, 0, Backdrop.MaxGlassBlur) })" />
+
+                        <label class="form-label" for="glass-saturation">Colour through the glass: @_backdrop.GlassSaturation%</label>
+                        <input id="glass-saturation" type="range" class="form-range mb-2" min="@Backdrop.MinSaturation" max="@Backdrop.MaxSaturation" step="5"
+                               value="@_backdrop.GlassSaturation" @onchange="e => SetNumberAsync(e.Value, (b, n) => b with { GlassSaturation = Math.Clamp(n, Backdrop.MinSaturation, Backdrop.MaxSaturation) })" />
+
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="glass-phone" checked="@_backdrop.GlassOnPhone"
+                                   @onchange="e => UpdateAsync(b => b with { GlassOnPhone = e.Value is true })" />
+                            <label class="form-check-label" for="glass-phone">Glass on the phone view too</label>
+                        </div>
+                        <div class="form-text">
+                            Off by default: blurring behind every card is the one thing here that can make an older
+                            phone stutter when it scrolls. The phone still gets the background itself.
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="col-lg-5">
+                <label class="form-label">Preview</label>
+                <div class="backdrop-preview">
+                    <div class="backdrop-preview-layer" style="@BackdropCss.PreviewLayerStyle(_backdrop, _image)"></div>
+                    <div>
+                        <div class="fw-semibold">Your dashboard</div>
+                        <div class="tile-meta">Headings sit straight on the background.</div>
+                    </div>
+                    <div class="widget" style="@(_backdrop.Glass ? BackdropCss.GlassDeclarations(_backdrop) : null)">
+                        <div class="widget-head"><h3 class="widget-title">A card</h3></div>
+                        <div class="metric-value">457<span class="metric-unit">Mbps</span></div>
+                        <div class="tile-meta">Secondary text on the card</div>
+                    </div>
+                </div>
+
+                <div class="mt-3" id="backdrop-contrast">
+                    @if (_backdrop.Kind == BackdropKind.None)
+                    {
+                        <div class="form-text mt-0">With no background, the theme's own contrast check is all there is to it.</div>
+                    }
+                    else if (_checks.Count == 0)
+                    {
+                        <div class="form-text mt-0">Working out how readable text will be once the picture has loaded…</div>
+                    }
+                    else if (_checks.All(c => c.Results.All(r => r.PassesAA)))
+                    {
+                        <div class="form-text mt-0">
+                            <span class="contrast-grade grade-aa">AA</span>
+                            Text should stay easy to read over this, in every end of the theme.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-warning py-2 mb-2" role="status">
+                            Some text may be hard to read over this background. More dim, a more solid glass, or a
+                            calmer picture would help.
+                        </div>
+                        <table class="table table-sm theme-contrast mb-0">
+                            <tbody>
+                                @foreach (var (end, results) in _checks)
+                                {
+                                    @foreach (var result in results.Where(r => !r.PassesAA))
+                                    {
+                                        <tr class="is-fail">
+                                            <td>@result.Pair.Label@(_checks.Count > 1 ? $" ({end})" : "")</td>
+                                            <td class="text-end">@result.RatioText</td>
+                                            <td class="text-end"><span class="contrast-grade grade-fail">Fail</span></td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                        <div class="form-text">An estimate, against the worst part of the background. 4.5:1 is the bar for reading text.</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private Backdrop _backdrop = Backdrop.Default;
+    private BackdropImage? _image;
+    private IReadOnlyList<Theme> _themes = [];
+    private Theme _active = BuiltInThemes.LabbyTwo;
+    private IReadOnlyList<ThemeColor> _samples = [];
+    private string? _sampledFor;
+    private List<(string End, IReadOnlyList<Contrast.Result> Results)> _checks = [];
+    private bool _uploading;
+    private string _error = "";
+
+    private static readonly (BackdropKind Kind, string Label)[] Kinds =
+    [
+        (BackdropKind.None, "Nothing"),
+        (BackdropKind.Solid, "A colour"),
+        (BackdropKind.Gradient, "A gradient"),
+        (BackdropKind.Image, "A picture"),
+    ];
+
+    private static readonly (BackdropScreens Screen, string Label)[] ScreenChoices =
+    [
+        (BackdropScreens.Dashboard, "The dashboard"),
+        (BackdropScreens.Wall, "Wall mode"),
+        (BackdropScreens.Phone, "The phone view"),
+    ];
+
+    private const string Custom = "custom";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Themes.Changed += OnElsewhere;
+        Images.Changed += OnElsewhere;
+        await LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        Themes.Changed -= OnElsewhere;
+        Images.Changed -= OnElsewhere;
+    }
+
+    /// <summary>A change from another tab or device shows here too, so two people editing see the same thing.</summary>
+    private void OnElsewhere() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private async Task LoadAsync()
+    {
+        _backdrop = Backdrop.From(await AppSettings.AllAsync());
+        _image = Images.Current();
+        _themes = await Themes.AllAsync();
+        _active = (await Themes.ActiveAsync(ThemeSurface.Dashboard)).Theme;
+        if (_image?.Hash != _sampledFor)
+            _samples = [];
+        Recheck();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // A picture's colours come from the browser, once per picture.
+        if (_backdrop.Kind != BackdropKind.Image || _image is not { } image || _sampledFor == image.Hash)
+            return;
+
+        _sampledFor = image.Hash;
+        try
+        {
+            var found = await JS.InvokeAsync<string[]?>("labbyBackdrop.sample", image.Url, 4);
+            _samples = [.. (found ?? []).Take(64).Select(s => ThemeColor.TryParse(s, out var c) ? c : (ThemeColor?)null).OfType<ThemeColor>()];
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            _samples = [];
+        }
+        Recheck();
+        StateHasChanged();
+    }
+
+    private void Recheck()
+    {
+        _checks = [.. _active.Variants
+            .Select(v => (v.Dark ? "dark" : "light", BackdropContrast.Check(_backdrop, v.Variant, _samples)))
+            .Where(c => c.Item2.Count > 0)];
+    }
+
+    private async Task UpdateAsync(Func<Backdrop, Backdrop> change)
+    {
+        var next = change(_backdrop);
+        await Offload.Run(async ct => { await Backdrops.SaveAsync(next, ct); return true; });
+        _backdrop = Backdrop.From(await AppSettings.AllAsync());
+        Recheck();
+    }
+
+    private Task SetNumberAsync(object? value, Func<Backdrop, int, Backdrop> change) =>
+        int.TryParse(value?.ToString(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n)
+            ? UpdateAsync(b => change(b, n))
+            : Task.CompletedTask;
+
+    /// <summary>Only a value that is one of the enum's names; the list rendered is the list accepted.</summary>
+    private Task SetEnumAsync<T>(object? value, Func<Backdrop, T, Backdrop> change) where T : struct, Enum
+    {
+        var text = value?.ToString() ?? "";
+        var match = Enum.GetValues<T>().FirstOrDefault(v => Backdrop.Name(v) == text);
+        return Backdrop.Name(match) == text ? UpdateAsync(b => change(b, match)) : Task.CompletedTask;
+    }
+
+    private Task SetSolidAsync(string? value) =>
+        ToColour(value, _backdrop.Solid) is { } colour ? UpdateAsync(b => b with { Solid = colour }) : Task.CompletedTask;
+
+    private Task SetStopAsync(int index, string? value)
+    {
+        if (index < 0 || index >= _backdrop.Stops.Count || ToColour(value, _backdrop.Stops[index]) is not { } colour)
+            return Task.CompletedTask;
+
+        var stops = _backdrop.Stops.ToList();
+        stops[index] = colour;
+        return UpdateAsync(b => b with { Stops = stops });
+    }
+
+    private Task AddStopAsync() =>
+        _backdrop.Stops.Count >= Backdrop.MaxStops
+            ? Task.CompletedTask
+            : UpdateAsync(b => b with { Stops = [.. b.Stops, BackdropColour.OfToken("accent")] });
+
+    private Task RemoveStopAsync() =>
+        _backdrop.Stops.Count <= Backdrop.MinStops
+            ? Task.CompletedTask
+            : UpdateAsync(b => b with { Stops = [.. b.Stops.Take(b.Stops.Count - 1)] });
+
+    private Task ToggleScreenAsync(BackdropScreens screen, bool on) =>
+        UpdateAsync(b => b with { Screens = on ? b.Screens | screen : b.Screens & ~screen });
+
+    private Task SetThemeOnlyAsync(string? id)
+    {
+        var value = id ?? "";
+        if (value.Length > 0 && !_themes.Any(t => t.Id == value))
+            return Task.CompletedTask;
+        return UpdateAsync(b => b with { ThemeOnly = value });
+    }
+
+    /// <summary>
+    /// What a colour box sent: a theme colour's name from the list, "custom" (which keeps the
+    /// current colour if it was already custom, or starts from the theme colour's own value),
+    /// or a hex from the picker. Anything else is ignored.
+    /// </summary>
+    private BackdropColour? ToColour(string? value, BackdropColour current)
+    {
+        if (value == Custom)
+        {
+            if (current.Token is null)
+                return current;
+            var resolved = current.Resolve(_active.Variant(dark: true)) ?? new ThemeColor(0, 0, 0);
+            return BackdropColour.Of(resolved);
+        }
+
+        if (value is not null && Backdrop.ThemeColours.Contains(value))
+            return BackdropColour.OfToken(value);
+
+        return BackdropColour.TryParse(value, out var parsed) && parsed.Token is null ? parsed : null;
+    }
+
+    private static string ChoiceOf(BackdropColour colour) =>
+        colour.Token is { } token && Backdrop.ThemeColours.Contains(token) ? token : Custom;
+
+    private bool SamePreset(Backdrop.GradientPreset preset) =>
+        preset.Angle == _backdrop.Angle && preset.Stops.SequenceEqual(_backdrop.Stops);
+
+    private static RenderFragment ColourOptions => __builder =>
+    {
+        foreach (var name in Backdrop.ThemeColours)
+        {
+            <option value="@name">The theme's @((ThemeTokens.Find(name)?.Label ?? name).ToLowerInvariant())</option>
+        }
+        <option value="@Custom">A colour of my own</option>
+    };
+
+    private async Task OnImageChosenAsync(InputFileChangeEventArgs args)
+    {
+        _error = "";
+        _uploading = true;
+        try
+        {
+            var file = args.File;
+            if (file.Size > BackdropImageFile.MaxBytes)
+            {
+                _error = $"That is {file.Size / 1024 / 1024} MB — the limit is {BackdropImageFile.MaxBytes / 1024 / 1024} MB.";
+                return;
+            }
+
+            await using var stream = file.OpenReadStream(BackdropImageFile.MaxBytes);
+            _image = await Images.SaveAsync(stream);
+            _samples = [];
+            if (_backdrop.Kind != BackdropKind.Image)
+                await UpdateAsync(b => b with { Kind = BackdropKind.Image });
+            Recheck();
+        }
+        catch (InvalidDataException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (IOException ex)
+        {
+            _error = "That could not be read: " + ex.Message;
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private Task RemoveImageAsync()
+    {
+        Images.Clear();
+        _image = null;
+        _samples = [];
+        _sampledFor = null;
+        Recheck();
+        return Task.CompletedTask;
+    }
+
+    private static string Size(long bytes) =>
+        bytes >= 1024 * 1024 ? $"{bytes / 1024d / 1024:0.0} MB" : $"{Math.Max(1, bytes / 1024)} KB";
+}

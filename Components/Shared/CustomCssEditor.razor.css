@@ -1,0 +1,77 @@
+/* The code box: a line-number gutter beside a textarea that never wraps, so line N of the
+   text is always beside number N. Same font, size and line height on both sides, and the
+   gutter follows the box's scroll (custom-css.js). */
+.custom-css-box {
+    display: flex;
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius);
+    background: var(--input-bg);
+    overflow: hidden;
+}
+
+.custom-css-box:focus-within {
+    border-color: var(--focus);
+    box-shadow: 0 0 0 .2rem color-mix(in srgb, var(--focus) 25%, transparent);
+}
+
+.custom-css-gutter,
+.custom-css-text {
+    font-family: var(--bs-font-monospace, ui-monospace, monospace);
+    font-size: .85rem;
+    line-height: 1.45;
+    padding: .5rem;
+    margin: 0;
+}
+
+.custom-css-gutter {
+    flex: none;
+    min-width: 3rem;
+    text-align: right;
+    color: var(--muted);
+    border-right: 1px solid var(--edge);
+    user-select: none;
+    overflow: hidden;
+    white-space: pre;
+}
+
+.custom-css-text {
+    flex: 1;
+    min-width: 0;
+    min-height: 22rem;
+    border: 0;
+    outline: 0;
+    resize: vertical;
+    background: transparent;
+    color: var(--text);
+    white-space: pre;
+    overflow: auto;
+    tab-size: 4;
+}
+
+.custom-css-text::placeholder { color: var(--placeholder); }
+
+.custom-css-version {
+    padding: .5rem 0;
+    border-top: 1px solid var(--edge);
+}
+
+.custom-css-diff {
+    margin-top: .5rem;
+    max-height: 24rem;
+    overflow: auto;
+    border: 1px solid var(--edge);
+    border-radius: .35rem;
+    font-family: var(--bs-font-monospace, ui-monospace, monospace);
+    font-size: .8rem;
+    white-space: pre;
+}
+
+.custom-css-diff-line { display: flex; gap: .5rem; padding: 0 .5rem; min-height: 1.3em; }
+.custom-css-diff-sign { flex: none; width: 1ch; color: var(--muted); }
+.custom-css-diff-added { background: var(--up-soft); }
+.custom-css-diff-removed { background: var(--down-soft); }
+.custom-css-diff-same { color: var(--muted); }
+
+/* The big switch, as big as the brief says: it is the way out. */
+.custom-css-switch .form-check-input { width: 3rem; height: 1.5rem; margin-top: 0; }
+.custom-css-switch .form-check-label { font-weight: 600; margin-left: .5rem; line-height: 1.5rem; }

@@ -916,6 +916,18 @@ public sealed class Db
             json       TEXT    NOT NULL,
             updated_at INTEGER NOT NULL DEFAULT 0);
         """,
+
+        // 42 — the last twenty saves of the owner's custom stylesheet, so a bad edit can be
+        // undone. The stylesheet in use is an app setting (read from the settings cache on
+        // every page); this table is only read when somebody looks back through it.
+        """
+        CREATE TABLE IF NOT EXISTS custom_css_versions (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            css      TEXT    NOT NULL,
+            saved_by TEXT    NOT NULL DEFAULT '',
+            saved_at INTEGER NOT NULL,
+            note     TEXT    NOT NULL DEFAULT '');
+        """,
     ];
 
     /// <summary>

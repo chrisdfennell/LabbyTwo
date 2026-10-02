@@ -131,6 +131,10 @@ builder.Services.AddSingleton<ThemeService>();
 // Wakes at sunrise, sunset or a scheduled switch and tells open pages to change end.
 builder.Services.AddSingleton<ThemeScheduler>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ThemeScheduler>());
+builder.Services.AddSingleton<CustomCssStore>();
+builder.Services.AddSingleton<CustomCssService>();
+builder.Services.AddSingleton<BackdropImageStore>();
+builder.Services.AddSingleton<BackdropService>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
@@ -331,6 +335,9 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+// ?safe=1 on any address turns the owner's custom CSS off for this browser's visit — see
+// SafeMode. Before authentication so the redirect to the login page carries the cookie.
+app.UseSafeMode();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
@@ -428,6 +435,10 @@ var shareTheme = app.MapGet("/api/share/theme", async (ThemeService themes, stri
     var safe = new string([.. theme.Id.Where(c => char.IsAsciiLetterOrDigit(c) || c == '-')]);
     return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", $"labbytwo-theme-{safe}.json");
 });
+
+// The uploaded background picture. Behind the fallback login policy like the pages that
+// draw it; cached for a year, because its address is its content hash (see BackdropEndpoints).
+app.MapBackdrop();
 
 var backup = app.MapGet("/api/backup", async (Db db, CancellationToken ct) =>
 {

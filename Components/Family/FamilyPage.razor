@@ -31,6 +31,11 @@
         @* Token names and parsed colours only — see ThemeCss, and the note in App.razor. *@
         <style>@((MarkupString)Theme.Css)</style>
     }
+    @if (CustomCss.Length > 0)
+    {
+        @* Only when the owner ticked "also on the family page"; checked and escaped by CustomCss. *@
+        <style id="labby-custom">@((MarkupString)CustomCss)</style>
+    }
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <meta name="theme-color" content="@((Theme ?? ActiveTheme.For(BuiltInThemes.LabbyTwo)).MetaColour(Look))" />
 </head>
@@ -189,6 +194,12 @@
     /// leaves app.css's own defaults, which is also what a refusal page gets.
     /// </summary>
     [Parameter] public ActiveTheme? Theme { get; set; }
+
+    /// <summary>
+    /// The owner's custom CSS, already checked and escaped — empty unless they asked for it
+    /// here too (see CustomCssService.CssForAsync), and in safe mode.
+    /// </summary>
+    [Parameter] public string CustomCss { get; set; } = "";
 
     /// <summary>Where this page lives: <c>/family/{token}</c>, or <c>/family</c> on the home network.</summary>
     [Parameter] public string Base { get; set; } = "/family";
