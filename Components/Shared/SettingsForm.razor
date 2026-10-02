@@ -111,6 +111,17 @@
                 <LinkListEditor Value="@Values.Get(field.Key)" ValueChanged="json => SetValue(field, json)" />
                 break;
 
+            case FieldKind.SecretList:
+                @* Names shown, values never: see SecretListEditor. *@
+                <SecretListEditor Value="@Values.Get(field.Key)" ValueChanged="json => SetValue(field, json)" />
+                break;
+
+            case FieldKind.StepList:
+                @* Handed the whole form as well, because "Run now" needs the secrets and the
+                   certificate setting that sit beside the steps. *@
+                <StepCheckEditor Value="@Values.Get(field.Key)" Settings="Values" ValueChanged="json => SetValue(field, json)" />
+                break;
+
             case FieldKind.Connection:
                 @* Picked by name, stored by id. Asking somebody to find an id and type it
                    was the least friendly thing in here, and it was in six places. *@

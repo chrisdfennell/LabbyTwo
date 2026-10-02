@@ -34,6 +34,19 @@ public enum FieldKind
     /// handful of settings that are about a *kind* of thing rather than one instance.
     /// </summary>
     Provider,
+
+    /// <summary>
+    /// Named secrets, edited as rows of a name and a password box, stored as one JSON object
+    /// of name to value. Encrypted at rest like <see cref="Password"/> — the whole object is
+    /// one secret as far as storage goes — and, like it, a stored value is never sent back to
+    /// the browser: the rows show names, and an empty box keeps what is saved. For the
+    /// providers that need several credentials and cannot know their names in advance — a
+    /// multi-step check's <c>${secret:name}</c>.
+    /// </summary>
+    SecretList,
+
+    /// <summary>The steps of a multi-step check, edited by its own step builder. Stored as JSON.</summary>
+    StepList,
 }
 
 /// <summary>
@@ -75,8 +88,8 @@ public sealed record FieldSpec(
     /// </summary>
     public bool Advanced { get; init; }
 
-    /// <summary>Password fields are encrypted at rest and never rendered back to the browser.</summary>
-    public bool IsSecret => Kind == FieldKind.Password;
+    /// <summary>Password fields — and lists of them — are encrypted at rest and never rendered back to the browser.</summary>
+    public bool IsSecret => Kind is FieldKind.Password or FieldKind.SecretList;
 }
 
 public sealed record SelectOption(string Value, string Label);
