@@ -175,6 +175,7 @@ only → select all → Silence" means the rows in front of you and not the twen
 |---|---|
 | **Web service** | Any HTTP(S) URL — response time, status code, optional body match. Use this for anything without a dedicated integration. |
 | **JSON API** | Any endpoint returning JSON. Pull numbers out with dotted paths (`sensors.cpu.temp`, `disks[0].used`) and they become metrics like any other. |
+| **Multi-step check** | "Is it actually working", not "does the port answer". A list of HTTP steps — log in, open a page, call an API — each with its own checks on status, body, JSON, headers and time, sharing a cookie jar and passing values along as `${name}`. Up only when every step passes; down says which step and what. See [Multi-step checks](#multi-step-checks). |
 | **Ping host** | ICMP round-trip time, for boxes with no web UI. |
 | **Proxmox VE** | Node CPU, memory, root filesystem, uptime, and how many VMs and containers are running. |
 | **TrueNAS** | Version, uptime, pool health and how full the fullest pool is. |
@@ -464,6 +465,93 @@ solar inverter, some appliance with an undocumented `/api/stats` — all monitor
 without anyone writing a provider for them. The names you invent show up in the metric
 picker, and a trailing unit in the name is understood: `fan_rpm` reads as `1200rpm` with
 nothing declared.
+
+#### Multi-step checks
+
+A web app can serve its login page perfectly while the database behind it is gone. A
+reverse proxy can answer 200 with its own error page. A file share can let you log in and
+then list nothing. The **Web service** provider sees none of that, because it only asks
+whether the port answers. A **Multi-step check** walks the app the way you would, and it
+is only up when every step gets the answer you said it should.
+
+Each step is one HTTP request: a method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS,
+PROPFIND), an address, optional headers, an optional HTTP Basic sign-in, and an optional
+body (form fields, JSON, or anything else with your own Content-Type). It **passes when**
+every check you give it holds:
+
+| Check | Example |
+|---|---|
+| Status code is | `200`, `200-299`, `2xx`, `200, 302` |
+| Body contains / does not contain | `Log out`, `Invalid password` |
+| Body matches pattern | `Welcome, \w+` (a .NET regex, with a time limit) |
+| JSON value equals / exists | `status` = `ok`, `disks[0].used` — the JSON API provider's dotted paths |
+| Answers within (ms) | `2000` |
+| Header is present / equals | `Content-Type` = `application/json` |
+
+A step with no status check of its own passes on any answer below 400, so a step can never
+pass while the server says it is broken.
+
+**Passing values along.** A step can save a value for later steps — from a JSON path, from
+a regex (its first group), from a response header, or from a cookie — and later steps use
+it as `${name}` in the address, headers, body or checks. Secrets are kept with the check,
+listed under **Secrets**, and used as `${secret:name}`. They are encrypted at rest like
+every other password, never shown again once saved, and masked as `••••` in results, in
+"Run now" and in the log. A saved value is masked too unless you untick **Hide**, since what
+gets saved is usually a session token. `${env:…}` is refused: a check cannot read
+LabbyTwo's environment. The syntax is `${…}` rather than `{{…}}` so that a check pasted into
+a note does not turn into a shortcode. Write `$${` for a literal `${`.
+
+Values put into a JSON body are JSON-escaped, and values in form fields are URL-encoded, so a
+password with a quote or an ampersand in it still works.
+
+**One run, one cookie jar.** Every run starts with an empty jar, and a cookie set by any
+step (or by a redirect along the way) is sent by the ones after it. That is what makes
+"log in, then open the page" work. Redirects are followed, up to five, unless you turn
+**Follow redirects** off to check the redirect itself. Certificates are **verified** by
+default, because a check of whether something works ought to notice a certificate that has
+expired. Turn on **Ignore certificate errors** for a self-signed one you have chosen to
+trust.
+
+**Inside the sweep.** Each step has a timeout (10 s by default) and the whole check has a
+budget (30 s by default, never more than 35 s), so it always finishes inside the monitor's
+40-second probe deadline and the failure names the step that ran out. Each response body is
+read only up to 1 MB. If a step cannot resolve its host, it counts as a DNS failure like any
+other probe that cannot, so [When LabbyTwo cannot see](#when-labbytwo-cannot-see) still
+tells a container DNS outage apart from every check breaking at once.
+
+**When it fails** the tile names the step and the check in plain English:
+
+```
+Step 2 'Open the file': expected the body to contain 'report.pdf' — it didn't (HTTP 200, 412 ms)
+```
+
+Each step's status and time are listed under the result, but bodies, cookies and secrets
+never are. The metrics are `total_ms`, one `step_ms:<step name>` per step, `steps_passed`
+and `failed_step` (which step failed, counting from 1, or 0 when all passed). So "alert
+when it fails at the login step" is an ordinary alert rule: `failed_step` equals 1.
+
+**Building one.** Add steps, put them in order with **Move up** and **Move down**, and
+press **Run now** to see each step's request and response: the status, the time, the
+headers, and the first 2 KB of the body, with secrets masked. Then write checks against what
+actually came back. The editor warns you about a `${name}` that no earlier step saves while
+you are still typing it. There are three examples to start from. They are only starting
+steps, filled into the editor for you to change, and nothing behaves differently because a
+check began as one:
+
+- **Log in to a form and check a page**: picks the CSRF token out of the login page, posts
+  the form, then opens a page only a logged-in user sees.
+- **Call an API with a token and check JSON**: swaps a password for a token, then calls the
+  API with `Authorization: Bearer ${token}` and checks a field in the answer.
+- **Nextcloud: log in and list files**: checks `status.php` says it is installed and not in
+  maintenance, then sends a WebDAV `PROPFIND` with an app password and expects `207`.
+
+**What it will not do.** It only fetches `http://` and `https://` addresses. It never
+connects to a link-local address (`169.254.0.0/16`, `fe80::/10`). That range is where cloud
+servers keep their instance metadata and credentials, and the address is checked again
+after DNS, so a name that resolves there is refused as well. It runs **no JavaScript**: steps
+are plain HTTP, so an app that builds its pages in the browser shows only its empty shell.
+For those, point the steps at the app's API instead. Nearly every such app has one, and it
+is what the app's own pages call.
 
 Credentials are encrypted at rest with the app's data-protection keyring, which lives
 next to the database in the same volume. A copied database is not a pile of plaintext

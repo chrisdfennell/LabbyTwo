@@ -1,0 +1,450 @@
+@inject Registry Registry
+
+@* The step builder for a multi-step check. Edits the steps as objects and writes them back
+   to one settings value as JSON after every change, the same contract LinkListEditor has —
+   SettingsForm stays the one place a field becomes an input, and this is just a big input.
+   "Run now" runs exactly what is on screen, through the provider the monitor uses, and
+   shows each request and response with secrets and session values masked. *@
+
+<div class="step-check">
+    @if (_steps.Count == 0)
+    {
+        <p class="text-secondary small mb-2">
+            No steps yet. Add one, or start from an example below and change it to suit.
+        </p>
+    }
+
+    @for (var i = 0; i < _steps.Count; i++)
+    {
+        var index = i;
+        var step = _steps[index];
+        <div class="card mb-2" data-step="@index">
+            <div class="card-body p-2">
+                <div class="d-flex gap-2 align-items-center mb-2">
+                    <span class="badge text-bg-secondary">Step @(index + 1)</span>
+                    <input id="step-@index-name" class="form-control form-control-sm" placeholder="What it does, e.g. Log in"
+                           aria-label="Step name" value="@step.Name" @onchange="e => Edit(() => step.Name = Text(e.Value))" />
+                    <button type="button" class="btn btn-sm btn-outline-secondary" title="Move this step up"
+                            disabled="@(index == 0)" @onclick="() => Move(index, -1)">Move up</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" title="Move this step down"
+                            disabled="@(index == _steps.Count - 1)" @onclick="() => Move(index, 1)">Move down</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveStep(index)">Remove step</button>
+                </div>
+
+                <div class="d-flex gap-2 mb-2">
+                    <select id="step-@index-method" class="form-select form-select-sm" style="max-width: 8rem" aria-label="Method"
+                            value="@step.Method" @onchange="e => Edit(() => step.Method = Text(e.Value))">
+                        @foreach (var method in Methods)
+                        {
+                            <option value="@method">@method</option>
+                        }
+                    </select>
+                    <input id="step-@index-url" class="form-control form-control-sm font-monospace" aria-label="Address"
+                           placeholder="https://app.example.lan/login" value="@step.Url"
+                           @onchange="e => Edit(() => step.Url = Text(e.Value))" />
+                </div>
+
+                <details class="mb-2" open="@(HasRequestDetails(step))">
+                    <summary class="tile-meta" style="cursor: pointer">Headers, body and timeout</summary>
+                    <div class="mt-2">
+                        <label class="form-label small" for="step-@index-headers">Headers</label>
+                        <textarea id="step-@index-headers" class="form-control form-control-sm font-monospace" rows="2"
+                                  placeholder="Authorization: Bearer ${token}" value="@step.Headers"
+                                  @onchange="e => Edit(() => step.Headers = Text(e.Value))"></textarea>
+                        <div class="form-text mb-2">One per line as Name: value.</div>
+
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label small" for="step-@index-basic-user">Basic sign-in user</label>
+                                <input id="step-@index-basic-user" class="form-control form-control-sm" value="@step.BasicUser"
+                                       @onchange="e => Edit(() => step.BasicUser = Text(e.Value))" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small" for="step-@index-basic-password">Basic sign-in password</label>
+                                <input id="step-@index-basic-password" class="form-control form-control-sm font-monospace"
+                                       placeholder="${secret:password}" value="@step.BasicPassword"
+                                       @onchange="e => Edit(() => step.BasicPassword = Text(e.Value))" />
+                            </div>
+                            <div class="form-text">Optional, for HTTP Basic. Put the password in a secret and write <code>${secret:name}</code> here — anything else typed here is saved as plain text.</div>
+                        </div>
+
+                        <div class="d-flex gap-2 align-items-center mb-2">
+                            <label class="form-label small mb-0" for="step-@index-body-kind">Body</label>
+                            <select id="step-@index-body-kind" class="form-select form-select-sm" style="max-width: 14rem"
+                                    value="@step.BodyKind" @onchange="e => Edit(() => step.BodyKind = Enum.Parse<StepBodyKind>(Text(e.Value)))">
+                                <option value="@StepBodyKind.None">None</option>
+                                <option value="@StepBodyKind.Form">Form fields</option>
+                                <option value="@StepBodyKind.Json">JSON</option>
+                                <option value="@StepBodyKind.Raw">Other (set Content-Type)</option>
+                            </select>
+                            <label class="form-label small mb-0 ms-auto" for="step-@index-timeout">Timeout (s)</label>
+                            <input id="step-@index-timeout" type="number" min="0" class="form-control form-control-sm" style="max-width: 5rem"
+                                   placeholder="default" value="@(step.TimeoutSeconds > 0 ? step.TimeoutSeconds.ToString() : "")"
+                                   @onchange="e => Edit(() => step.TimeoutSeconds = int.TryParse(Text(e.Value), out var s) && s > 0 ? s : 0)" />
+                        </div>
+                        @if (step.BodyKind != StepBodyKind.None)
+                        {
+                            <textarea id="step-@index-body" class="form-control form-control-sm font-monospace" rows="3"
+                                      placeholder="@BodyPlaceholder(step.BodyKind)" value="@step.Body"
+                                      @onchange="e => Edit(() => step.Body = Text(e.Value))"></textarea>
+                            <div class="form-text">@BodyHelp(step.BodyKind)</div>
+                        }
+                    </div>
+                </details>
+
+                <div class="small fw-semibold mb-1">Passes when</div>
+                @if (!step.Checks.Any(c => c.Kind == StepAssertKind.Status))
+                {
+                    <div class="form-text mb-1">With no status check of its own, a step passes on any answer below 400.</div>
+                }
+                @for (var j = 0; j < step.Checks.Count; j++)
+                {
+                    var checkIndex = j;
+                    var check = step.Checks[checkIndex];
+                    <div class="d-flex gap-2 mb-1 align-items-center">
+                        <select id="step-@index-check-@checkIndex-kind" class="form-select form-select-sm" style="max-width: 13rem"
+                                aria-label="What to check" value="@check.Kind"
+                                @onchange="e => Edit(() => check.Kind = Enum.Parse<StepAssertKind>(Text(e.Value)))">
+                            @foreach (var kind in Enum.GetValues<StepAssertKind>())
+                            {
+                                <option value="@kind">@StepCheck.Label(kind)</option>
+                            }
+                        </select>
+                        @if (StepAssertion.HasTarget(check.Kind))
+                        {
+                            <input id="step-@index-check-@checkIndex-target" class="form-control form-control-sm font-monospace"
+                                   aria-label="Path or header" placeholder="@(IsHeader(check.Kind) ? "Content-Type" : "data.items[0].name")"
+                                   value="@check.Target" @onchange="e => Edit(() => check.Target = Text(e.Value))" />
+                        }
+                        @if (StepAssertion.HasValue(check.Kind))
+                        {
+                            <input id="step-@index-check-@checkIndex-value" class="form-control form-control-sm font-monospace"
+                                   aria-label="Expected" placeholder="@ValuePlaceholder(check.Kind)"
+                                   value="@check.Value" @onchange="e => Edit(() => check.Value = Text(e.Value))" />
+                        }
+                        <button type="button" class="btn btn-sm btn-outline-danger" title="Remove this check"
+                                @onclick="() => Edit(() => step.Checks.RemoveAt(checkIndex))">Remove check</button>
+                    </div>
+                }
+                <button type="button" class="btn btn-sm btn-link px-0 mb-2"
+                        @onclick="() => AddCheck(step)">
+                    + Add a check
+                </button>
+
+                <div class="small fw-semibold mb-1">Save for later steps</div>
+                @for (var j = 0; j < step.Save.Count; j++)
+                {
+                    var saveIndex = j;
+                    var save = step.Save[saveIndex];
+                    <div class="d-flex gap-2 mb-1 align-items-center">
+                        <input id="step-@index-save-@saveIndex-name" class="form-control form-control-sm font-monospace" style="max-width: 9rem"
+                               aria-label="Variable name" placeholder="token" value="@save.Name"
+                               @onchange="e => Edit(() => save.Name = Text(e.Value).Trim())" />
+                        <select id="step-@index-save-@saveIndex-from" class="form-select form-select-sm" style="max-width: 11rem"
+                                aria-label="Taken from" value="@save.From"
+                                @onchange="e => Edit(() => save.From = Enum.Parse<StepExtractFrom>(Text(e.Value)))">
+                            @foreach (var from in Enum.GetValues<StepExtractFrom>())
+                            {
+                                <option value="@from">@StepCheck.Label(from)</option>
+                            }
+                        </select>
+                        <input id="step-@index-save-@saveIndex-expression" class="form-control form-control-sm font-monospace"
+                               aria-label="Where to find it" placeholder="@ExpressionPlaceholder(save.From)" value="@save.Expression"
+                               @onchange="e => Edit(() => save.Expression = Text(e.Value))" />
+                        <div class="form-check mb-0" title="Mask this value in results, like a secret">
+                            <input id="step-@index-save-@saveIndex-hide" class="form-check-input" type="checkbox" checked="@save.Hide"
+                                   @onchange="e => Edit(() => save.Hide = e.Value is true)" />
+                            <label class="form-check-label small" for="step-@index-save-@saveIndex-hide">Hide</label>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger" title="Stop saving this value"
+                                @onclick="() => Edit(() => step.Save.RemoveAt(saveIndex))">Remove value</button>
+                    </div>
+                }
+                <button type="button" class="btn btn-sm btn-link px-0"
+                        @onclick="() => Edit(() => step.Save.Add(new StepExtraction()))">+ Save a value</button>
+                @if (step.Save.Any(s => s.Name.Length > 0))
+                {
+                    <div class="form-text">Later steps use these as @SavedNames(step).</div>
+                }
+
+                @foreach (var warning in Unset(index))
+                {
+                    <div class="form-text text-danger" data-unset>@warning</div>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_steps.Count >= StepCheck.MaxSteps)"
+                @onclick="AddStep">+ Add a step</button>
+        <select id="step-template" class="form-select form-select-sm" style="max-width: 20rem" aria-label="Example"
+                value="@_template" @onchange="e => _template = Text(e.Value)">
+            <option value="">Start from an example…</option>
+            @foreach (var template in StepCheck.Templates)
+            {
+                <option value="@template.Id">@template.Name</option>
+            }
+        </select>
+        @if (Chosen is { } chosen)
+        {
+            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="UseTemplate">
+                @(_steps.Count == 0 ? "Use this example" : "Replace the steps with this example")
+            </button>
+        }
+        <button type="button" class="btn btn-sm btn-outline-primary ms-auto" disabled="@(_running || _steps.Count == 0)"
+                @onclick="RunNowAsync">@(_running ? "Running…" : "Run now")</button>
+    </div>
+    @if (Chosen is { } described)
+    {
+        <div class="form-text mb-2">
+            @described.Description
+            @if (described.Secrets.Count > 0)
+            {
+                <span>Secrets it expects: @string.Join(", ", described.Secrets).</span>
+            }
+        </div>
+    }
+
+    @if (_run is { } run)
+    {
+        <div class="border rounded p-2 mb-2 small" data-run>
+            <div class="@(run.Ok ? "text-success" : "text-danger") fw-semibold mb-1">
+                @(run.Ok ? "✓" : "✕") @run.Message
+                <span class="text-secondary fw-normal">(@($"{run.Duration.TotalMilliseconds:0} ms"))</span>
+            </div>
+            @foreach (var outcome in run.Steps)
+            {
+                <details class="mb-1" open="@(!outcome.Passed && !outcome.Skipped)">
+                    <summary style="cursor: pointer">
+                        @(outcome.Skipped ? "–" : outcome.Passed ? "✓" : "✕")
+                        Step @(outcome.Index + 1) · @outcome.Name — @outcome.Summary
+                    </summary>
+                    @if (!outcome.Skipped)
+                    {
+                        <div class="ps-3">
+                            @if (outcome.Failure is { } why)
+                            {
+                                <div class="text-danger">@why</div>
+                            }
+                            <div class="font-monospace">@outcome.Method @outcome.Url</div>
+                            @foreach (var (name, value) in outcome.RequestHeaders)
+                            {
+                                <div class="font-monospace text-secondary">@name: @value</div>
+                            }
+                            @foreach (var hop in outcome.Redirects)
+                            {
+                                <div class="text-secondary">Redirected: @hop</div>
+                            }
+                            @if (outcome.Status is { } status)
+                            {
+                                <div class="mt-1 fw-semibold">HTTP @status @outcome.Reason · @($"{outcome.Elapsed.TotalMilliseconds:0} ms")</div>
+                                @foreach (var (name, value) in outcome.ResponseHeaders)
+                                {
+                                    <div class="font-monospace text-secondary">@name: @value</div>
+                                }
+                                @foreach (var saved in outcome.Saved)
+                                {
+                                    <div>Saved @saved</div>
+                                }
+                                <div class="mt-1 text-secondary">
+                                    @(outcome.BodyLength > MultiStepCheckProvider.SampleBytes
+                                        ? $"Body — the first {MultiStepCheckProvider.SampleBytes / 1024} KB of {outcome.BodyLength:N0} characters{(outcome.Truncated ? ", and the server had more" : "")}:"
+                                        : outcome.BodyLength == 0 ? "No body." : "Body:")
+                                </div>
+                                @if (outcome.BodySample.Length > 0)
+                                {
+                                    <pre class="border rounded p-1 mb-0" style="max-height: 14rem; overflow: auto; white-space: pre-wrap">@outcome.BodySample</pre>
+                                }
+                            }
+                        </div>
+                    }
+                </details>
+            }
+        </div>
+    }
+    <div class="form-text">
+        Steps are plain HTTP: nothing on a page runs, so an app that builds itself with JavaScript shows
+        its empty shell here. Point a step at that app's API instead.
+    </div>
+</div>
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    /// <summary>The whole form's values, for "Run now" — the secrets, the certificate setting and the budget live beside the steps.</summary>
+    [Parameter] public SettingsBag? Settings { get; set; }
+
+    private static readonly string[] Methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "PROPFIND"];
+
+    private List<CheckStep> _steps = [];
+    private string? _lastValue;
+    private string _template = "";
+    private bool _running;
+    private StepCheckRun? _run;
+
+    private StepCheckTemplate? Chosen => StepCheck.Templates.FirstOrDefault(t => t.Id == _template);
+
+    protected override void OnParametersSet()
+    {
+        if (Value == _lastValue)
+            return;
+        _lastValue = Value;
+        _steps = StepCheck.Parse(Value);
+    }
+
+    private static string Text(object? value) => value?.ToString() ?? "";
+
+    private async Task Push()
+    {
+        _lastValue = StepCheck.Serialize(_steps);
+        await ValueChanged.InvokeAsync(_lastValue);
+    }
+
+    private Task Edit(Action change)
+    {
+        change();
+        return Push();
+    }
+
+    /// <summary>A step's first check is its status, because that is nearly always the first thing worth saying.</summary>
+    private Task AddCheck(CheckStep step) => Edit(() => step.Checks.Add(step.Checks.Count == 0
+        ? new StepAssertion { Kind = StepAssertKind.Status, Value = "200" }
+        : new StepAssertion { Kind = StepAssertKind.BodyContains }));
+
+    private static string SavedNames(CheckStep step) =>
+        string.Join(", ", step.Save.Where(s => s.Name.Length > 0).Select(s => "${" + s.Name + "}"));
+
+    private Task AddStep()
+    {
+        // A new step starts where the last one pointed, which is nearly always the same app.
+        var previous = _steps.LastOrDefault();
+        _steps.Add(new CheckStep
+        {
+            Url = previous is null ? "" : BaseOf(previous.Url),
+            Checks = [new StepAssertion { Kind = StepAssertKind.Status, Value = "200" }],
+        });
+        return Push();
+    }
+
+    private static string BaseOf(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.GetLeftPart(UriPartial.Authority) + "/" : "";
+
+    private Task Move(int index, int by)
+    {
+        var target = index + by;
+        if (target < 0 || target >= _steps.Count)
+            return Task.CompletedTask;
+        (_steps[index], _steps[target]) = (_steps[target], _steps[index]);
+        return Push();
+    }
+
+    private Task RemoveStep(int index)
+    {
+        _steps.RemoveAt(index);
+        return Push();
+    }
+
+    private Task UseTemplate()
+    {
+        if (Chosen is not { } template)
+            return Task.CompletedTask;
+        _steps = template.Copy();
+        _run = null;
+        return Push();
+    }
+
+    private async Task RunNowAsync()
+    {
+        if (Registry.Provider("steps") is not MultiStepCheckProvider provider)
+            return;
+        _running = true;
+        _run = null;
+        try
+        {
+            var settings = Settings?.Clone() ?? new SettingsBag();
+            settings["steps"] = StepCheck.Serialize(_steps);
+            using var cts = new CancellationTokenSource(MultiStepCheckProvider.MaxBudget + TimeSpan.FromSeconds(10));
+            _run = await provider.RunAsync(settings, trace: true, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            _run = new StepCheckRun(false, "Gave up waiting for the check.", TimeSpan.Zero, [], 0, _steps);
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    /// <summary>
+    /// The <c>${name}</c> references in a step that no earlier step saves — said here, while
+    /// it is being written, rather than as a failure the first time it runs.
+    /// </summary>
+    private IEnumerable<string> Unset(int index)
+    {
+        var saved = new HashSet<string>(_steps.Take(index).SelectMany(s => s.Save).Select(s => s.Name.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+        var step = _steps[index];
+        var texts = new[] { step.Url, step.Headers, step.Body, step.BasicUser, step.BasicPassword }
+            .Concat(step.Checks.Select(c => c.Value));
+        foreach (var reference in texts.SelectMany(StepCheck.References).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (reference.Contains(':'))
+            {
+                if (reference.StartsWith("secret:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var name = reference["secret:".Length..].Trim();
+                    if (!StepCheck.ParseSecrets(Settings?.Get("secrets")).ContainsKey(name))
+                        yield return $"${{{reference}}} needs a secret called “{name}” — add it under Secrets.";
+                }
+                else
+                {
+                    yield return $"${{{reference}}} is not something a check can use — only ${{secret:name}} and saved values.";
+                }
+            }
+            else if (!saved.Contains(reference))
+            {
+                yield return $"${{{reference}}} is not saved by any earlier step.";
+            }
+        }
+    }
+
+    private static bool HasRequestDetails(CheckStep step) =>
+        step.Headers.Length > 0 || step.BodyKind != StepBodyKind.None || step.BasicUser.Length > 0 || step.TimeoutSeconds > 0;
+
+    private static bool IsHeader(StepAssertKind kind) => kind is StepAssertKind.HeaderPresent or StepAssertKind.HeaderEquals;
+
+    private static string ValuePlaceholder(StepAssertKind kind) => kind switch
+    {
+        StepAssertKind.Status => "200, 200-299 or 2xx",
+        StepAssertKind.BodyMatches => "Welcome, \\w+",
+        StepAssertKind.TimeUnder => "2000",
+        StepAssertKind.JsonEquals => "ok",
+        _ => "text",
+    };
+
+    private static string ExpressionPlaceholder(StepExtractFrom from) => from switch
+    {
+        StepExtractFrom.Json => "access_token",
+        StepExtractFrom.Regex => "name=\"csrf\" value=\"([^\"]+)\"",
+        StepExtractFrom.Header => "X-Request-Token",
+        StepExtractFrom.Cookie => "session",
+        _ => "",
+    };
+
+    private static string BodyPlaceholder(StepBodyKind kind) => kind switch
+    {
+        StepBodyKind.Form => "username=monitor\npassword=${secret:password}",
+        StepBodyKind.Json => "{ \"username\": \"monitor\", \"password\": \"${secret:password}\" }",
+        _ => "",
+    };
+
+    private static string BodyHelp(StepBodyKind kind) => kind switch
+    {
+        StepBodyKind.Form => "One field per line as name=value. Values are encoded for you.",
+        StepBodyKind.Json => "Values put in with ${…} are JSON-escaped, so a quote in a password cannot break it.",
+        _ => "Sent exactly as written. Set the Content-Type header to match.",
+    };
+}
