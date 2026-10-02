@@ -419,7 +419,13 @@ public sealed partial class HealthMonitor(
     /// Longest a single probe may take. Past the HTTP client's thirty seconds, so an
     /// ordinary timeout still reports its own clearer message first.
     /// </summary>
-    public TimeSpan ProbeDeadline { get; set; } = TimeSpan.FromSeconds(40);
+    public TimeSpan ProbeDeadline { get; set; } = DefaultProbeDeadline;
+
+    /// <summary>
+    /// <see cref="ProbeDeadline"/> as it ships, named so a provider with a time budget of
+    /// its own — the multi-step check — can be held to finishing inside it.
+    /// </summary>
+    public static readonly TimeSpan DefaultProbeDeadline = TimeSpan.FromSeconds(40);
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct) =>
         (await ProbeClassifiedAsync(connection, ct)).Result;
