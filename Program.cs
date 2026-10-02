@@ -128,6 +128,9 @@ builder.Services.AddSingleton<WidgetHistoryStore>();
 builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<ThemeStore>();
 builder.Services.AddSingleton<ThemeService>();
+// Wakes at sunrise, sunset or a scheduled switch and tells open pages to change end.
+builder.Services.AddSingleton<ThemeScheduler>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ThemeScheduler>());
 builder.Services.AddSingleton<CustomCssStore>();
 builder.Services.AddSingleton<CustomCssService>();
 builder.Services.AddSingleton<Markdown>();

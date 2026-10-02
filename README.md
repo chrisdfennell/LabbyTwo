@@ -2212,7 +2212,7 @@ dashboard-managed tunnel instead of a config file, add a public hostname with th
 
 **Settings → Appearance** holds the things that are yours rather than your lab's:
 
-- **Theme** — a gallery of themes, below; and whether to follow the OS, or pin light or dark.
+- **Theme** — a gallery of themes, below; whether to follow the OS, pin light or dark, or switch with the sun or the clock; and a theme of their own for the wall, the phone and the family page.
 - **Accent colour** — the theme's own, or fourteen swatches or your own, and links, buttons,
   the active tab, the first line of every chart and focus rings all follow it. Choosing a
   theme puts the theme's own accent back.
@@ -2313,6 +2313,39 @@ the other end is not invented.
 
 The active theme costs nothing per page: it is turned into CSS once when it changes and held
 in memory. The household's family status page wears it too.
+
+#### Day and night
+
+Under the gallery, **Day and night** decides which end of the theme shows:
+
+- **Follow the device** — light or dark as each phone, tablet or PC is set (the default).
+- **Dark** or **Light** — always that one.
+- **Follow the sun** — light from sunrise to sunset at the place set under **Settings →
+  Where you are**, dark the rest of the time. Sunrise and sunset are worked out on the
+  server (the same NOAA arithmetic the weather card uses), so nothing is looked up online.
+  Either switch can be moved up to three hours: "dark from −30 minutes after sunset" goes
+  dark half an hour before the sun does. With no location set it says how to set one and
+  follows the device meanwhile. North of the Arctic Circle it does the right thing: light
+  all through a summer with no sunset, dark through a winter with no sunrise.
+- **On a schedule** — light between two clock times, dark otherwise. The window may run past
+  midnight (light 22:00 until 06:00), and it keeps its clock times across the change to and
+  from summer time.
+
+The page says what that comes to now and when it next changes — "Light now — switches to
+dark at 19:42 (sunset)." Every open screen switches at that moment on its own, with no
+reload: a small timer on the server sleeps until the next switch (and never more than an
+hour), then tells open pages, which change one attribute because the theme's CSS already
+carries both ends. A page opened fresh is stamped with the right end before any script
+runs. The times are read in the server's time zone, like every other schedule in LabbyTwo.
+
+#### Per screen
+
+**Per screen** gives the wall, the phone view (`/m`) and the family page a look of their
+own. Each is **Same as the dashboard** unless you choose a theme for it, and separately a
+light/dark mode — the wall always True black and dark, say, while the phone follows the
+sun in the dashboard's theme. A tile beside each shows what it comes to right now. A screen
+whose chosen theme is deleted goes back to the dashboard's. Open walls and phones change
+straight away; the family page picks a change up the next time it is opened.
 
 ### Custom CSS
 

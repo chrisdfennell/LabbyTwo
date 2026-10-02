@@ -1,0 +1,140 @@
+@implements IDisposable
+@inject ThemeService Themes
+@inject AppSettingsStore AppSettings
+@inject Offload Offload
+
+@* A theme of its own for the wall, the phone view and the family page — or, by default, the
+   same as the dashboard. Each picks a theme and a light/dark mode separately: a wall in a
+   dark hallway always True black, a phone that follows the sun with the same theme as
+   everything else.
+
+   The tile beside each is the theme it comes to, in the end it is showing right now, so the
+   effect of a choice is visible without walking to the wall. *@
+
+<div class="screen-themes">
+    @foreach (var row in _rows)
+    {
+        var surface = row.Surface;
+        var key = surface.ToString().ToLowerInvariant();
+        <div class="screen-theme">
+            <div class="screen-theme-preview">
+                <ThemePreview Variant="row.Theme.Variant(row.ShowsDark)" Dark="row.ShowsDark" Title="@row.Theme.Name" />
+            </div>
+            <div class="screen-theme-fields">
+                <label class="form-label mb-1" for="@($"screen-theme-{key}")">@Label(surface)</label>
+                <select id="@($"screen-theme-{key}")" class="form-select form-select-sm mb-2" value="@row.OwnTheme"
+                        @onchange="e => SaveThemeAsync(surface, e.Value?.ToString())">
+                    <option value="">Same as the dashboard (@_dashboardName)</option>
+                    @foreach (var theme in _themes)
+                    {
+                        <option value="@theme.Id">@theme.Name</option>
+                    }
+                </select>
+                <label class="form-label mb-1" for="@($"screen-mode-{key}")">Light or dark</label>
+                <select id="@($"screen-mode-{key}")" class="form-select form-select-sm mb-1" value="@row.OwnMode"
+                        @onchange="e => SaveModeAsync(surface, e.Value?.ToString())">
+                    <option value="">Same as the dashboard (@ThemeModes.Label(_dashboardMode))</option>
+                    @foreach (var (value, label, _) in ThemeModes.All)
+                    {
+                        <option value="@value">@label</option>
+                    }
+                </select>
+                <div class="form-text">@row.Status @Note(surface)</div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private sealed record Row(ThemeSurface Surface, string OwnTheme, string OwnMode, Theme Theme, bool ShowsDark, string Status);
+
+    private IReadOnlyList<Theme> _themes = BuiltInThemes.All;
+    private List<Row> _rows = [];
+    private string _dashboardName = BuiltInThemes.LabbyTwo.Name;
+    private string _dashboardMode = ThemeModes.Auto;
+
+    private static string Label(ThemeSurface surface) => surface switch
+    {
+        ThemeSurface.Wall => "Wall mode uses…",
+        ThemeSurface.Phone => "Phone view uses…",
+        ThemeSurface.Family => "Family page uses…",
+        _ => "The dashboard uses…",
+    };
+
+    private static string Note(ThemeSurface surface) => surface switch
+    {
+        ThemeSurface.Family => "The family page picks a change up the next time somebody opens it.",
+        _ => "",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        Themes.Changed += OnChanged;
+    }
+
+    private async Task LoadAsync()
+    {
+        var (themes, settings) = await Offload.Run(async ct => (await Themes.AllAsync(ct), await AppSettings.AllAsync(ct)));
+        _themes = themes;
+        var zone = Themes.Zone;
+        var now = Themes.Now;
+
+        // The same fallbacks ThemeService makes: a deleted theme is the dashboard's, then the default.
+        var dashboard = themes.FirstOrDefault(t => t.Id == ThemeService.ThemeIdFor(settings)) ?? BuiltInThemes.LabbyTwo;
+        Theme Resolve(string id) => themes.FirstOrDefault(t => t.Id == id) ?? dashboard;
+
+        _dashboardName = dashboard.Name;
+        _dashboardMode = ThemeService.ModeFor(settings);
+
+        _rows = [.. ThemeService.OwnSurfaces.Select(surface =>
+        {
+            var theme = Resolve(ThemeService.ThemeIdFor(settings, surface));
+            var decision = ThemeService.DecideMode(settings, surface, zone, now);
+            // A one-ended theme shows that end whatever the mode says; "follow the device"
+            // has no answer here, so the tile shows the dark end and the line says so.
+            var shows = theme.ForcedMode ?? decision.Attribute;
+            var status = theme.ForcedMode is { } forced
+                ? $"{theme.Name} only has a {forced} end, so it is always {forced}."
+                : ThemeSchedule.Describe(decision, zone, now);
+            return new Row(
+                surface,
+                settings.Get(ThemeService.ThemeKeyFor(surface)!, ""),
+                settings.Get(ThemeService.ModeKeyFor(surface), ""),
+                theme,
+                shows != ThemeModes.Light,
+                status);
+        })];
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    /// <summary>Only "" or a theme that exists; anything else did not come from this list.</summary>
+    private async Task SaveThemeAsync(ThemeSurface surface, string? id)
+    {
+        id ??= "";
+        if (id.Length > 0 && !_themes.Any(t => t.Id == id))
+            return;
+        await SaveAsync(ThemeService.ThemeKeyFor(surface)!, id);
+    }
+
+    private async Task SaveModeAsync(ThemeSurface surface, string? mode)
+    {
+        mode ??= "";
+        if (mode.Length > 0 && !ThemeModes.IsKnown(mode))
+            return;
+        await SaveAsync(ThemeService.ModeKeyFor(surface), mode);
+    }
+
+    private async Task SaveAsync(string key, string value)
+    {
+        await Offload.Run(async ct => { await AppSettings.SaveAsync(key, value, ct); return true; });
+        await LoadAsync();
+    }
+
+    public void Dispose() => Themes.Changed -= OnChanged;
+}
