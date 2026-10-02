@@ -1,0 +1,166 @@
+@implements IDisposable
+@inject IHttpClientFactory HttpFactory
+
+@* "Find miners on my network". NMMiner announces itself to nobody, so the only way to find
+   one is to ask — this asks every address in a /24 for /api/system/info, sixteen at a time
+   with a one-second limit each, and only when the button is pressed. "Add" opens the
+   ordinary editor pre-filled; nothing is saved from here. *@
+
+<div class="panel mb-3" data-miner-finder>
+    <div class="d-flex align-items-center gap-2 flex-wrap px-3 pt-2 pb-2">
+        <strong>⛏️ Find miners on my network</strong>
+        <span class="tile-meta">NMMiner and Bitaxe (AxeOS) answer on port 80; each address is asked once.</span>
+        <button type="button" class="btn btn-sm btn-link ms-auto" @onclick="OnClose">Close</button>
+    </div>
+
+    <div class="d-flex align-items-center gap-2 flex-wrap px-3 pb-2">
+        <input class="form-control form-control-sm" style="width: 14rem" aria-label="Network to scan"
+               placeholder="192.168.86.0/24" @bind="_range" @bind:event="oninput" disabled="@_scanning" />
+        @if (_scanning)
+        {
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="stop-miner-scan" @onclick="Stop">
+                Stop · @_tried/@_total
+            </button>
+        }
+        else
+        {
+            <button type="button" class="btn btn-sm btn-primary" data-action="scan-for-miners" @onclick="ScanAsync">Scan</button>
+        }
+    </div>
+
+    @if (_error is { Length: > 0 })
+    {
+        <div class="alert alert-warning py-1 px-3 mx-3 small">@_error</div>
+    }
+
+    @if (_found is { } found)
+    {
+        @if (found.Count == 0 && !_scanning)
+        {
+            <p class="tile-meta small px-3 pb-2 mb-0">No miners answered in @_scanned. Check the range, and that LabbyTwo can reach that network.</p>
+        }
+        else if (found.Count > 0)
+        {
+            <table class="table align-middle mb-0">
+                <tbody>
+                    @foreach (var miner in found)
+                    {
+                        <tr data-found-miner="@miner.Address">
+                            <td style="width:2.5rem">⛏️</td>
+                            <td>
+                                <div><strong>@miner.Model</strong> <span class="tile-meta">at <code>@miner.Address</code></span></div>
+                                @if (miner.Hostname.Length > 0)
+                                {
+                                    <div class="tile-meta small">@miner.Hostname</div>
+                                }
+                            </td>
+                            <td class="text-end text-nowrap">
+                                @if (Existing(miner) is { } existing)
+                                {
+                                    <span class="tile-meta small">Already added as “@existing.Name”</span>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn-sm btn-primary" data-action="add-found-miner"
+                                            @onclick="() => OnAdd.InvokeAsync(miner)">Add</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+</div>
+
+@code {
+    /// <summary>What is already configured, so a miner that is already added says so instead of offering "Add".</summary>
+    [Parameter] public IReadOnlyList<Connection> Connections { get; set; } = [];
+
+    [Parameter] public EventCallback<FoundMiner> OnAdd { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string _range = "";
+    private string _scanned = "";
+    private bool _scanning;
+    private int _tried;
+    private int _total;
+    private string? _error;
+    private List<FoundMiner>? _found;
+    private CancellationTokenSource? _stop;
+
+    protected override void OnInitialized()
+    {
+        // A miner already added is the best guess at where the rest are.
+        var known = Connections
+            .Where(c => c.Provider == "miner")
+            .Select(c => Uri.TryCreate(MinerProvider.BaseUrl(c.Settings.Get("address")), UriKind.Absolute, out var uri) ? uri.Host : "")
+            .FirstOrDefault(host => System.Net.IPAddress.TryParse(host, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+        if (known is not null)
+            _range = known[..known.LastIndexOf('.')] + ".0/24";
+    }
+
+    private Connection? Existing(FoundMiner miner) =>
+        Connections.FirstOrDefault(c => c.Provider == "miner"
+            && Uri.TryCreate(MinerProvider.BaseUrl(c.Settings.Get("address")), UriKind.Absolute, out var uri)
+            && string.Equals(uri.Authority, miner.Address, StringComparison.OrdinalIgnoreCase));
+
+    private async Task ScanAsync()
+    {
+        _error = null;
+        IReadOnlyList<string> hosts;
+        try
+        {
+            hosts = MinerScan.Hosts(_range);
+        }
+        catch (FormatException ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+
+        _stop?.Dispose();
+        _stop = new CancellationTokenSource();
+        _scanning = true;
+        _tried = 0;
+        _total = hosts.Count;
+        _scanned = _range.Trim();
+        _found = [];
+
+        // Redrawn at most a few times a second rather than once per address: 254 renders
+        // over a SignalR circuit for a progress counter is more traffic than the scan.
+        var lastDraw = DateTime.UtcNow;
+        var progress = new Progress<int>(count =>
+        {
+            _tried = count;
+            if (DateTime.UtcNow - lastDraw > TimeSpan.FromMilliseconds(250))
+            {
+                lastDraw = DateTime.UtcNow;
+                _ = InvokeAsync(StateHasChanged);
+            }
+        });
+
+        try
+        {
+            var http = HttpFactory.CreateClient(ProviderHttp.ClientName);
+            _found = [.. await MinerScan.ScanAsync(http, hosts, progress: progress, ct: _stop.Token)];
+        }
+        catch (OperationCanceledException)
+        {
+            _error = "Stopped.";
+        }
+        finally
+        {
+            _scanning = false;
+        }
+    }
+
+    private void Stop() => _stop?.Cancel();
+
+    public void Dispose()
+    {
+        _stop?.Cancel();
+        _stop?.Dispose();
+    }
+}

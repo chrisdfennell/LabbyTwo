@@ -1,0 +1,171 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+
+@* Every miner at once. Lottery miners come in drawers rather than ones — the point of
+   having five is the five tickets — so the number worth reading is the total, with the
+   best difficulty any of them has ever found beside it and anything offline called out.
+   Live probe state only: the connection list is ConfigStore's cached copy and the readings
+   are the monitor's, so drawing this card asks neither the database nor a miner. *@
+
+@if (_miners.Count == 0)
+{
+    <p class="tile-meta mb-0">No miners connected yet. Add one under Connections — “Find miners on my network” looks for them.</p>
+}
+else
+{
+    <div class="metric-value" data-miners-hashrate>@MinerUnits.Hashrate(_totalHashrate)</div>
+    <div class="tile-meta">
+        across @_miners.Count miner@(_miners.Count == 1 ? "" : "s")@(_estimated ? " · partly estimated from shares" : "")
+    </div>
+
+    <div class="d-flex flex-wrap gap-4 mt-2">
+        @if (_sharesPerHour is { } perHour)
+        {
+            <div>
+                <div class="metric-value" data-miners-shares>@perHour.ToString(perHour < 10 ? "0.#" : "0")</div>
+                <div class="tile-meta">shares/hour</div>
+            </div>
+        }
+        @if (_bestEver is { } best)
+        {
+            <div>
+                <div class="metric-value" data-miners-best>@MinerUnits.FormatDifficulty(best.Value)</div>
+                <div class="tile-meta">best difficulty ever · @best.Name</div>
+            </div>
+        }
+        @if (_blocks > 0)
+        {
+            <div>
+                <div class="metric-value">🎉 @_blocks.ToString("0")</div>
+                <div class="tile-meta">block@(_blocks == 1 ? "" : "s") found</div>
+            </div>
+        }
+    </div>
+
+    @if (_offline.Count > 0)
+    {
+        <div class="small text-danger mt-2" data-miners-offline>
+            ⚠️ Offline: @string.Join(", ", _offline)
+        </div>
+    }
+
+    @if (ShowList)
+    {
+        <div class="mt-2 d-grid gap-1">
+            @foreach (var miner in _miners)
+            {
+                <div class="d-flex justify-content-between align-items-center gap-2 small" data-miner-row="@miner.Name">
+                    <span class="d-flex align-items-center gap-2 text-truncate">
+                        <span class="status-dot @miner.Dot"></span>
+                        <span class="text-truncate">@miner.Name</span>
+                    </span>
+                    <span class="tile-meta flex-none">@miner.Summary</span>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private sealed record Row(string Name, string Dot, string Summary);
+
+    private List<Row> _miners = [];
+    private List<string> _offline = [];
+    private double _totalHashrate;
+    private double? _sharesPerHour;
+    private (string Name, double Value)? _bestEver;
+    private double _blocks;
+    private bool _estimated;
+
+    private bool ShowList => Context.Widget.Settings.GetBool("show_list", true);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        Config.Changed += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        // Cached in ConfigStore after the first load, so this is a list in memory.
+        var connections = (await Config.ConnectionsAsync())
+            .Where(c => c.Enabled && c.Provider == "miner")
+            .OrderBy(c => c.Sort).ThenBy(c => c.Name)
+            .ToList();
+
+        var rows = new List<Row>();
+        var offline = new List<string>();
+        double total = 0, blocks = 0;
+        double? perHour = null;
+        (string, double)? best = null;
+        var estimated = false;
+
+        foreach (var connection in connections)
+        {
+            var state = Health.State(connection.Id);
+            var metrics = state?.Metrics ?? new Dictionary<string, double>();
+
+            if (state?.IsUp == false)
+            {
+                offline.Add(connection.Name);
+                rows.Add(new Row(connection.Name, "status-down", "offline"));
+                continue;
+            }
+
+            // Only an up miner counts towards the total: an offline one's last reading is
+            // history, and adding it in would hide exactly the fault the card exists to show.
+            var hashrate = MinerProvider.EffectiveHashrate(metrics);
+            if (hashrate is { } h)
+            {
+                total += h;
+                if (!(metrics.GetValueOrDefault("hashrate_ghs") > 0) && metrics.ContainsKey("est_hashrate_ghs"))
+                    estimated = true;
+            }
+
+            if (metrics.TryGetValue("shares_per_hour", out var rate))
+                perHour = (perHour ?? 0) + rate;
+
+            if (metrics.TryGetValue("best_diff_ever", out var ever) && (best is null || ever > best.Value.Item2))
+                best = (connection.Name, ever);
+
+            blocks += metrics.GetValueOrDefault("block_hits");
+
+            var dot = state switch
+            {
+                null or { IsUp: null } => "status-unknown",
+                { ConsecutiveFailures: > 0 } => "status-flapping",
+                _ => "status-up",
+            };
+            var summary = hashrate is { } shown ? MinerUnits.Hashrate(shown) : state is null ? "checking…" : "—";
+            if (metrics.TryGetValue("shares_per_hour", out var own))
+                summary += $" · {own:0.#}/h";
+            rows.Add(new Row(connection.Name, dot, summary));
+        }
+
+        _miners = rows;
+        _offline = offline;
+        _totalHashrate = total;
+        _sharesPerHour = perHour;
+        _bestEver = best;
+        _blocks = blocks;
+        _estimated = estimated;
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Config.Changed -= OnUpdated;
+    }
+}

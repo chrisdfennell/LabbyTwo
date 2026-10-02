@@ -1,0 +1,158 @@
+@implements IDisposable
+@inject HealthMonitor Health
+@inject DisplayUnits DisplayUnits
+
+@* One miner at a glance. Everything here is from the monitor's last probe — the card never
+   asks the miner itself, so a wall of them costs an ESP32 nothing extra. The headline
+   hashrate is the miner's own figure when it reports one, and the estimate from accepted
+   shares when it says zero (see ShareTrail), labelled so nobody mistakes which it is. *@
+
+@if (Context.Connection is null)
+{
+    <p class="tile-meta mb-0">Not bound to a miner.</p>
+}
+else if (_state is null)
+{
+    <p class="tile-meta mb-0">checking…</p>
+}
+else
+{
+    <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="status-dot @DotClass"></span>
+        <span class="tile-name text-truncate">
+            @(string.IsNullOrWhiteSpace(Context.Connection.Icon) ? "" : Context.Connection.Icon + " ")@Context.Connection.Name
+        </span>
+    </div>
+
+    @if (_state.IsUp == false)
+    {
+        <div class="tile-meta text-truncate" title="@_state.Message" data-miner-offline>Offline — @_state.Message</div>
+    }
+
+    @if (MinerProvider.EffectiveHashrate(_state.Metrics) is { } hashrate)
+    {
+        <div class="metric-value mt-1" data-miner-hashrate>@MinerUnits.Hashrate(hashrate)</div>
+        <div class="tile-meta">@HashrateCaption</div>
+    }
+
+    <div class="d-flex flex-wrap gap-4 mt-2">
+        @if (Metric("shares_per_hour") is { } perHour)
+        {
+            <div>
+                <div class="metric-value">@perHour.ToString(perHour < 10 ? "0.#" : "0")</div>
+                <div class="tile-meta">shares/hour</div>
+            </div>
+        }
+        @if (Metric("shares_accepted") is { } accepted)
+        {
+            <div>
+                <div class="metric-value">@accepted.ToString("N0")</div>
+                <div class="tile-meta">
+                    accepted@(Metric("shares_rejected") is { } rejected ? $" · {rejected:N0} rejected" : "")@(Metric("reject_percent") is { } percent ? $" ({percent:0.#}%)" : "")
+                </div>
+            </div>
+        }
+        @if ((Metric("best_diff_ever") ?? Metric("best_diff_session")) is { } best)
+        {
+            <div>
+                <div class="metric-value">@MinerUnits.FormatDifficulty(best)</div>
+                <div class="tile-meta">best difficulty@(Metric("best_diff_session") is { } session && Metric("best_diff_ever") is not null ? $" · {MinerUnits.FormatDifficulty(session)} since boot" : "")</div>
+            </div>
+        }
+        @if (Metric("block_hits") is { } blocks && blocks > 0)
+        {
+            <div>
+                <div class="metric-value">🎉 @blocks.ToString("0")</div>
+                <div class="tile-meta">block@(blocks == 1 ? "" : "s") found</div>
+            </div>
+        }
+    </div>
+
+    @if (Hardware.Count > 0)
+    {
+        <div class="tile-meta mt-2" data-miner-hardware>@string.Join(" · ", Hardware)</div>
+    }
+
+    @if (ShowDetails && _state.Details.Count > 0)
+    {
+        @* Model, firmware, pool and worker. The provider has already masked the payout
+           address unless the connection asked to show it, so this prints what it is given. *@
+        <dl class="tunnel-details mt-2 mb-0">
+            @foreach (var (label, text) in _state.Details)
+            {
+                <dt class="tile-meta">@label</dt>
+                <dd class="mb-1 text-truncate" title="@text">@text</dd>
+            }
+        </dl>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private HealthMonitor.ProbeState? _state;
+
+    private bool ShowDetails => Context.Widget.Settings.GetBool("show_details", true);
+
+    private double? Metric(string key) =>
+        _state?.Metrics.TryGetValue(key, out var value) == true ? value : null;
+
+    private string HashrateCaption =>
+        Metric("hashrate_ghs") is > 0
+            ? Metric("est_hashrate_ghs") is { } estimate
+                ? $"reported · ≈{MinerUnits.Hashrate(estimate)} from shares"
+                : "reported by the miner"
+            : Metric("est_hashrate_ghs") is not null
+                ? "estimated from accepted shares"
+                : "reported by the miner · an estimate from shares follows the next check";
+
+    /// <summary>The Bitaxe's physical readings, when it has them. An NMMiner reports none.</summary>
+    private List<string> Hardware
+    {
+        get
+        {
+            var units = DisplayUnits.Current;
+            var parts = new List<string>();
+            if (Metric("temp_c") is { } temp)
+                parts.Add($"🌡️ {Units.Format(temp, "°C", 0, units)}");
+            if (Metric("vr_temp_c") is { } vr)
+                parts.Add($"VR {Units.Format(vr, "°C", 0, units)}");
+            if (Metric("power_w") is { } watts)
+                parts.Add($"⚡ {watts:0.#} W");
+            if (Metric("fan_rpm") is { } fan)
+                parts.Add($"🌀 {fan:N0} rpm");
+            if (Metric("wifi_rssi") is { } rssi)
+                parts.Add($"📶 {rssi:0} dBm");
+            return parts;
+        }
+    }
+
+    private string DotClass => _state switch
+    {
+        { IsUp: true, ConsecutiveFailures: > 0 } => "status-flapping",
+        { IsUp: true } => "status-up",
+        { IsUp: false } => "status-down",
+        _ => "status-unknown",
+    };
+
+    protected override void OnInitialized()
+    {
+        Health.Updated += OnUpdated;
+        DisplayUnits.Changed += OnUpdated;
+    }
+
+    protected override void OnParametersSet() =>
+        _state = Context.Connection is null ? null : Health.State(Context.Connection.Id);
+
+    private void OnUpdated() => _ = InvokeAsync(() =>
+    {
+        OnParametersSet();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        DisplayUnits.Changed -= OnUpdated;
+    }
+}
