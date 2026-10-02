@@ -1,0 +1,132 @@
+@implements IDisposable
+@inject ConfigStore Config
+@inject HealthMonitor Health
+
+@* Who is on the shared Intel GPU. The apps say what they are doing in their own probes and
+   the GPU's own load, where a container can see it at all, comes from an Intel GPU
+   connection's probe — so drawing this card reads the cached connection list and the
+   monitor's live state and asks nothing of the database, the apps or sysfs. *@
+
+@if (_picture.Users.Count == 0 && _host is null)
+{
+    <p class="tile-meta mb-0" data-gpu-empty>
+        Nothing to show yet. Connect Plex (or Tautulli), Tdarr or Tunarr and this card shows which of them is using the GPU.
+    </p>
+}
+else
+{
+    <div class="metric-value" data-gpu-headline>@Headline</div>
+
+    <div class="tile-meta" data-gpu-host>
+        @if (_busy is { } busy)
+        {
+            <span>GPU @busy.ToString("0")% busy</span>
+            @if (_clock is { Length: > 0 })
+            {
+                <span> · @_clock</span>
+            }
+        }
+        else if (_clock is { Length: > 0 })
+        {
+            <span>GPU clock @_clock · @(_host?.Details.GetValueOrDefault("load") == "measuring" ? "measuring load…" : "its load is not published on this kernel")</span>
+        }
+        else
+        {
+            <span>@GpuSysfs.NotVisible</span>
+        }
+    </div>
+
+    @if (_users.Count > 0)
+    {
+        <div class="mt-2 d-grid gap-1">
+            @foreach (var user in _users)
+            {
+                <div class="d-flex justify-content-between align-items-center gap-2 small" data-gpu-row="@user.Name">
+                    <span class="d-flex align-items-center gap-2 text-truncate">
+                        <span class="status-dot @(user.Answering ? (user.OnGpu > 0 ? "status-up" : "status-unknown") : "status-down")"></span>
+                        <span class="text-truncate">@Label(user)</span>
+                    </span>
+                    <span class="tile-meta flex-none">
+                        @user.Summary@(user.Note.Length > 0 ? $" · {user.Note}" : "")
+                    </span>
+                </div>
+            }
+        </div>
+    }
+
+    @foreach (var warning in _picture.Warnings)
+    {
+        <div class="small text-warning mt-2" data-gpu-warning>⚠️ @warning</div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public WidgetContext Context { get; set; } = default!;
+
+    private GpuPicture _picture = new([], 0, 0, 0, []);
+    private List<GpuUser> _users = [];
+    private ProbeStateView? _host;
+    private double? _busy;
+    private string? _clock;
+
+    private sealed record ProbeStateView(IReadOnlyDictionary<string, double> Metrics, IReadOnlyDictionary<string, string> Details);
+
+    private bool ShowIdle => Context.Widget.Settings.GetBool("show_idle", true);
+
+    private string Headline => _picture.AppsOnGpu switch
+    {
+        0 => "Quick Sync is idle",
+        1 => "1 app on Quick Sync",
+        var n => $"{n} apps on Quick Sync",
+    };
+
+    /// <summary>The app's name, and the connection's beside it when the user called it something else.</summary>
+    private static string Label(GpuUser user) =>
+        string.Equals(user.App, user.Name, StringComparison.OrdinalIgnoreCase) || user.Name.Length == 0
+            ? user.App
+            : $"{user.App} — {user.Name}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Health.Updated += OnUpdated;
+        Config.Changed += OnUpdated;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        // Cached in ConfigStore after the first load, so this is a list in memory.
+        var connections = await Config.ConnectionsAsync();
+
+        var gpu = connections
+            .Where(c => c.Enabled && c.Provider == IntelGpuProvider.ProviderType)
+            .OrderBy(c => c.Sort).ThenBy(c => c.Name)
+            .Select(c => Health.State(c.Id))
+            .FirstOrDefault(s => s?.IsUp == true);
+
+        _host = gpu is null ? null : new ProbeStateView(gpu.Metrics, gpu.Details);
+        _busy = _host?.Metrics.TryGetValue("gpu_busy_percent", out var b) == true ? b : null;
+        _clock = null;
+        if (_host?.Metrics.TryGetValue("freq_act_mhz", out var act) == true)
+        {
+            _clock = _host.Metrics.TryGetValue("freq_max_mhz", out var max) ? $"{act:0}/{max:0} MHz" : $"{act:0} MHz";
+        }
+
+        _picture = GpuUsage.From(IntelGpuProvider.GpuSources(connections, Health), _busy);
+        _users = ShowIdle ? [.. _picture.Users] : [.. _picture.Users.Where(u => u.OnGpu > 0)];
+    }
+
+    private void OnUpdated() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Health.Updated -= OnUpdated;
+        Config.Changed -= OnUpdated;
+    }
+}
