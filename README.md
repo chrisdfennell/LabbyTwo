@@ -859,6 +859,126 @@ outside service to say so — and whenever it can, the internet is not down. So 
 signal: the missing check-ins *are* the report, and the first ping once the line is back is
 the recovery.
 
+### Home Assistant: LabbyTwo as sensors and buttons
+
+LabbyTwo already *reads* Home Assistant as a connection. **Settings → Home Assistant (MQTT)**
+is the other direction: it publishes LabbyTwo into Home Assistant through your MQTT broker,
+using MQTT discovery, so the entities appear by themselves — no YAML. It is off until you
+switch it on, and nothing is sent, not even a connection attempt, before then.
+
+**Setting it up with the Mosquitto add-on:**
+
+1. In Home Assistant, **Settings → Add-ons → Add-on store → Mosquitto broker**, install and start it.
+2. **Settings → People → Users**, add a user for LabbyTwo (say `labbytwo`) with a password.
+   The Mosquitto add-on accepts any Home Assistant user.
+3. **Settings → Devices & services**: the MQTT integration is offered as discovered; accept it.
+4. In LabbyTwo, **Settings → Home Assistant (MQTT)**: broker address = your Home Assistant
+   machine (`homeassistant.local` or its IP — it has to resolve from inside LabbyTwo's container),
+   port `1883`, the user and password from step 2. Press **Test connection**, tick
+   **Publish to Home Assistant**, and **Save**.
+
+Leave the discovery prefix at `homeassistant` unless you changed it in HA. The base topic
+(`labbytwo`) is where states live; give a second LabbyTwo on the same broker a different one.
+
+**What appears.** One HA *device* per connection — named after it, manufacturer "LabbyTwo",
+model the provider ("QNAP NAS"), shown as connected via a **LabbyTwo** hub device:
+
+| Entity | On the device | What it says |
+|---|---|---|
+| `binary_sensor` Connectivity | each connection | on = up. Attributes: since, last checked, the probe's message, maintenance, silenced, can't check |
+| `sensor` per metric | each connection | if chosen: *up or down only* (default), *the metrics I tick*, or *every metric* |
+| `sensor` Lab summary | LabbyTwo | "24 up, 1 down" |
+| `binary_sensor` Anything down, Alert firing, Maintenance, LabbyTwo blind, Backup late, Incident open | LabbyTwo | on when it is true |
+| `sensor` Open incidents | LabbyTwo | a count |
+
+Metrics carry Home Assistant's unit, `device_class` and `state_class` where LabbyTwo knows
+them — temperature, humidity, battery, power (W), energy (kWh, `total_increasing`), data rate
+(Mbit/s), data size, duration, pressure, wind speed — so they chart, convert and go into
+long-term statistics. **Temperatures are sent in the unit LabbyTwo stores them in** (°C for
+almost every provider), labelled as such; Home Assistant converts to your unit for display.
+Converting in LabbyTwo instead would bake its display setting into HA's history.
+
+Every entity is tied to an availability topic. LabbyTwo says `online` when it connects and
+leaves a will with the broker, so if LabbyTwo stops or loses the network the whole lot goes
+*unavailable* rather than showing stale greens. When Home Assistant restarts it announces
+itself, and LabbyTwo sends every entity again.
+
+Entity ids come from the names (`binary_sensor.nas_connectivity`), but the `unique_id`s come
+from LabbyTwo's connection ids — rename the NAS in LabbyTwo and the device's name changes in
+HA while the entity, its history and your automations stay as they were. Delete a
+connection, or untick it, and its entities are removed from HA; switching the whole thing
+off removes them all.
+
+Publishing follows what the monitor already knows in memory — after each sweep, debounced,
+sending only what changed (everything is retained), with a full resend every 10 minutes as
+a safety net. A slow or missing broker never holds up monitoring: LabbyTwo retries with a
+growing wait, and problems are logged and shown on the Settings card. They are **not** sent
+to your alert channels — one of those may be Home Assistant itself.
+
+**Example: flash a light when the NAS goes down.**
+
+```yaml
+automation:
+  - alias: "NAS down: flash the office light"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.nas_connectivity
+        to: "off"
+        for: "00:01:00"
+    action:
+      - service: light.turn_on
+        target: { entity_id: light.office }
+        data: { flash: long, color_name: red }
+```
+
+**Example: say it out loud when a backup is late.**
+
+```yaml
+automation:
+  - alias: "Announce late backups"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.labbytwo_backup_late
+        to: "on"
+    condition:
+      - condition: time
+        after: "08:00:00"
+        before: "21:00:00"
+    action:
+      - service: tts.speak
+        target: { entity_id: tts.home_assistant_cloud }
+        data:
+          media_player_entity_id: media_player.kitchen
+          message: "Heads up: a LabbyTwo backup is late."
+```
+
+**Buttons (optional, off by default).** Two ticks on the card add `button` entities:
+
+- **Maintenance** — "Start maintenance (1 hour)" and "End maintenance", the same as the
+  banner and the command palette.
+- **Connection actions** — each connection's actions that are safe and ask nothing: Wake on
+  LAN, Pi-hole's Resume blocking. Never offered, whatever you tick: anything marked
+  dangerous (restart, shut down), anything that asks a question first (pause for how long?),
+  anything that takes a machine offline, and any container — LabbyTwo's own and your
+  protected ones included.
+
+Security notes for the buttons:
+
+- **Anyone who can use your Home Assistant, or publish to your broker, can press them.** A
+  dashboard tile, a voice assistant that misheard and an automation loop all count. Give
+  LabbyTwo its own broker user, and use the broker's ACLs if others share it.
+- Every press is checked again when it arrives — the setting, the connection, the action's
+  guardrails — runs through the same action runner as every other button, and is written to
+  the change feed (**Buttons pressed in Home Assistant**), whether it ran, failed or was refused.
+- A retained press (one left on the broker, which would replay on every reconnect) is
+  ignored and recorded; a second press of the same button within three seconds is dropped.
+- Leave the buttons off if you only want sensors. With both off, LabbyTwo does not even
+  subscribe to the command topics.
+
+The broker password is stored encrypted with the same keyring as connection passwords and
+never shown again or written to the log. TLS is a tick away (port 8883 on most brokers);
+self-signed certificates are accepted, as they are everywhere else in LabbyTwo.
+
 ### When LabbyTwo cannot see
 
 Sometimes it is LabbyTwo that is broken, not the lab: Docker's DNS inside its container stops
