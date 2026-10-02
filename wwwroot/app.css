@@ -2985,6 +2985,34 @@ a.md-diagram-node:focus { outline: none; }
 .theme-tile-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
 .theme-tile-actions .btn { --bs-btn-padding-y: .1rem; --bs-btn-font-size: .75rem; }
 
+/* Day and night, and the per-screen pickers under the gallery. */
+.theme-section-title { font-size: .95rem; font-weight: 650; margin: 0 0 .5rem; }
+.theme-mode-fields {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: .4rem .75rem;
+    max-width: 26rem;
+}
+.theme-mode-number { width: 5.5rem; }
+.theme-mode-time { width: 8rem; }
+.theme-mode-now { color: var(--text); font-weight: 600; }
+.screen-themes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+    gap: .85rem;
+}
+.screen-theme {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: .75rem;
+    padding: .6rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+}
+.screen-theme-fields { min-width: 0; }
+
 .theme-preview {
     background: var(--ink);
     color: var(--text);

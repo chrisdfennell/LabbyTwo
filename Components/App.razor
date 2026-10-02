@@ -113,7 +113,12 @@
         _look = look with { HasUploadedFont = look.Font == "custom" && Fonts.Current() is not null };
         _face = _look.HasUploadedFont ? Fonts.FaceRule() : "";
 
-        _theme = await Themes.ActiveAsync();
+        // The wall and the phone view can wear a theme of their own; which screen this is
+        // comes from the address, so the first paint matches what ThemeSync keeps it in.
+        _theme = await Themes.ActiveAsync(ThemeService.SurfaceForPath(HttpContext?.Request.Path.Value));
         _mode = _theme.ModeAttribute(_look);
     }
+
+    /// <summary>Present on every server render of the document, which is the only time this runs.</summary>
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
 }
