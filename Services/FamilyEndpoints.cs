@@ -81,6 +81,7 @@ public static class FamilyEndpoints
             [nameof(FamilyPage.View)] = view,
             [nameof(FamilyPage.Look)] = await LookAsync(settings, ct),
             [nameof(FamilyPage.Theme)] = await ThemeAsync(context, ct),
+            [nameof(FamilyPage.CustomCss)] = await CustomCssAsync(context, ct),
             [nameof(FamilyPage.Base)] = path,
             [nameof(FamilyPage.Sent)] = sent,
         });
@@ -156,6 +157,7 @@ public static class FamilyEndpoints
             [nameof(FamilyPage.View)] = view,
             [nameof(FamilyPage.Look)] = await LookAsync(settings, ct),
             [nameof(FamilyPage.Theme)] = await ThemeAsync(context, ct),
+            [nameof(FamilyPage.CustomCss)] = await CustomCssAsync(context, ct),
             [nameof(FamilyPage.Base)] = path,
             [nameof(FamilyPage.AntiforgeryField)] = tokens.FormFieldName,
             [nameof(FamilyPage.AntiforgeryValue)] = tokens.RequestToken ?? "",
@@ -179,6 +181,15 @@ public static class FamilyEndpoints
         context.RequestServices.GetService<ThemeService>() is { } themes
             ? await themes.ActiveAsync(ThemeSurface.Family, ct)
             : null;
+
+    /// <summary>
+    /// The owner's custom CSS, from memory — empty unless they chose to include the family
+    /// page, and in safe mode. Asked of the request's services for the same reason as the theme.
+    /// </summary>
+    private static async Task<string> CustomCssAsync(HttpContext context, CancellationToken ct) =>
+        context.RequestServices.GetService<CustomCssService>() is { } custom
+            ? await custom.CssForAsync(ThemeSurface.Family, SafeMode.IsOn(context), ct)
+            : "";
 
     private static RazorComponentResult<FamilyPage> Page(Dictionary<string, object?> parameters, int status = 200) =>
         new(parameters) { StatusCode = status };

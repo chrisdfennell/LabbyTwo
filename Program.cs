@@ -128,6 +128,8 @@ builder.Services.AddSingleton<WidgetHistoryStore>();
 builder.Services.AddSingleton<FontStore>();
 builder.Services.AddSingleton<ThemeStore>();
 builder.Services.AddSingleton<ThemeService>();
+builder.Services.AddSingleton<CustomCssStore>();
+builder.Services.AddSingleton<CustomCssService>();
 builder.Services.AddSingleton<Markdown>();
 builder.Services.AddSingleton<Seeder>();
 builder.Services.AddSingleton<ConfigTransfer>();
@@ -328,6 +330,9 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+// ?safe=1 on any address turns the owner's custom CSS off for this browser's visit — see
+// SafeMode. Before authentication so the redirect to the login page carries the cookie.
+app.UseSafeMode();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();

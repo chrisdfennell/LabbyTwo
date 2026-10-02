@@ -2091,6 +2091,27 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
    the services are probably fine, and red would say otherwise. */
 .blind-banner .tile-meta { font-size: .85rem; }
 
+/* Safe mode (?safe=1): custom CSS is off for this visit. Fixed at the foot of the screen
+   rather than in the flow, so it sits over every layout — dashboard, wall, phone, login —
+   without pushing any of them about. Panel-backed so it stays readable over anything. */
+.safe-mode-banner {
+    position: fixed;
+    left: 50%;
+    bottom: 1rem;
+    transform: translateX(-50%);
+    z-index: 1090;
+    max-width: calc(100vw - 2rem);
+    padding: .5rem .9rem;
+    border: 1px solid var(--warn);
+    border-radius: .5rem;
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: 0 4px 16px var(--shadow);
+    font-size: .875rem;
+}
+
+.safe-mode-banner a + a { margin-left: .75rem; }
+
 /* The end of a stuck update helper's log: a few lines, kept from pushing the page wide. */
 .update-helper-log {
     max-height: 10rem;

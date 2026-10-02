@@ -2314,6 +2314,85 @@ the other end is not invented.
 The active theme costs nothing per page: it is turned into CSS once when it changes and held
 in memory. The household's family status page wears it too.
 
+### Custom CSS
+
+**Settings → Appearance → Custom CSS** (at the bottom, marked Advanced) takes a stylesheet of
+your own. It goes into every page after app.css and after the theme — in that order — so your
+rules win over both and can use every theme colour. **Save** puts it on every open screen
+straight away, wall included; **Preview** tries it in this browser only; **Revert** goes back
+to what is saved. The last 20 saves are kept with who saved them and when, each with a
+**Compare with current** diff and a **Restore** (restoring is a save too, so it can be undone).
+On an install with a login, only the signed-in owner can change it.
+
+**If it goes wrong:** add `?safe=1` to any address — for example
+`http://labby.local:8080/?safe=1` — or use the **Safe mode** link on the sign-in page. Custom CSS
+is then skipped in that browser until it is closed (or until `?safe=0`), with a banner saying
+so, while every other screen keeps it. There is also a big **Custom CSS is on** switch that
+turns it off everywhere without losing it. The family status page leaves custom CSS out unless
+you tick **Also on the family page**.
+
+What is refused, and why:
+
+- **More than 100 KB.**
+- **`</style`** anywhere, even in a comment — it would end the style element and turn the rest
+  into page markup.
+- **`@import`**, and **any address outside the dashboard** in `url()`, `src()` or a string
+  (`image-set("…")` loads strings). LabbyTwo never reaches outside your network to draw itself,
+  and custom CSS keeps that promise: use a path on the dashboard (`url(/icon.svg)`), or a
+  `data:` URL of up to 32 KB for a small image. Absolute `http(s)://` addresses are refused even
+  when they name this dashboard — a path does the same and cannot be wrong. Comments and
+  backslash escapes are read the way a browser reads them, so `@\69mport` is still `@import`.
+
+Mismatched braces are a warning, not a refusal: the browser skips what it cannot read.
+
+**Tokens.** Every theme colour is a custom property, written `var(--name)`:
+
+| Group | Tokens |
+|---|---|
+| Surfaces | `--ink` (page), `--panel` (cards, sidebar, dialogs), `--panel-2` (raised: hovered rows, chips), `--edge` (borders), `--input-bg`, `--input-border`, `--tooltip-bg`, `--overlay`, `--shadow` |
+| Text | `--text`, `--muted` (secondary), `--placeholder`, `--link`, `--selection` |
+| Accent | `--accent`, `--accent-ink` (text on the accent), `--accent-2`, `--focus`, `--neutral`, `--neutral-ink` |
+| Status | `--up`, `--down`, `--warn`, `--info`, `--up-soft`, `--down-soft`, `--warn-soft` (tinted backgrounds) |
+| Charts | `--chart-1` to `--chart-8` |
+| Code | `--code` |
+
+The layout settings are custom properties too: `--radius` (card corners) and `--pad` (card
+padding). The list, with what each is for, is `Core/ThemeTokens.cs`.
+
+**Class names worth targeting.** These are kept stable:
+
+| Class | What it is |
+|---|---|
+| `.app-shell`, `.app-nav`, `.app-main` | The page: sidebar and content |
+| `.nav-brand`, `.nav-brand-mark`, `.nav-brand-text` | The name at the top of the sidebar |
+| `.nav-links`, `.nav-item-link`, `.nav-icon`, `.nav-text`, `.nav-footer` | Sidebar links |
+| `.page-head` | A page's title row |
+| `.widget`, `.widget-head`, `.widget-title`, `.widget-body` | Cards |
+| `.status-dot` with `.status-up`, `.status-down`, `.status-warn`, `.status-unknown` | Status dots |
+| `.tile-name`, `.tile-meta` | A card's name and small grey text |
+| `.wall-stage`, `.wall-slide`, `.wall-clock`, `.wall-controls` | Wall mode |
+| `.phone`, `.phone-row`, `.phone-banner` | Phone view |
+| `.markdown-body` | Rendered Markdown in notes and cards |
+| `.safe-mode-banner` | The safe-mode notice |
+
+The html element carries `data-theme` (`dark` or `light`, absent when following the OS),
+`data-surface`, `data-wide`, and `data-safe` in safe mode. Anything else — the chart, map and
+card internals (`.md-*`, `.depmap-*`, `.chart-*` and so on) and Bootstrap's own classes — is
+internal and may change between versions.
+
+Three examples:
+
+```css
+/* Hide the dashboard's name in the sidebar, keep the mark */
+.nav-brand-text { display: none; }
+
+/* Bigger status dots, with a ring so they stand out on any card */
+.status-dot { width: .9rem; height: .9rem; box-shadow: 0 0 0 2px var(--panel-2); }
+
+/* Rounder cards on the wall only */
+.wall-stage .widget { border-radius: 1.25rem; }
+```
+
 ### Wall mode
 
 `/wall` is the dashboard for a tablet or a TV nobody sits in front of: no sidebar, one tab

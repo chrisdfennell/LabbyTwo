@@ -1,0 +1,56 @@
+@implements IDisposable
+@inject CustomCssService CustomStyles
+@inject IJSRuntime JS
+
+@* Draws nothing. ThemeSync's partner for the owner's custom CSS: after a save, the switch
+   being flipped, or a version restored, the new text is pushed into this page's
+   <style id="labby-custom"> so open pages — the wall above all — follow without a reload.
+
+   Safe mode is the browser's business, not the circuit's: the push always carries the CSS,
+   and custom-css.js leaves the block empty on a page that was opened with ?safe=1. *@
+
+@code {
+    /// <summary>Which screen this page is. Only the family page differs, and it never has this component.</summary>
+    [Parameter] public ThemeSurface Surface { get; set; } = ThemeSurface.Dashboard;
+
+    private string? _shown;
+    private bool _subscribed;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _shown = await CustomStyles.CssForAsync(Surface, safe: false);
+        CustomStyles.Changed += OnChanged;
+        _subscribed = true;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(PushAsync);
+
+    private async Task PushAsync()
+    {
+        try
+        {
+            var now = await CustomStyles.CssForAsync(Surface, safe: false);
+            if (now == _shown)
+                return;
+
+            _shown = now;
+            await JS.InvokeVoidAsync("labbyCustomCss.apply", now);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The tab closed between the save and the push; nothing to restyle.
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_subscribed)
+            CustomStyles.Changed -= OnChanged;
+    }
+}

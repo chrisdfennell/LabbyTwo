@@ -11,6 +11,9 @@
    Subscribes only once interactive. During prerender there is no browser to push to, and
    the page being rendered already has the current theme in its head. *@
 
+@* The owner's custom CSS rides along: every layout that keeps its theme in step wants that too. *@
+<CustomCssSync Surface="Surface" />
+
 @code {
     /// <summary>Which screen this page is — see <see cref="ThemeSurface"/>.</summary>
     [Parameter] public ThemeSurface Surface { get; set; } = ThemeSurface.Dashboard;

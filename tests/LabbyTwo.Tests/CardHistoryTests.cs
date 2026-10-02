@@ -239,8 +239,8 @@ public sealed class CardHistoryTests : IDisposable
             var current = Convert.ToInt32(await version.ExecuteScalarAsync());
 
             // Back to how #94 left it: note_checks with a tick in it, and the version stamp
-            // from before the move (and before card history, and user themes after it —
-            // which is a CREATE IF NOT EXISTS, so running it again is harmless).
+            // from before the move (and before card history, user themes and custom CSS history after it —
+            // which are CREATE IF NOT EXISTS, so running them again is harmless).
             var downgrade = db.CreateCommand();
             downgrade.CommandText = $"""
                 DROP TABLE checklist_ticks;
@@ -255,7 +255,7 @@ public sealed class CardHistoryTests : IDisposable
                     PRIMARY KEY (note_id, item_key)) WITHOUT ROWID;
                 INSERT INTO note_checks VALUES ('runbook', 'abc:0', 'Stopped Plex', 0, 'chris', 1700000000);
                 INSERT INTO note_checks VALUES ('runbook', 'def:0', 'Took a snapshot', 1, '', 1700000100);
-                PRAGMA user_version = {current - 3};
+                PRAGMA user_version = {current - 4};
                 """;
             await downgrade.ExecuteNonQueryAsync();
         }
