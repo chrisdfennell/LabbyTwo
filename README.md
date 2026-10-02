@@ -3117,6 +3117,7 @@ What each feature asks Docker for, and what the proxy has to allow:
 | Containers tab: watching after a safe update | `GET /containers/{name}/json` once a minute while a watch is on | `CONTAINERS=1` |
 | Containers tab: **↶** roll back, by hand or by a failed watch | `POST /images/{id}/tag`, `POST /images/create` (only if the old image was deleted), `POST /containers/{id}/stop`, `/rename`, `POST /containers/create`, `POST /networks/{name}/connect`, `POST /containers/{id}/start`, `DELETE /containers/{id}` | `CONTAINERS=1`, `IMAGES=1`, `NETWORKS=1`, `POST=1` — the same power as the raw socket |
 | Config history | `GET /containers/{id}/json` for a container with a new id, `GET /images/{id}/json` once per image | `CONTAINERS=1`; `IMAGES=1` to leave the image's defaults out |
+| Settings → Secrets in containers | `GET /containers/json?all=1` (the list the probe already fetched), then `GET /containers/{id}/json` for each container checked, four at a time — only when you press **Check now**, once a day if switched on, or once for a recreated container if notifications are on | `CONTAINERS=1` |
 | Terminal plugin (`docker exec`) | `POST /containers/{id}/exec`, `POST /exec/{id}/start` | `CONTAINERS=1`, `EXEC=1`, `POST=1` — root-equivalent too |
 
 When the proxy refuses something, LabbyTwo says which flag to set rather than "HTTP 403".
@@ -3554,6 +3555,50 @@ policy or a limit in place; the next recreate records it.
 an eight-digit keyed hash of the value (`hidden #3fa9c2e1`): enough to see that it changed,
 not what it is. The key is random per install, so the hash cannot be looked up in a table
 of common passwords.
+
+#### Secrets in containers
+
+A compose file is easy to paste into a chat or push to GitHub, and the VPN login in it
+goes with it. **Settings → Secrets in containers** looks through every container's
+environment, command and labels for passwords, tokens and keys written in plain text and
+says which ones — "3 containers have 5 plain-text secrets" — grouped by container, worst
+first:
+
+- **High** — a live credential: a VPN login (`OPENVPN_PASSWORD`, `WIREGUARD_PRIVATE_KEY`),
+  a Cloudflare or Tailscale token, a GitHub, Slack, AWS or Telegram token, a Discord or Slack
+  webhook, a JWT, a private key, or a long random value under a name like `API_KEY`,
+  `SECRET` or `TOKEN`.
+- **Medium** — password-like: anything called `*PASSWORD*`, `*PASS`, `*SECRET*`, a URL or
+  connection string with a password in it, a placeholder like `changeme` (marked as weak:
+  guessable as well as visible).
+- **Low** — a name that suggests a secret holding something that does not look like much
+  of one.
+
+Left alone on purpose: values that point at a file (`*_FILE=/run/secrets/…`, linuxserver's
+`FILE__VAR=/path`), names about a secret rather than holding one (`PASSWORD_FILE`,
+`TOKEN_TTL`, `AUTH_METHOD`), public keys and checksums official images set (`GPG_KEY`), and
+the usual settings (`PUID`, `PGID`, `TZ`, `UMASK`).
+
+**The values are never shown, logged, stored or sent** — only the container, the name, what
+it looks like and how long it is ("28 characters"), which is enough to tell two apart. When
+the same value is in two containers it says so by name ("the same value is in db
+POSTGRES_PASSWORD"), so you know how many places to change it.
+
+Each finding says what to do, briefly: move it to an `.env` file next to the compose file
+and write `${VAR}` in its place (keep `.env` out of git, `chmod 600 .env`); better, use a
+Docker secret with the image's `*_FILE` variant, or `FILE__VAR=/run/secrets/…` on a
+linuxserver image, so it is not in the container's settings at all; and for anything high,
+if the file was ever shared, make a new one and revoke the old. LabbyTwo reads what Docker
+was given, so it cannot tell a value from the compose file from one that came from `.env` —
+once you have moved one, press **Ignore** on it. Ignoring is remembered by container and
+variable name, so it survives recreates.
+
+It runs when you press **Check now**, and once a day if you switch that on (off by
+default); stopped containers are included only if you ask. Off by default too: **tell me
+when a recreated container gains a high-severity one**, which writes one line to **What
+changed** and sends one notification — "gluetun now has OPENVPN_PASSWORD in plain text" —
+the first time it appears, not on every recreate. None of it happens on a sweep. Through a
+socket proxy it needs `CONTAINERS=1`, the same as the Containers tab.
 
 ## When you delete the wrong thing
 
