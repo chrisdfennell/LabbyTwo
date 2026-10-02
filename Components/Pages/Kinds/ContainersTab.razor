@@ -117,6 +117,13 @@
             <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ToggleAll">
                 @(_collapsed.Count > 0 ? "Expand all" : "Collapse all")
             </button>
+            <div class="btn-group btn-group-sm" role="group" aria-label="View">
+                <button type="button" class="btn @(_resources ? "btn-outline-secondary" : "btn-secondary")" data-view="list"
+                        aria-pressed="@(!_resources)" @onclick="() => _resources = false">List</button>
+                <button type="button" class="btn @(_resources ? "btn-secondary" : "btn-outline-secondary")" data-view="resources"
+                        aria-pressed="@_resources" @onclick="() => _resources = true"
+                        title="Every running container's CPU, memory, disk and network, sortable, with the last hour">Resources</button>
+            </div>
         </div>
 
         @* A plain GET form, not a Blazor one: it only has to go to the Logs page with the
@@ -184,6 +191,10 @@
         else if (_rows.Count == 0)
         {
             <p class="tile-meta">No containers on @_docker.Name.</p>
+        }
+        else if (_resources)
+        {
+            <ContainerResourceTable Docker="_docker" />
         }
         else
         {
@@ -327,6 +338,9 @@
     private string _search = "";
     private string _state = "all";
     private DockerContainers.SortBy _sort = DockerContainers.SortBy.Name;
+
+    /// <summary>The "Resources" view rather than the list: the poller's readings as a sortable table.</summary>
+    private bool _resources;
     private readonly HashSet<string> _collapsed = [];
 
     private string? _busy;

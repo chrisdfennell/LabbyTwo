@@ -1,0 +1,27 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model name	: Intel(R) Celeron(R) J4125 CPU @ 2.00GHz
+cpu MHz		: 1996.800
+cpu cores	: 4
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model name	: Intel(R) Celeron(R) J4125 CPU @ 2.00GHz
+cpu MHz		: 1996.800
+cpu cores	: 4
+
+processor	: 2
+vendor_id	: GenuineIntel
+cpu family	: 6
+model name	: Intel(R) Celeron(R) J4125 CPU @ 2.00GHz
+cpu MHz		: 1996.800
+cpu cores	: 4
+
+processor	: 3
+vendor_id	: GenuineIntel
+cpu family	: 6
+model name	: Intel(R) Celeron(R) J4125 CPU @ 2.00GHz
+cpu MHz		: 1996.800
+cpu cores	: 4

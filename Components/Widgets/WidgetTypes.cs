@@ -463,6 +463,26 @@ public sealed class ContainerListWidget : IWidgetType
 }
 
 /// <summary>
+/// "Who is eating the NAS": the containers using the most CPU and the most disk on one
+/// Docker host, from the resource poller's readings in memory, with each one's last hour.
+/// </summary>
+public sealed class BusiestContainersWidget : IWidgetType
+{
+    public string Type => "busiest-containers";
+    public string DisplayName => "Busiest containers";
+    public string Icon => "🔥";
+    public string Description => "The containers using the most CPU and reading or writing the most on a Docker host, with the last hour of each.";
+    public IReadOnlyList<string> ProviderTypes => ["docker"];
+    public int DefaultWidth => 6;
+    public IReadOnlyList<FieldSpec> Fields =>
+    [
+        new("count", "How many of each", FieldKind.Number, Default: "5",
+            Help: "Containers listed under CPU and under disk. Idle ones are never listed."),
+    ];
+    public Type Component => typeof(BusiestContainersCard);
+}
+
+/// <summary>
 /// Both speed tests at once. They report the same metric names on purpose, so one card
 /// serves whichever you run — and keeps working if you switch.
 /// </summary>

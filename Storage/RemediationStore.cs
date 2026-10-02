@@ -57,7 +57,7 @@ public sealed class RemediationStore(Db db)
                     Trigger = reader.GetString(0),
                     Enabled = reader.GetInt64(1) != 0,
                     AfterMinutes = reader.GetInt32(2),
-                    Kind = reader.GetString(3) == "action" ? RemediationKind.ProviderAction : RemediationKind.RestartContainer,
+                    Kind = Remediation.ParseKind(reader.GetString(3)),
                     TargetConnectionId = reader.GetString(4),
                     Container = reader.GetString(5),
                     ActionId = reader.GetString(6),
@@ -101,7 +101,7 @@ public sealed class RemediationStore(Db db)
         cmd.Parameters.AddWithValue("$trigger", value.Trigger);
         cmd.Parameters.AddWithValue("$enabled", value.Enabled ? 1 : 0);
         cmd.Parameters.AddWithValue("$after", value.AfterMinutes);
-        cmd.Parameters.AddWithValue("$kind", value.Kind == RemediationKind.ProviderAction ? "action" : "restart");
+        cmd.Parameters.AddWithValue("$kind", Remediation.StoredKind(value.Kind));
         cmd.Parameters.AddWithValue("$target", value.TargetConnectionId);
         cmd.Parameters.AddWithValue("$container", value.Container);
         cmd.Parameters.AddWithValue("$action", value.ActionId);

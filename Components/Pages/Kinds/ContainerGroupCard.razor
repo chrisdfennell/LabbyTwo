@@ -131,7 +131,18 @@
                             {
                                 <span title="CPU — 100% is one core">@(stats.CpuPercent is { } cpu ? $"{cpu:0.0}%" : "–")</span>
                                 <span title="Memory used of its limit">@DockerContainers.Bytes(stats.MemoryUsed)@(stats.MemoryLimit > 0 ? " / " + DockerContainers.Bytes(stats.MemoryLimit) : "")</span>
-                                <span title="Network received and sent since it started">↓@DockerContainers.Bytes(stats.RxBytes) ↑@DockerContainers.Bytes(stats.TxBytes)</span>
+                                @if (stats.ReadPerSecond is not null || stats.WritePerSecond is not null)
+                                {
+                                    <span title="Disk read and written, per second" data-disk>disk @ContainerUsage.Rate(stats.ReadPerSecond ?? 0) r · @ContainerUsage.Rate(stats.WritePerSecond ?? 0) w</span>
+                                }
+                                @if (stats.RxPerSecond is { } rx && stats.TxPerSecond is { } tx)
+                                {
+                                    <span title="Network received and sent, per second (@DockerContainers.Bytes(stats.RxBytes) and @DockerContainers.Bytes(stats.TxBytes) since it started)" data-net>net ↓@ContainerUsage.Rate(rx) ↑@ContainerUsage.Rate(tx)</span>
+                                }
+                                else
+                                {
+                                    <span title="Network received and sent since it started">↓@DockerContainers.Bytes(stats.RxBytes) ↑@DockerContainers.Bytes(stats.TxBytes)</span>
+                                }
                             }
                         }
                     </div>

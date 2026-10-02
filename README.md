@@ -713,6 +713,9 @@ what to do:
 
 - **Restart a Docker container** — by name or Compose service, on one of your Docker
   connections.
+- **Pause** or **stop a Docker container** — for the one eating the NAS rather than the one
+  that fell over. `@busiest-cpu` or `@busiest-disk` as the name means whichever container is
+  busiest when it runs (see [Who is eating the NAS](#who-is-eating-the-nas)).
 - **Run one of a connection's actions** — the same buttons the Controls card and a runbook's
   `{{button: NAS / restart}}` offer, run through the same code with the same timeout.
 
@@ -1047,6 +1050,88 @@ anyone was told is never announced as over. What has been announced is kept in t
 so a restart neither repeats it nor forgets to say when it ends. The **health** page lists what
 is current as findings, and **Tell me when LabbyTwo itself is struggling** there turns each one
 on or off.
+
+### Who is eating the NAS
+
+When a NAS slows to a crawl the question is always *which container*, and the answer used to
+be `docker stats` over SSH once the box answered again. LabbyTwo now keeps that answer for
+every Docker connection: each running container's **CPU** (100% is one core), **memory** (of
+its limit, if it has one), **disk read and write** and **network** per second, and **PIDs**.
+
+- The **Busiest containers** card — the top five by CPU and the top five by disk, each with
+  its last hour.
+- The **Resources** view on a Containers tab (the button beside *Collapse all*) — every running
+  container in a sortable table, with the last hour for the ones kept in history.
+- The Containers tab's own rows now show disk and network rates beside CPU and memory.
+- `{{containers: busiest}}` in any note or card.
+
+**What it costs.** Every 60 seconds (30 to 300, or off — the Docker connection's advanced
+settings), one `GET /containers/{id}/stats?stream=false&one-shot=true` per running container,
+at most four at a time, each with the connection's timeout. *One-shot* answers at once instead
+of holding the connection for the second Docker otherwise spends taking a sample of its own;
+CPU and rates are worked out from LabbyTwo's previous reading instead, so they appear from the
+second round. The container list is the one the Docker probe already fetched. A round still
+going when the next is due is cut off, and the next one is skipped rather than piled on top.
+Nothing is read from the database to do any of it. Through a socket proxy it needs only
+`CONTAINERS=1`.
+
+**What is kept.** Every container is measured and shown, but only the **ten busiest** — by CPU
+or by disk, taken in turn — plus any you pin are written to history, as ordinary metrics of the
+Docker connection: `container_cpu:tdarr`, `container_mem_mb:tdarr`, `container_read_mbs:tdarr`,
+`container_write_mbs:tdarr`. Forty containers recorded in full would be a hundred and sixty
+series; idle ones never qualify, so a quiet night records only what is doing something. Each
+round is written once even though the Docker probe runs twice a minute. A container that was
+recorded in the last hour stays in the live readings (at zero when stopped or paused), so an
+alert on it can see it go quiet and clear. *Containers to keep a history of* and *Always keep a
+history of* are on the connection's advanced settings. They chart, alert and work in
+`{{metric}}` and `{{table}}` like anything else.
+
+Three "any container" numbers are recorded too, and the Docker connection suggests a rule for
+each — with the container named in the alert:
+
+| Suggested rule | Metric | Fires when |
+|---|---|---|
+| A container is eating the CPU | `container_cpu_max` | above 150% (one and a half cores) for 30 minutes |
+| A container is hammering the disks | `container_read_max_mbs` | reading above 50 MB/s for 30 minutes |
+| A container is nearly out of memory | `container_mem_limit_max_percent` | above 90% of its own limit for 10 minutes (only containers with a limit) |
+
+Attach self-healing to one to **pause** or **stop** the culprit: write `@busiest-cpu` or
+`@busiest-disk` as the container, and whichever is busiest when it runs is the one acted on —
+with every self-healing guardrail, so never LabbyTwo's own container, and a protected one only
+if you tick the box.
+
+### When the NAS itself is struggling
+
+Every 30 seconds LabbyTwo reads how hard the machine it runs on is working — from `/proc`,
+which inside a container still describes the whole host: the **load average** divided by the
+host's CPUs (counted from `/proc/cpuinfo`, not the container's CPU limit), **iowait**,
+**memory available** and **swap**, and Linux's **pressure-stall** figures
+(`/proc/pressure/cpu`, `memory`, `io`) where the kernel has them. With a QNAP connection, QTS's
+own CPU and memory figures count too. It is a handful of small file reads, in memory, and adds
+nothing to the database.
+
+From those it keeps a level — **OK**, **busy**, **strained**, **critical** — shown on the
+**health** page and on the phone view:
+
+| Level | Any of, held for | Clears |
+|---|---|---|
+| Busy | load above 1 per core, disks stalling tasks over 20% of the time, CPU stalls over 50%, iowait over 15%, under 10% of memory free, or QTS CPU over 90% — for 2 minutes | when every signal is under three quarters of its line for 5 minutes |
+| Strained | load above 2 per core, disk stalls over 40%, memory stalls over 10%, iowait over 30%, or swap growing 50 MB in 5 minutes with under 20% of memory free — for 5 minutes | the same |
+| Critical | load above 4 per core, disk stalls over 60%, memory stalls over 30%, or swap growing with under 5% free — for 2 minutes | the same |
+
+On reaching **strained** you get **one** notification, naming the three busiest containers
+from above — *"The NAS is struggling: load 13.4 on 4 cores, tasks stalled on the disks 49% of
+the last minute. Busiest: tdarr 193% CPU, 40 MB/s read; plex 40% CPU; sonarr 12% CPU."* —
+and tapping it opens the health page with a **Pause for 2 h** button beside each of them
+(unpaused automatically, even across a restart; *Unpause now* is there too; never LabbyTwo's
+own container or a protected one). One more when it calms down. It is held by maintenance,
+quiet hours and a mute window (as `this-host`) like LabbyTwo's own notices.
+
+To chart these, press **Keep a history of these** on the health page, which adds a **This
+host** connection: `load_per_core`, `iowait_percent`, `mem_available_percent`,
+`swap_used_percent`, `psi_io_avg60` and the rest, plus `pressure_level` (0–3). If your
+container manager mounts LXCFS, `/proc/meminfo` describes LabbyTwo's own container rather than
+the NAS; the health page notices (its total matches the container's memory limit) and says so.
 
 ### What changed, and incidents
 
@@ -2949,6 +3034,8 @@ What each feature asks Docker for, and what the proxy has to allow:
 | **Update now**, through a Watchtower's HTTP API | none — LabbyTwo calls Watchtower, not Docker | none |
 | **Update now**, one-shot Watchtower | `POST /images/create`, `POST /containers/create`, `POST /containers/{id}/start`, and then everything Watchtower does to recreate LabbyTwo | `CONTAINERS=1`, `IMAGES=1`, `POST=1` at least — the same power as the raw socket, so don't |
 | Containers tab: list, inspect, live stats | `GET /containers/json?all=1`, `GET /containers/{id}/json`, `GET /containers/{id}/stats?stream=false` | `CONTAINERS=1` |
+| Container resources: Busiest containers card, Resources view, `container_*` metrics | `GET /containers/{id}/stats?stream=false&one-shot=true` for each running container every 60 s, four at a time | `CONTAINERS=1` |
+| Health page: **Pause for 2 h**, and self-healing that pauses or stops | `POST /containers/{id}/pause`, `/unpause`, `/stop` | linuxserver: `ALLOW_PAUSE=1`, `ALLOW_UNPAUSE=1`, `ALLOW_STOP=1`; tecnativa: `CONTAINERS=1`, `POST=1` |
 | Containers tab: logs | `GET /containers/{id}/logs` (with `follow=1` while following) | `CONTAINERS=1` and, on linuxserver, `ALLOW_LOGS=1` |
 | Logs page: searching every container's logs | `GET /containers/json?all=1`, then `GET /containers/{id}/logs?since=…&until=…` for each container searched, four at a time | `CONTAINERS=1` and, on linuxserver, `ALLOW_LOGS=1` — the same as the logs panel. A refusal is shown once per host, with the flag, and the other containers there are not asked |
 | Containers tab: restart / stop | `POST /containers/{id}/restart`, `/stop` | `ALLOW_RESTARTS=1` (or `ALLOW_STOP=1` for stop) — on tecnativa also `POST=1` |

@@ -20,6 +20,42 @@
         </div>
     </div>
 }
+else if (_filter == "busiest" && _docker is not null)
+{
+    var resources = ContainerResourceSnapshots.Get(_docker.Id);
+    var busiest = resources is null ? [] : ContainerUsage.Busiest(resources.Readings, Math.Min(Limit, 10));
+    <div class="md-down md-ct" role="list" aria-label="@($"Busiest containers on {_docker.Name}")" data-busiest>
+        @if (resources is null)
+        {
+            <div class="md-down-row tile-meta" role="listitem">No resource readings for @_docker.Name yet — they arrive within a minute while resource polling is on.</div>
+        }
+        else if (resources.Error is { } why && busiest.Count == 0)
+        {
+            <div class="md-down-row tile-meta md-ct-error" role="listitem">@_docker.Name: @why</div>
+        }
+        else if (busiest.Count == 0)
+        {
+            <div class="md-down-row is-clear" role="listitem">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <span>Nothing on @_docker.Name is busy</span>
+            </div>
+        }
+        @foreach (var reading in busiest)
+        {
+            <div class="md-down-row md-ct-row" role="listitem" @key="reading.Id">
+                <span class="status-dot status-up" aria-hidden="true"></span>
+                <div class="min-w-0">
+                    <div class="md-ct-head"><strong class="text-truncate">@reading.Name</strong></div>
+                    <div class="tile-meta md-ct-meta">
+                        <span>@(reading.CpuPercent is { } cpu ? $"{cpu:0.#}% CPU" : "CPU –")</span>
+                        <span>· disk @ContainerUsage.Rate(reading.ReadPerSecond ?? 0) r / @ContainerUsage.Rate(reading.WritePerSecond ?? 0) w</span>
+                        <span>· @DockerContainers.Bytes(reading.MemoryUsed)</span>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
 else if (_docker is null || !_load.Ready || _snapshot is null)
 {
     <div class="md-down is-waiting" aria-busy="true"><span class="tile-meta">…</span></div>
@@ -122,7 +158,9 @@ else
         _docker = docker;
         _endpoint = docker.Settings.Get("endpoint", DockerSocket.EnvironmentEndpoint);
         _timeout = TimeSpan.FromSeconds(Math.Clamp(docker.Settings.GetInt("timeout", 10), 1, 120));
-        Load(refresh: false);
+        // The busiest come from memory; there is no list to fetch for them.
+        if (_filter != "busiest")
+            Load(refresh: false);
     }
 
     private void Load(bool refresh)
@@ -152,7 +190,13 @@ else
     private void OnSweep()
     {
         if (_docker is not null && _problem is null)
-            _ = InvokeAsync(() => Load(refresh: true));
+            _ = InvokeAsync(() =>
+            {
+                if (_filter == "busiest")
+                    StateHasChanged();
+                else
+                    Load(refresh: true);
+            });
     }
 
     private static string Describe(string filter) => filter switch
@@ -162,6 +206,7 @@ else
         "unhealthy" => "Unhealthy containers",
         "paused" => "Paused containers",
         "restarting" => "Restarting containers",
+        "busiest" => "Busiest containers",
         _ => "Containers",
     };
 
