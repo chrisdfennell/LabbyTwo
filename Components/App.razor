@@ -2,6 +2,7 @@
 @inject FontStore Fonts
 @inject ThemeService Themes
 @inject CustomCssService CustomStyles
+@inject BackdropService Backdrops
 
 <!DOCTYPE html>
 <html lang="en" data-theme="@_mode" data-bs-theme="@BootstrapTheme"
@@ -26,6 +27,11 @@
        replaces its contents on open pages when the theme changes. *@
     <style id="labby-theme">@((MarkupString)_theme.Css)</style>
 
+    @* The background and frosted glass, if any — empty by default. Same guarantees as the
+       theme block: built by BackdropCss from enums, clamped numbers, parsed colours and a
+       server-made picture URL, cached by BackdropService, and replaced on open pages by
+       BackdropSync. Always present, even empty, so there is a block to replace. Empty in safe mode. *@
+    <style id="labby-backdrop">@((MarkupString)_backdrop.Css)</style>
     @* The owner's own CSS (Appearance → Advanced), after the theme so it wins over both
        app.css and the theme and can use every token. Always present, even empty, so
        CustomCssSync can fill it on an open page after a save. Unlike the theme block this
@@ -99,6 +105,7 @@
     <script src="@Assets["palette.js"]"></script>
     <script src="@Assets["theme.js"]"></script>
     <script src="@Assets["custom-css.js"]"></script>
+    <script src="@Assets["backdrop.js"]"></script>
     <script src="@Assets["widget-drag.js"]"></script>
     <script src="@Assets["chart-hover.js"]"></script>
     <script src="@Assets["wall.js"]"></script>
@@ -112,6 +119,7 @@
 @code {
     private Appearance _look = Appearance.Default;
     private ActiveTheme _theme = ActiveTheme.For(BuiltInThemes.LabbyTwo);
+    private ActiveBackdrop _backdrop = ActiveBackdrop.Empty;
     private string? _mode;
     private string _face = "";
     private string _manifest = "manifest.webmanifest";
@@ -142,8 +150,8 @@
         // Every screen but the family page (which is a page of its own) gets the same CSS.
         _safe = SafeMode.IsOn(HttpContext);
         _custom = await CustomStyles.CssForAsync(ThemeSurface.Dashboard, _safe);
+        // Safe mode is for getting out of a look that broke the page, and a picture behind
+        // everything is part of the look — so it goes too, like the custom CSS.
+        _backdrop = _safe ? new ActiveBackdrop("", "") : await Backdrops.ActiveAsync();
     }
-
-    /// <summary>Present on every server render of the document, which is the only time this runs.</summary>
-    [CascadingParameter] private HttpContext? HttpContext { get; set; }
 }

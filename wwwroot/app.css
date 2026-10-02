@@ -2440,6 +2440,14 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     to { opacity: 1; transform: none; }
 }
 
+/* The same arrival without the fade, used when cards are frosted glass (see BackdropCss).
+   A translucent ancestor stops backdrop-filter at itself, so during a fade the glass would
+   show nothing behind it and then snap to the blurred background when the fade ended. */
+@keyframes wall-in-glass {
+    from { transform: translateY(6px); }
+    to { transform: none; }
+}
+
 .wall-progress {
     position: fixed;
     left: 0;
@@ -3141,3 +3149,49 @@ a.md-diagram-node:focus { outline: none; }
     .theme-token-text { grid-column: 1 / -1; }
     .theme-editor-side { position: static; }
 }
+
+/* ---------- backgrounds ----------
+   The live preview on the Appearance page. The layer inside is given the very declarations
+   the page's background gets (BackdropCss.LayerDeclarations), inline, so the preview is the
+   background rather than an approximation of it; the sample card gets the glass ones. */
+.backdrop-preview {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    min-height: 12rem;
+    padding: 1.25rem;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius);
+    background: var(--ink);
+    display: flex;
+    flex-direction: column;
+    gap: .75rem;
+    justify-content: center;
+}
+.backdrop-preview-layer {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+}
+.backdrop-preview .page-head h1 { font-size: 1.15rem; }
+.backdrop-preview .widget { max-width: 18rem; }
+
+.backdrop-swatches { display: flex; flex-wrap: wrap; gap: .5rem; }
+.backdrop-swatch {
+    width: 4.5rem;
+    height: 2.75rem;
+    border: 2px solid var(--edge);
+    border-radius: var(--radius-inner);
+    color: var(--text);
+    font-size: .7rem;
+    font-weight: 600;
+    display: flex;
+    align-items: flex-end;
+    padding: .15rem .3rem;
+}
+.backdrop-swatch.is-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+.backdrop-stop { display: flex; align-items: center; gap: .5rem; margin-bottom: .4rem; }
+.backdrop-stop .form-select { max-width: 12rem; }
+.backdrop-stop .form-control-color { width: 2.5rem; padding: .15rem; }

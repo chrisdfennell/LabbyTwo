@@ -1,0 +1,51 @@
+@implements IDisposable
+@inject BackdropService Backdrops
+@inject IJSRuntime JS
+
+@* Draws nothing. Keeps an open page's background in step with the settings — the same job
+   ThemeSync does for colours, and rendered by it, so every screen that follows the theme
+   follows the background too. Subscribes only once interactive: the page as rendered
+   already has the current block in its head. *@
+
+@code {
+    private string? _shown;
+    private bool _subscribed;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _shown = (await Backdrops.ActiveAsync()).Hash;
+        Backdrops.Changed += OnChanged;
+        _subscribed = true;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(PushAsync);
+
+    private async Task PushAsync()
+    {
+        try
+        {
+            var now = await Backdrops.ActiveAsync();
+            if (now.Hash == _shown)
+                return;
+
+            _shown = now.Hash;
+            await JS.InvokeVoidAsync("labbyBackdrop.apply", now.Css);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The tab closed between the change and the push.
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_subscribed)
+            Backdrops.Changed -= OnChanged;
+    }
+}

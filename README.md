@@ -2359,7 +2359,7 @@ On an install with a login, only the signed-in owner can change it.
 
 **If it goes wrong:** add `?safe=1` to any address — for example
 `http://labby.local:8080/?safe=1` — or use the **Safe mode** link on the sign-in page. Custom CSS
-is then skipped in that browser until it is closed (or until `?safe=0`), with a banner saying
+(and any background picture or gradient) is then skipped in that browser until it is closed (or until `?safe=0`), with a banner saying
 so, while every other screen keeps it. There is also a big **Custom CSS is on** switch that
 turns it off everywhere without losing it. The family status page leaves custom CSS out unless
 you tick **Also on the family page**.
@@ -2425,6 +2425,44 @@ Three examples:
 /* Rounder cards on the wall only */
 .wall-stage .widget { border-radius: 1.25rem; }
 ```
+
+#### Backgrounds and frosted glass
+
+**Settings → Appearance → Background** puts something behind the cards: **a colour** (one of
+the theme's own, so it follows the theme and both its ends, or your own), **a gradient** of
+two or three colours at any angle — the presets (Depth, Dusk, Accent, Aurora, Sunset) are
+made of the theme's colours, so they suit whichever theme is on — or **a picture**. Every
+change applies straight away to every open screen, with a preview beside the settings.
+
+- **A picture** is a JPEG, PNG or WebP up to 10 MB and 40 megapixels. What it is comes from
+  the file's own bytes, not its name; SVG is refused (an SVG can carry script) and so is GIF.
+  Where it was taken, the camera and any comments are stripped when it is stored — the colour
+  profile and the way up are kept. It is served by LabbyTwo from your data volume, never
+  fetched from the internet, and cached by the browser for a year (the address changes when
+  the picture does). Choose how it fits (fill the screen, show all of it, or tile), which part
+  stays in view, and a blur.
+- **Dim** washes any background towards the page colour (or darkens it, towards the dialog
+  shade), which is the quickest way to make text over a photo readable again.
+- **Show it on** the dashboard (and settings pages), wall mode and the phone view
+  separately, and optionally **only with one theme**, so a photo chosen for a dark theme goes
+  away when you switch to a light one.
+- **Frosted glass cards** let the background show through the cards, blurred, with how
+  solid, how frosted and how colourful as sliders. Browsers that cannot blur, and anyone whose
+  system asks to reduce transparency, get ordinary solid cards. The phone view keeps solid
+  cards unless you turn glass on there too — blurring behind every card is the one thing here
+  that can make an older phone stutter.
+
+Below the preview, a readability estimate uses the same WCAG arithmetic as the theme editor:
+it measures headings and secondary text against the dimmed background, and text on a glass
+card, against the *worst* part of the background (a picture is sampled as a grid of colours),
+in each end of the theme, and warns when any of it falls below 4.5:1.
+
+The background is a fixed layer behind the page, so it never moves anything as it loads and
+costs one draw however long the wall runs. Like the theme, its CSS is built once per change
+from fixed property names, clamped numbers and parsed colours — nothing typed reaches it.
+
+The picture lives in the `backdrops` folder beside the database, like an uploaded font. A
+copy of the data volume includes it; the database download on the Settings page does not.
 
 ### Wall mode
 

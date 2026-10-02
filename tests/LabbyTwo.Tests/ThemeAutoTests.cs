@@ -65,6 +65,11 @@ public sealed class ThemeAutoTests : IAsyncDisposable
             services.AddSingleton<ThemeStore>();
             services.AddSingleton<ThemeService>();
             services.AddSingleton<ThemeScheduler>();
+            // ThemeSync also renders the custom-CSS and background followers.
+            services.AddSingleton<CustomCssStore>();
+            services.AddSingleton<CustomCssService>();
+            services.AddSingleton<BackdropImageStore>();
+            services.AddSingleton<BackdropService>();
             services.AddSingleton<Offload>();
             services.AddSingleton<Microsoft.JSInterop.IJSRuntime>(_script);
         });
