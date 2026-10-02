@@ -161,6 +161,11 @@ builder.Services.AddSingleton<SafeUpdates>();
 // container lists it already compares; only a container with a new id is inspected.
 builder.Services.AddSingleton<ContainerConfigStore>();
 builder.Services.AddSingleton<ContainerConfigHistory>();
+// Plain-text secrets in containers' settings: when asked, daily if switched on (the job is
+// an IBackgroundJob and is discovered), and once after a recreate if switched on — which is
+// why it is hosted: it listens to the change feed for "recreated".
+builder.Services.AddSingleton<SecretHygiene>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SecretHygiene>());
 builder.Services.AddSingleton<DashboardImportService>();
 
 // Copies the nightly backup off this machine. Not discovered: the backup job calls it.
