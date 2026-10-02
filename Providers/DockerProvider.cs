@@ -24,6 +24,17 @@ public sealed class DockerProvider : IConnectionProvider
                   "In Docker, either mount the socket (-v /var/run/docker.sock:/var/run/docker.sock) or, safer, run a socket " +
                   "proxy with CONTAINERS=1 (and ALLOW_RESTARTS=1 for the restart buttons) and point this at it."),
         new("timeout", "Timeout (seconds)", FieldKind.Number, Default: "10") { Advanced = true },
+        new("stats_seconds", "Container resources every (seconds)", FieldKind.Number, Default: "60",
+            Help: "How often each running container's CPU, memory, disk and network are read — one quick request per " +
+                  "container, four at a time. 30 to 300; 0 turns it off. Through a socket proxy this needs CONTAINERS=1.")
+        { Advanced = true },
+        new("stats_top", "Containers to keep a history of", FieldKind.Number, Default: "10",
+            Help: "Every running container is shown live, but only this many of the busiest (by CPU or by disk) are " +
+                  "written to history, so forty containers do not become a hundred and sixty series. Idle ones never count. Up to 25.")
+        { Advanced = true },
+        new("stats_pinned", "Always keep a history of", FieldKind.Text, "tdarr, plex",
+            Help: "Containers recorded whatever they are doing, on top of the busiest. Names, separated by commas.")
+        { Advanced = true },
     ];
 
     /// <param name="Id">The full container id. Carried so a row can tell whether it is
@@ -77,13 +88,72 @@ public sealed class DockerProvider : IConnectionProvider
         new("container_stopped", "Containers stopped"),
 
         new("latency_ms", "Response time", " ms"),
+
+        // The measured metrics behind each container's own series (container_cpu:tdarr…),
+        // which inherit these units through VolumeMetric's naming.
+        new(ContainerUsage.CpuMetric, "Container CPU", "%", 1),
+        new(ContainerUsage.MemoryMetric, "Container memory", " MiB"),
+        new(ContainerUsage.ReadMetric, "Container disk reads", " MB/s", 1),
+        new(ContainerUsage.WriteMetric, "Container disk writes", " MB/s", 1),
+        new(ContainerUsage.BusiestCpuMetric, "Busiest container's CPU", "%", 1),
+        new(ContainerUsage.BusiestReadMetric, "Busiest container's disk reads", " MB/s", 1),
+        new(ContainerUsage.FullestMemoryMetric, "Container closest to its memory limit", "%", 1),
     ];
+
+    /// <summary>
+    /// The declared metrics plus one spec per container currently in the live readings, so
+    /// pickers and alert messages say "tdarr: CPU" rather than a key, and the three "busiest"
+    /// numbers name the container they are about right now — "Busiest container's CPU (tdarr)"
+    /// is what an alert on any container should say when it fires.
+    /// </summary>
+    public IReadOnlyList<MetricSpec> MetricsFor(Connection connection)
+    {
+        if (ContainerResourceSnapshots.Get(connection.Id) is not { } snapshot || !snapshot.IsFresh(DateTimeOffset.UtcNow))
+            return Metrics;
+
+        var specs = Metrics.ToDictionary(m => m.Key, StringComparer.OrdinalIgnoreCase);
+        void Name(string key, ContainerReading? who)
+        {
+            if (who is not null && specs.TryGetValue(key, out var spec))
+                specs[key] = spec with { Label = $"{spec.Label} ({who.Name})" };
+        }
+        Name(ContainerUsage.BusiestCpuMetric, ContainerUsage.BusiestByCpu(snapshot.Readings));
+        Name(ContainerUsage.BusiestReadMetric, snapshot.Readings.Where(r => r.IsRunning && r.ReadPerSecond is not null)
+            .OrderByDescending(r => r.ReadPerSecond).FirstOrDefault());
+        Name(ContainerUsage.FullestMemoryMetric, ContainerUsage.FullestMemory(snapshot.Readings, snapshot.HostMemory));
+
+        var words = new Dictionary<string, string>
+        {
+            [ContainerUsage.CpuMetric] = "CPU",
+            [ContainerUsage.MemoryMetric] = "memory",
+            [ContainerUsage.ReadMetric] = "disk reads",
+            [ContainerUsage.WriteMetric] = "disk writes",
+        };
+        foreach (var key in snapshot.Metrics.Keys)
+        {
+            if (!ContainerUsage.TryParse(key, out var metric, out var slug) || !specs.TryGetValue(metric, out var measured))
+                continue;
+            var name = snapshot.Readings.FirstOrDefault(r => VolumeMetric.Slug(r.Name) == slug)?.Name ?? slug;
+            specs[key] = measured with { Key = key, Label = $"{name}: {words[metric]}" };
+        }
+        return [.. specs.Values];
+    }
 
     public IReadOnlyList<SuggestedRule> SuggestedRules =>
     [
         new("Something has stopped", "container_stopped", Comparison.Above, 0, ForMinutes: 5,
             Why: "A container that exited and did not come back. Five minutes' grace, so an " +
                  "update recreating one does not count."),
+        new("A container is eating the CPU", ContainerUsage.BusiestCpuMetric, Comparison.Above, 150, ClearThreshold: 100, ForMinutes: 30,
+            Why: "One container using more than one and a half cores for half an hour — a transcoder or an indexer " +
+                 "that will starve everything else on a small NAS. The alert names the container. Pair it with " +
+                 "self-healing to pause “@busiest-cpu” if you want it dealt with."),
+        new("A container is hammering the disks", ContainerUsage.BusiestReadMetric, Comparison.Above, 50, ClearThreshold: 30, ForMinutes: 30,
+            Why: "One container reading more than 50 MB/s for half an hour. On spinning disks that is enough to make " +
+                 "file shares stall. Lower it for a slower NAS."),
+        new("A container is nearly out of memory", ContainerUsage.FullestMemoryMetric, Comparison.Above, 90, ClearThreshold: 85, ForMinutes: 10,
+            Why: "A container above 90% of its own memory limit for ten minutes is about to be killed by the kernel. " +
+                 "Only containers with a limit set count."),
     ];
 
     public async Task<ProbeResult> ProbeAsync(Connection connection, CancellationToken ct)
@@ -100,21 +170,44 @@ public sealed class DockerProvider : IConnectionProvider
             DockerContainers.Remember(endpoint, containers);
 
             var running = containers.Count(c => c.State.Equals("running", StringComparison.OrdinalIgnoreCase));
-            return ProbeResult.Up(stopwatch.Elapsed,
-                $"{running} of {containers.Count} containers running",
-                new Dictionary<string, double>
-                {
-                    ["latency_ms"] = stopwatch.Elapsed.TotalMilliseconds,
-                    ["container_count"] = running,
-                    ["container_total"] = containers.Count,
-                    ["container_stopped"] = containers.Count - running,
-                });
+            var metrics = new Dictionary<string, double>
+            {
+                ["latency_ms"] = stopwatch.Elapsed.TotalMilliseconds,
+                ["container_count"] = running,
+                ["container_total"] = containers.Count,
+                ["container_stopped"] = containers.Count - running,
+            };
+            var notRecorded = WithContainerResources(connection, metrics, DateTimeOffset.UtcNow);
+            return ProbeResult.Up(stopwatch.Elapsed, $"{running} of {containers.Count} containers running", metrics)
+                with { NotRecorded = notRecorded };
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             return ProbeResult.Down(stopwatch.Elapsed, Explain(connection, ex));
         }
+    }
+
+    /// <summary>
+    /// Adds the resource poller's last round to a probe's metrics — memory only, no request —
+    /// and says which of them not to write. The first probe after a round records the round's
+    /// chosen containers and the three "busiest" numbers; every later probe before the next
+    /// round passes the same values on as live state only, as does every lingering
+    /// container that is no longer among the busiest. A round too old to be current is left
+    /// out altogether, so a poller that stopped cannot keep an alert firing.
+    /// </summary>
+    /// <returns>The keys not to record, or null when everything is to be recorded.</returns>
+    public static IReadOnlySet<string>? WithContainerResources(Connection connection, Dictionary<string, double> metrics, DateTimeOffset now)
+    {
+        if (ContainerResourceSnapshots.Get(connection.Id) is not { Error: null } snapshot || !snapshot.IsFresh(now))
+            return null;
+
+        foreach (var (key, value) in snapshot.Metrics)
+            metrics[key] = value;
+
+        var fresh = ContainerResourceSnapshots.TakeRound(connection.Id, snapshot.Round);
+        var skip = snapshot.Metrics.Keys.Where(k => !fresh || !snapshot.RecordedKeys.Contains(k)).ToHashSet(StringComparer.Ordinal);
+        return skip.Count == 0 ? null : skip;
     }
 
     public async Task<IReadOnlyList<ContainerInfo>> ContainersAsync(Connection connection, CancellationToken ct)

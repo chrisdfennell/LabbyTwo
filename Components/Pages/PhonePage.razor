@@ -53,6 +53,17 @@
         <strong class="phone-headline">@_model.Headline</strong>
     </section>
 
+    @* How hard the NAS itself is working, from the pressure watch's last pass — static memory,
+       read as the page draws, and redrawn with every sweep like the rest of this view. *@
+    @if (HostPressureWatch.Current is { Level: > PressureLevel.Ok } pressure)
+    {
+        <section class="phone-banner @(pressure.Level >= PressureLevel.Strained ? "is-blind" : "is-quiet")" role="status" data-host-pressure>
+            <strong>The host is @PressureTracker.Word(pressure.Level).ToLowerInvariant()</strong>
+            <span class="phone-why">@(pressure.Reasons.Count > 0 ? string.Join(", ", pressure.Reasons.Take(2)) : "Working hard.")@(pressure.Busiest.Count > 0 ? $" Busiest: {ContainerUsage.Describe(pressure.Busiest[0].Reading)}." : "")</span>
+            <a class="btn btn-outline-secondary phone-btn" href="settings/health#host-pressure">See what's busy</a>
+        </section>
+    }
+
     @if (_blind is { Impaired: true } blind)
     {
         <section class="phone-banner is-blind" role="status">

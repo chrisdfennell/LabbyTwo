@@ -1,0 +1,239 @@
+@implements IDisposable
+@inject HostPressureWatch Pressure
+@inject ConfigStore Config
+@inject Offload Offload
+
+@* How hard the machine LabbyTwo runs on is working, for the health page: the level, why,
+   the figures behind it, the busiest containers with a button to pause each for two hours,
+   and the pauses waiting to be undone. Everything shown is the watch's last pass, in memory;
+   the buttons are the only things that do anything, and they go through the same guardrails
+   as self-healing. *@
+
+<div class="widget mb-3" id="host-pressure" data-host-pressure>
+    <div class="widget-head">
+        <h2 class="widget-title">This host</h2>
+        @if (_report is { } head && head.Signals.Available)
+        {
+            <span class="badge @Badge(head.Level)" data-level="@head.Level.ToString().ToLowerInvariant()">@PressureTracker.Word(head.Level)</span>
+        }
+    </div>
+    <div class="widget-body">
+        @if (_report is null)
+        {
+            <p class="tile-meta mb-0">Not read yet — the first reading is taken within thirty seconds of starting.</p>
+        }
+        else if (!_report.Signals.Available)
+        {
+            <p class="tile-meta mb-0">
+                There is no /proc to read here, so LabbyTwo cannot tell how hard this machine is working. This needs
+                LabbyTwo running on Linux (in Docker on a NAS is the usual case).
+            </p>
+        }
+        else
+        {
+            var s = _report.Signals;
+            <p class="mb-2" data-pressure-line>
+                @if (_report.Level == PressureLevel.Ok)
+                {
+                    @("Coping comfortably.")
+                }
+                else
+                {
+                    @(_report.Reasons.Count > 0 ? char.ToUpperInvariant(_report.Line[0]) + _report.Line[1..] + "." : PressureTracker.Word(_report.Level) + ".")
+                    @if (_report.Since is { } since)
+                    {
+                        <span class="tile-meta"> For @Ago.Duration(DateTimeOffset.Now - since).</span>
+                    }
+                }
+            </p>
+
+            <dl class="row mb-2 small">
+                <dt class="col-6 tile-meta">Load</dt>
+                <dd class="col-6">
+                    @if (s.Load1 is { } load)
+                    {
+                        @($"{load:0.##} / {s.Load5:0.##} / {s.Load15:0.##} on {s.CpuCount} CPU{(s.CpuCount == 1 ? "" : "s")}")
+                        <span class="tile-meta" title="@($"CPU count from {s.CpuCountFrom}")"> · @($"{s.LoadPerCore:0.##}") per core</span>
+                    }
+                    else
+                    {
+                        <span class="tile-meta">not readable</span>
+                    }
+                </dd>
+                <dt class="col-6 tile-meta">Waiting on disks</dt>
+                <dd class="col-6">@(s.IowaitPercent is { } iowait ? $"{iowait:0.#}% of CPU time" : "after the next reading")</dd>
+                <dt class="col-6 tile-meta">Memory available</dt>
+                <dd class="col-6">
+                    @(s.MemAvailablePercent is { } free ? $"{free:0}%" : "–")
+                    @if (s.MemTotalKb is { } total)
+                    {
+                        <span class="tile-meta"> of @DockerContainers.Bytes(total * 1024.0)</span>
+                    }
+                    @if (s.MemoryIsContainers)
+                    {
+                        <div class="tile-meta">These memory figures are LabbyTwo's own container's (LXCFS), not the whole machine's.</div>
+                    }
+                </dd>
+                <dt class="col-6 tile-meta">Swap used</dt>
+                <dd class="col-6">
+                    @(s.SwapTotalKb is 0 ? "no swap" : s.SwapUsedPercent is { } swap ? $"{swap:0}%" : "–")
+                    @if (_report.SwapGrowthKb is { } growth && Math.Abs(growth) >= 1024)
+                    {
+                        <span class="tile-meta"> · @(growth > 0 ? "+" : "")@((growth / 1024).ToString("0")) MB in 5 min</span>
+                    }
+                </dd>
+                <dt class="col-6 tile-meta" title="Linux pressure-stall information: the share of the last minute in which tasks were waiting for this.">Stalled (last minute)</dt>
+                <dd class="col-6">
+                    @if (s.Io is null && s.Cpu is null && s.Memory is null)
+                    {
+                        <span class="tile-meta">this kernel does not report pressure stalls</span>
+                    }
+                    else
+                    {
+                        @($"disks {Psi(s.Io)} · memory {Psi(s.Memory)} · CPU {Psi(s.Cpu)}")
+                    }
+                </dd>
+                @if (_report.Qnap is { } qnap)
+                {
+                    <dt class="col-6 tile-meta">@qnap.Name says</dt>
+                    <dd class="col-6">CPU @(qnap.Cpu is { } c ? $"{c:0}%" : "–") · memory @(qnap.Ram is { } r ? $"{r:0}%" : "–")</dd>
+                }
+            </dl>
+
+            <div class="tile-meta mb-1">Busiest containers</div>
+            @if (_report.Busiest.Count == 0)
+            {
+                <p class="small tile-meta mb-2">
+                    @(ContainerResourceSnapshots.All.Count == 0
+                        ? "No container readings — add a Docker connection with resource polling on to see who is busy."
+                        : "Nothing is busy.")
+                </p>
+            }
+            else
+            {
+                <ul class="list-unstyled small mb-2">
+                    @foreach (var (host, reading) in _report.Busiest)
+                    {
+                        var suggested = SuggestPause is { Length: > 0 } wanted && wanted.Equals(reading.Name, StringComparison.OrdinalIgnoreCase);
+                        <li class="d-flex align-items-center gap-2 mb-1" data-busy="@reading.Name">
+                            <span class="flex-grow-1">@ContainerUsage.Describe(reading)</span>
+                            <button type="button" class="btn btn-sm @(suggested ? "btn-warning" : "btn-outline-secondary")"
+                                    data-action="pause" disabled="@(_busy is not null)"
+                                    @onclick="() => PauseAsync(host.ConnectionId, reading.Name)">
+                                @(_busy == reading.Name ? "Pausing…" : $"Pause for {HostPressureWatch.PauseFor.TotalHours:0} h")
+                            </button>
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (_result is { } result)
+            {
+                <div class="small @(result.Ok ? "text-success" : "text-danger") mb-2" role="status" data-pause-result>@result.Message</div>
+            }
+
+            @if (Pressure.Unpauses is { Count: > 0 } pauses)
+            {
+                <div class="tile-meta mb-1">Paused from here</div>
+                <ul class="list-unstyled small mb-2">
+                    @foreach (var pause in pauses)
+                    {
+                        <li class="d-flex align-items-center gap-2 mb-1" data-paused="@pause.Container">
+                            <span class="flex-grow-1">@pause.Container — unpaused at @pause.Until.ToLocalTime().ToString("HH:mm")</span>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_busy is not null)"
+                                    @onclick="() => UnpauseAsync(pause.DockerConnectionId, pause.Container)">Unpause now</button>
+                        </li>
+                    }
+                </ul>
+            }
+
+            <p class="tile-meta small mb-0">
+                Read from /proc every 30 seconds, in memory. You are told once when it has been strained for five
+                minutes (load above 2 per core, or the disks stalling tasks over 40% of the time), and once when it
+                calms down — not during maintenance, quiet hours or a mute window.
+                @if (!_hasHostConnection)
+                {
+                    <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="add-host" @onclick="AddHostAsync">
+                        Keep a history of these
+                    </button>
+                    <text>(adds a “This host” connection, so they can be charted and alerted on).</text>
+                }
+            </p>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>A container the notification suggested pausing: its button is highlighted.</summary>
+    [Parameter] public string? SuggestPause { get; set; }
+
+    private HostPressureReport? _report;
+    private string? _busy;
+    private ActionResult? _result;
+    private bool _hasHostConnection = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _report = Pressure.Report;
+        Pressure.Changed += OnChanged;
+        // ConfigStore's cached list; on the pool in case this is the first read after a restart.
+        var connections = await Offload.Run(ct => Config.ConnectionsAsync(ct));
+        _hasHostConnection = connections.Any(c => c.Provider == "host");
+    }
+
+    private void OnChanged() => _ = InvokeAsync(() =>
+    {
+        _report = Pressure.Report;
+        StateHasChanged();
+    });
+
+    private async Task PauseAsync(string dockerConnectionId, string container)
+    {
+        _busy = container;
+        _result = null;
+        try
+        {
+            _result = await Task.Run(() => Pressure.PauseAsync(dockerConnectionId, container, DateTimeOffset.Now, CancellationToken.None));
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private async Task UnpauseAsync(string dockerConnectionId, string container)
+    {
+        _busy = container;
+        try
+        {
+            _result = await Task.Run(() => Pressure.UnpauseAsync(dockerConnectionId, container, DateTimeOffset.Now, CancellationToken.None));
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private async Task AddHostAsync()
+    {
+        await Offload.Run(async ct =>
+        {
+            await Config.SaveConnectionAsync(new Connection { Provider = "host", Name = "This host", Icon = "🖥️" }, ct);
+            return true;
+        });
+        _hasHostConnection = true;
+        _result = ActionResult.Done("Added “This host”. Its readings are kept from the next sweep.");
+    }
+
+    private static string Psi(Psi? psi) => psi is null ? "–" : $"{psi.SomeAvg60:0}%";
+
+    private static string Badge(PressureLevel level) => level switch
+    {
+        PressureLevel.Critical => "text-bg-danger",
+        PressureLevel.Strained => "text-bg-warning",
+        PressureLevel.Busy => "text-bg-info",
+        _ => "text-bg-success",
+    };
+
+    public void Dispose() => Pressure.Changed -= OnChanged;
+}

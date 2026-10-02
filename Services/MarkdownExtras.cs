@@ -283,7 +283,12 @@ public static class MarkdownLists
     public static readonly TimeSpan RenewalWindow = TimeSpan.FromDays(3);
 
     /// <summary>The filters <c>{{containers: …}}</c> takes, the same words the Containers tab's filter uses.</summary>
-    public static readonly IReadOnlyList<string> ContainerStates = ["all", "running", "stopped", "unhealthy", "paused", "restarting"];
+    /// <remarks>
+    /// "busiest" is not a state but a ranking — the containers using the most CPU and disk,
+    /// from the resource poller's last round in memory — and is drawn from those readings
+    /// rather than the container list.
+    /// </remarks>
+    public static readonly IReadOnlyList<string> ContainerStates = ["all", "running", "stopped", "unhealthy", "paused", "restarting", "busiest"];
 
     /// <summary>
     /// Connections named in an <c>only="NAS, Plex"</c> option, and a note naming any that
