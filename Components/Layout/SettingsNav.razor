@@ -1,0 +1,126 @@
+@implements IDisposable
+@inject NavigationManager Nav
+
+@* The settings sections and the search over them. Drawn from SettingsMap alone — nothing here
+   reads the database, so it costs a settings page nothing to have it. *@
+
+<nav class="settings-nav @(_current is null && IsHub ? "is-hub" : null)" aria-labelledby="settings-nav-title">
+    <h2 id="settings-nav-title" class="visually-hidden">Settings sections</h2>
+
+    <div class="settings-search" role="search">
+        <label for="settings-search" class="visually-hidden">Search settings</label>
+        <input id="settings-search" type="search" class="form-control form-control-sm"
+               placeholder="Search settings…" autocomplete="off"
+               aria-controls="settings-search-results"
+               @bind="_query" @bind:event="oninput" @onkeydown="OnKeyDown" />
+    </div>
+
+    @* Said to a screen reader as the list changes; nothing to see. *@
+    <p class="visually-hidden" aria-live="polite">@Announcement</p>
+
+    @if (Searching)
+    {
+        var hits = Hits;
+        if (hits.Count == 0)
+        {
+            <p class="settings-nav-empty">Nothing matches “@_query”.</p>
+        }
+        else
+        {
+            <ul id="settings-search-results" class="settings-nav-list">
+                @foreach (var hit in hits)
+                {
+                    <li @key="hit.Url + hit.Title">
+                        <a class="settings-nav-link" href="@hit.Url">
+                            <span class="settings-nav-icon" aria-hidden="true">@hit.Icon</span>
+                            <span class="settings-nav-text">
+                                @hit.Title
+                                @if (hit.Section is { Length: > 0 } where)
+                                {
+                                    <span class="settings-nav-where">@where</span>
+                                }
+                            </span>
+                        </a>
+                    </li>
+                }
+            </ul>
+        }
+    }
+    else
+    {
+        <ul class="settings-nav-list">
+            <li>
+                <NavLink class="settings-nav-link" href="@SettingsMap.HubRoute" Match="NavLinkMatch.All">
+                    <span class="settings-nav-icon" aria-hidden="true">☰</span>
+                    <span class="settings-nav-text">All settings</span>
+                </NavLink>
+            </li>
+            @foreach (var section in SettingsMap.Sections)
+            {
+                <li class="@(section == _current ? "is-current" : null)" @key="section.Key">
+                    <NavLink class="settings-nav-link" href="@section.Route" Match="NavLinkMatch.All">
+                        <span class="settings-nav-icon" aria-hidden="true">@section.Icon</span>
+                        <span class="settings-nav-text">@section.Title</span>
+                    </NavLink>
+                    @if (section.Pages.Count > 0)
+                    {
+                        <ul class="settings-nav-pages">
+                            @foreach (var sub in section.Pages)
+                            {
+                                <li @key="sub.Route">
+                                    <NavLink class="settings-nav-link" href="@sub.Route" Match="NavLinkMatch.All">
+                                        <span class="settings-nav-icon" aria-hidden="true">@sub.Icon</span>
+                                        <span class="settings-nav-text">@sub.Title</span>
+                                    </NavLink>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </li>
+            }
+        </ul>
+    }
+</nav>
+
+@code {
+    private string _query = "";
+    private SettingsSection? _current;
+
+    private bool Searching => _query.Trim().Length > 0;
+
+    private IReadOnlyList<SettingsHit> Hits => SettingsMap.Search(_query);
+
+    private bool IsHub => SettingsMap.Normalise(Nav.ToBaseRelativePath(Nav.Uri)) == SettingsMap.HubRoute;
+
+    private string Announcement => !Searching ? ""
+        : Hits.Count switch { 0 => "No settings match.", 1 => "1 setting matches.", var n => $"{n} settings match." };
+
+    protected override void OnInitialized()
+    {
+        _current = SettingsMap.SectionFor(Nav.ToBaseRelativePath(Nav.Uri));
+        Nav.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => _ = InvokeAsync(() =>
+    {
+        // Somewhere new: the search has done its job.
+        _query = "";
+        _current = SettingsMap.SectionFor(Nav.ToBaseRelativePath(e.Location));
+        StateHasChanged();
+    });
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        switch (args.Key)
+        {
+            case "Escape":
+                _query = "";
+                break;
+            case "Enter" when Searching && Hits.Count > 0:
+                Nav.NavigateTo(Hits[0].Url);
+                break;
+        }
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

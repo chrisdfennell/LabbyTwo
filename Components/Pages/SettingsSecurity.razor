@@ -1,0 +1,34 @@
+@page "/settings/security"
+@layout SettingsLayout
+@rendermode InteractiveServer
+@inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
+
+<SettingsSectionHead Key="security" />
+
+<div class="row g-3">
+    <div class="col-12" id="secrets">
+        <SecretHygieneSettings />
+    </div>
+
+    <div class="col-12">
+        @* Read only: the login is set where LabbyTwo is installed, not from a page anybody who
+           can reach it could change. *@
+        <div class="widget" id="login">
+            <div class="widget-head"><h2 class="widget-title">Login</h2></div>
+            <div class="widget-body">
+                @if (Options.Value.Auth.Enabled)
+                {
+                    <p class="mb-1"><span class="text-success">On</span>, as <strong>@Options.Value.Auth.Username</strong>.</p>
+                }
+                else
+                {
+                    <p class="mb-1"><span class="text-warning">Off</span> — anyone who can reach this page can use it.</p>
+                }
+                <p class="tile-meta mb-0">
+                    Set where LabbyTwo is installed: <code>LABBY_AUTH_PASSWORD</code> (and optionally
+                    <code>LABBY_AUTH_USERNAME</code>) in the compose file's environment, then restart.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>

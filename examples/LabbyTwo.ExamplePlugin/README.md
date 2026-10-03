@@ -15,7 +15,7 @@ docker compose restart labbytwo
 Running LabbyTwo with `dotnet run` instead? The folder is `data/plugins` next to the
 database.
 
-Then: **Settings → Plugins** should list it, and **Connections → Add** should offer
+Then: **Settings → System → Plugins** should list it, and **Connections → Add** should offer
 *Disk space (example plugin)*. Point one at `/app/data` and it starts charting.
 
 ## What to notice

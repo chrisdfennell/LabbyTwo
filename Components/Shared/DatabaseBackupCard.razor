@@ -1,0 +1,28 @@
+@* The "Backup" card from the old single Settings page, moved to Settings → Data & storage
+   unchanged. *@
+
+<div class="widget h-100" id="backup">
+    <div class="widget-head"><h2 class="widget-title">Backup</h2></div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            The database holds every connection, tab, widget, note and metric. Download a
+            consistent copy without stopping the app.
+        </p>
+        <a class="btn btn-sm btn-outline-secondary" href="api/backup">Download database</a>
+
+        <hr class="my-3" />
+
+        <p class="tile-meta">
+            Or export just the configuration as JSON — useful for moving to another machine,
+            keeping a copy in version control, or sharing a dashboard with somebody else.
+        </p>
+        <div class="d-flex gap-2 flex-wrap">
+            <a class="btn btn-sm btn-outline-secondary" href="api/export">Export (no secrets)</a>
+            <a class="btn btn-sm btn-outline-danger" href="api/export?secrets=true">Export with secrets</a>
+        </div>
+        <div class="form-text">
+            “With secrets” writes every stored password and API key into the file in plain text.
+            Only use it for a backup you keep somewhere safe.
+        </div>
+    </div>
+</div>

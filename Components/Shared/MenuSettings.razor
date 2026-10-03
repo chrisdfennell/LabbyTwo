@@ -1,0 +1,65 @@
+@inject AppSettingsStore AppSettings
+
+@* Which of the sidebar's pages are shown. A lab with no UPS has no use for Power, and every
+   link to a page you never open is one more thing to read past on the way to one you do.
+   Hiding only takes the link out of the menu: the page still works at its address, and the
+   command palette and the settings search still find it. Stored with the rest of the app's
+   settings, so every browser gets the same menu. *@
+
+<div class="widget" id="menu">
+    <div class="widget-head"><h2 class="widget-title">Menu</h2></div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            Untick a page you do not use to take it out of the sidebar. It stays where it is — the
+            command palette (Ctrl+K) and the settings search still find it. Your tabs and Settings
+            are always shown.
+        </p>
+
+        @if (_hidden is null)
+        {
+            <p class="tile-meta mb-0">Reading…</p>
+        }
+        else
+        {
+            <div class="row g-3">
+                @foreach (var group in NavMap.Groups)
+                {
+                    <fieldset class="col-sm-6 col-lg-4">
+                        <legend class="tile-meta small mb-1">@group.Label</legend>
+                        @foreach (var item in group.Items)
+                        {
+                            var id = $"menu-show-{item.Key}";
+                            <div class="form-check" @key="item.Key">
+                                <input class="form-check-input" type="checkbox" id="@id"
+                                       checked="@(!_hidden.Contains(item.Key))"
+                                       @onchange="e => SetAsync(item.Key, e.Value is true)" />
+                                <label class="form-check-label" for="@id">@item.Icon @item.Label</label>
+                            </div>
+                        }
+                    </fieldset>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private HashSet<string>? _hidden;
+
+    protected override async Task OnInitializedAsync() =>
+        _hidden = [.. NavMap.Hidden(await AppSettings.AllAsync())];
+
+    private async Task SetAsync(string key, bool shown)
+    {
+        if (_hidden is null)
+            return;
+        if (shown)
+            _hidden.Remove(key);
+        else
+            _hidden.Add(key);
+
+        var value = NavMap.Store(_hidden);
+        // Off the render thread, like the other settings saves: the write is the database's.
+        await Task.Run(() => AppSettings.SaveAsync(NavMap.HiddenKey, value));
+    }
+}

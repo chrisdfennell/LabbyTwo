@@ -61,11 +61,11 @@ public sealed class ContainersTabKind : ITabKind
         new(LabbyTwo.Services.SafeUpdates.TabKey, "Safe updates", FieldKind.Select, Default: "",
             Help: "After an Update from this page, watch the container for a while and put its previous image back if " +
                   "it stops, restarts, turns unhealthy, or a connection pointing at it goes down. The default and the " +
-                  "length of the watch are in Settings → Updates. Never applies to LabbyTwo's own container, which cannot " +
+                  "length of the watch are in Settings → Automation → Safe updates. Never applies to LabbyTwo's own container, which cannot " +
                   "watch itself once it has been replaced.",
             Options:
             [
-                new SelectOption("", "As set in Settings → Updates"),
+                new SelectOption("", "As set in Settings → Automation"),
                 new SelectOption("on", "On for this tab"),
                 new SelectOption("off", "Off for this tab"),
             ]) { Advanced = true },

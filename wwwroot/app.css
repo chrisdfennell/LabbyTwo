@@ -427,6 +427,107 @@ summary:focus-visible,
 .nav-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-empty { color: var(--muted); font-size: .8rem; padding: .5rem .6rem; }
 
+/* The groups below the tabs (NavMap). The heading is a button so the keyboard can fold a
+   group; aria-expanded says whether it is folded, and the chevron turns to match. */
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-group + .nav-group { margin-top: .25rem; }
+.nav-group-heading { margin: 0; font-size: inherit; }
+.nav-group-toggle {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: .5rem;
+    padding: .35rem .6rem;
+    color: var(--muted);
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    text-align: left;
+}
+.nav-group-toggle:hover { color: var(--text); background: var(--panel-2); }
+.nav-group-chevron { display: inline-block; transition: transform .15s ease; }
+.nav-group-toggle[aria-expanded="true"] .nav-group-chevron { transform: rotate(90deg); }
+.nav-group-items { display: flex; flex-direction: column; gap: 2px; }
+.nav-group-items[hidden] { display: none; }
+.nav-settings { margin-top: .5rem; }
+
+@media (prefers-reduced-motion: reduce) {
+    .nav-group-chevron { transition: none; }
+}
+
+/* ---------- settings hub ----------
+
+   Every settings page sits in SettingsLayout: the sections down the side, the page beside
+   them. On a phone they stack, and the sections shrink to a wrap of links with only the
+   current section's own pages shown. */
+.settings-shell {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+}
+.settings-body { min-width: 0; }
+
+.settings-nav {
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+}
+.settings-search .form-control { background: var(--panel); }
+.settings-nav-list,
+.settings-nav-pages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-pages { padding-left: 1.1rem; margin-top: 2px; }
+.settings-nav-link {
+    display: flex;
+    align-items: flex-start;
+    gap: .5rem;
+    padding: .35rem .55rem;
+    border-radius: .5rem;
+    color: var(--muted);
+    font-size: .875rem;
+}
+.settings-nav-link:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
+.settings-nav-link.active { background: var(--accent-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.settings-nav-icon { width: 1.2rem; text-align: center; flex: none; }
+.settings-nav-text { min-width: 0; display: flex; flex-direction: column; }
+.settings-nav-where { color: var(--muted); font-size: .75rem; }
+.settings-nav-empty { color: var(--muted); font-size: .85rem; padding: .25rem .55rem; margin: 0; }
+
+.settings-hub {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+    gap: 1rem;
+}
+.settings-hub-card { padding: 1rem; display: flex; flex-direction: column; gap: .35rem; }
+.settings-hub-card .widget-title { margin: 0; }
+.settings-hub-card .widget-title a { color: var(--text); }
+.settings-hub-pages { display: flex; flex-wrap: wrap; gap: .25rem .75rem; font-size: .85rem; }
+
+@media (max-width: 900px) {
+    .settings-shell { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+    .settings-nav { position: static; max-height: none; overflow: visible; }
+    .settings-nav > .settings-nav-list { flex-direction: row; flex-wrap: wrap; gap: .25rem; }
+    .settings-nav > .settings-nav-list > li { display: contents; }
+    .settings-nav-pages { display: none; }
+    .settings-nav > .settings-nav-list > li.is-current > .settings-nav-pages { display: flex; flex-direction: row; flex-wrap: wrap; flex-basis: 100%; padding-left: 0; }
+    /* The hub's own page is the list of sections; one list on a phone is enough. */
+    .settings-nav.is-hub > .settings-nav-list { display: none; }
+    /* Search results stay a list, one per line. */
+    .settings-nav > #settings-search-results { flex-direction: column; }
+    .settings-nav > #settings-search-results > li { display: list-item; }
+}
+
 /* ---------- page furniture ---------- */
 
 .page-head {
@@ -1058,6 +1159,13 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
     .nav-links { flex-direction: row; flex-wrap: wrap; flex: 1 0 100%; }
     /* Wraps, or the last link is cut off by the edge of a phone. */
     .nav-footer { flex-direction: row; flex-wrap: wrap; border-top: 0; }
+    /* Each group a row of its own: its name, then its pages beside it. */
+    .nav-group { flex-direction: row; flex-wrap: wrap; align-items: center; flex: 1 0 100%; }
+    .nav-group + .nav-group { margin-top: 0; }
+    .nav-group-heading { flex: none; }
+    .nav-group-toggle { width: auto; }
+    .nav-group-items { flex-direction: row; flex-wrap: wrap; }
+    .nav-settings { margin-top: 0; }
 
     /* One card per row. Scoped to the dashboard grid: the weather page's stat strip is
        also made of .widget, and it sizes its own columns with auto-fill. */
@@ -1453,6 +1561,14 @@ body.is-dragging-widget { user-select: none; cursor: grabbing; }
 .palette-label { flex: 1; min-width: 0; }
 .palette-kind { color: var(--muted); font-size: .75rem; flex: none; }
 .palette-empty { padding: 1rem; color: var(--muted); }
+.palette-group {
+    padding: .5rem .6rem .2rem;
+    color: var(--muted);
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
 
 .container-list { display: flex; flex-direction: column; gap: .3rem; }
 

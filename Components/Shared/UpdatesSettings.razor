@@ -1,0 +1,404 @@
+@inject ConfigStore Config
+@inject AppSettingsStore AppSettings
+@inject UpdateChecker Updates
+@inject SelfUpdater Updater
+@inject ContainerUpdates ContainerReviews
+@inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
+
+@* The "Updates" card from the old single Settings page, moved to Settings → Updates. Safe
+   updates, which was its last part, is under Settings → Automation now. *@
+
+<div class="widget" id="labbytwo">
+    <div class="widget-head">
+        <h2 class="widget-title">Updates</h2>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="CheckForUpdatesAsync"
+                disabled="@_checking">
+            @(_checking ? "Checking…" : "Check GitHub")
+        </button>
+    </div>
+    <div class="widget-body">
+        @if (_update is null)
+        {
+            <p class="tile-meta mb-0">
+                Nothing is contacted until you press the button — LabbyTwo does not phone home on
+                its own.
+                @if (Channel == UpdateChecker.Channel.Release)
+                {
+                    <text>
+                        This install is on a release, so the check asks GitHub for the newest
+                        published release and compares it with this one.
+                    </text>
+                }
+                else
+                {
+                    <text>
+                        This install tracks <code>main</code>, so the check asks GitHub for the
+                        newest commit and compares it with the one this image was built from.
+                    </text>
+                }
+            </p>
+        }
+        else if (_update.Error is { Length: > 0 } error)
+        {
+            <div class="alert alert-warning py-2 mb-0">@error</div>
+        }
+        else if (_update.Behind == false)
+        {
+            <p class="mb-0"><span class="text-success">Up to date.</span>
+                <span class="tile-meta">
+                    @(Channel == UpdateChecker.Channel.Release
+                        ? "Running the newest release."
+                        : "Running the newest commit on main.")
+                </span></p>
+        }
+        else
+        {
+            <p class="mb-1">
+                <strong class="text-warning">An update is available.</strong>
+                <span class="tile-meta">
+                    newest is <span class="font-monospace">@_update.Latest</span>
+                    @if (_update.Released is { } released)
+                    {
+                        <text>, from @released.ToLocalTime().ToString("d MMM HH:mm")</text>
+                    }
+                </span>
+            </p>
+            @if (_update.Summary is { Length: > 0 } summary)
+            {
+                <p class="tile-meta mb-2">Latest change: @summary</p>
+            }
+            <p class="tile-meta mb-1">Run this where LabbyTwo is installed:</p>
+            <pre class="mb-2"><code>bash install.sh</code></pre>
+            <p class="tile-meta mb-2">
+                Or, if this install pulls a published image rather than building from source,
+                <code>docker compose pull &amp;&amp; docker compose up -d</code>.
+            </p>
+            <a class="btn btn-sm btn-outline-secondary" href="@_update.CompareUrl"
+               target="_blank" rel="noreferrer">See what changed</a>
+        }
+
+        <hr class="my-3" />
+
+        @* Self can be unknown when a Watchtower API does the work: the button still works
+           without LabbyTwo seeing Docker at all, which is the point of that mode. *@
+        @if (_self is { Ready: true } ready)
+        {
+            <p class="mb-1">
+                <strong>Update from here.</strong>
+                @if (ready.Self is { } me)
+                {
+                    <span class="tile-meta">
+                        @me.Container, running <span class="font-monospace">@me.Image</span>
+                    </span>
+                }
+            </p>
+            @if (ready.Mode == SelfUpdater.UpdateMode.WatchtowerApi)
+            {
+                <p class="tile-meta mb-2">
+                    A container cannot replace itself, so this asks the Watchtower at
+                    <span class="font-monospace">@SelfUpdater.WatchtowerUpdateUrl(Options.Value.Watchtower.Url)</span>
+                    to check now, through its HTTP API. Watchtower holds the Docker socket; LabbyTwo holds
+                    a token that can only say "check now". If there is a newer image, LabbyTwo goes away
+                    mid-click and comes back a few seconds later — reload the page then.
+                </p>
+            }
+            else
+            {
+                <p class="tile-meta mb-2">
+                    A container cannot replace itself, so this starts a throwaway
+                    <span class="font-monospace">watchtower --run-once</span> through the Docker API and
+                    lets it pull the new image and recreate this one. LabbyTwo goes away mid-click and
+                    comes back a few seconds later — reload the page then. Pointing
+                    <code>Labby__Watchtower__Url</code> at a running Watchtower's HTTP API does the same
+                    without LabbyTwo needing permission to create containers.
+                </p>
+            }
+
+            @if (!Options.Value.Auth.Enabled)
+            {
+                <div class="alert alert-warning py-2 mb-2">
+                    @if (ready.Mode == SelfUpdater.UpdateMode.WatchtowerApi)
+                    {
+                        <text>Login is off, so anyone who can reach this page can press this button and
+                            have Watchtower update what it watches. Set a password.</text>
+                    }
+                    else
+                    {
+                        <text>Login is off, so anyone who can reach this page can press this button — and
+                            through it, start a container as root on the host. Set a password before
+                            leaving this switched on.</text>
+                    }
+                </div>
+            }
+
+            @if (_updateError is { Length: > 0 } failed)
+            {
+                <div class="alert alert-danger py-2 mb-2">@failed</div>
+            }
+            @if (_updateNote is { Length: > 0 } note)
+            {
+                <div class="alert alert-info py-2 mb-2">@note</div>
+            }
+            <UpdateHelperNotice Endpoint="@_helperEndpoint" />
+
+            <button class="btn btn-sm btn-warning" disabled="@_updating" @onclick="() => _confirmUpdate = true">
+                @(_updating ? "Starting…" : "Update now")
+            </button>
+            @if (ready.Reason is { Length: > 0 } caveat)
+            {
+                <p class="tile-meta mb-0 mt-2">@caveat</p>
+            }
+        }
+        else
+        {
+            <p class="tile-meta mb-0">
+                There is no button that does the update here.
+                @(_self?.Reason ?? "Checking what this container can do…")
+            </p>
+            <p class="tile-meta mb-0 mt-2">
+                LabbyTwo runs inside the container an update replaces, and nothing can rebuild and
+                restart itself — so something outside has to. Run
+                <a href="https://containrrr.dev/watchtower/" target="_blank" rel="noreferrer">Watchtower</a>
+                with its HTTP API on and set <code>Labby__Watchtower__Url</code> and
+                <code>Labby__Watchtower__Token</code>, and the button asks it while the socket stays with
+                Watchtower. Or give LabbyTwo the Docker API itself, which is root on the host, and the
+                button starts a Watchtower of its own. Or leave both out and let Watchtower update on its
+                timer.
+            </p>
+        }
+
+        @* Separate from updating, and not gated on it. Restarting is the useful thing
+           even on a box that lets Watchtower do the updates — a plugin has just been
+           replaced, a setting wants reloading — and it needs only to know which
+           container this is, not whether a newer image exists. *@
+        @if (_self?.Self is { } running)
+        {
+            <hr class="my-3" />
+            <div id="restart" class="d-flex align-items-center gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-secondary" disabled="@_restartingSelf"
+                        @onclick="() => _confirmRestart = true">
+                    @(_restartingSelf ? "Restarting…" : "Restart LabbyTwo")
+                </button>
+                <span class="tile-meta">@running.Container</span>
+            </div>
+            <div class="form-text">
+                Stops and starts this container. The page goes away and comes back on its own —
+                which is what you want after updating a plugin, since the new DLL is only read
+                while LabbyTwo is starting.
+            </div>
+        }
+
+        @* Every other container. The check is the same kind of promise as the one above:
+           no registry is asked until the button is pressed, or until somebody picks a
+           schedule — which is off unless they do. *@
+        <hr class="my-3" />
+        <div id="containers" class="d-flex align-items-center gap-2 flex-wrap mb-1">
+            <strong>Every other container.</strong>
+            <button class="btn btn-sm btn-outline-secondary" data-action="check-containers"
+                    disabled="@(_checkingContainers || !_hasDocker)" @onclick="CheckContainersAsync">
+                @(_checkingContainers ? "Checking…" : "Check containers")
+            </button>
+            @if (_containersTab is { } tab)
+            {
+                <a class="btn btn-sm btn-outline-secondary" href="@($"t/{Uri.EscapeDataString(tab.Slug)}")">Open @tab.Name</a>
+            }
+        </div>
+        @if (!_hasDocker)
+        {
+            <p class="tile-meta mb-2">Needs a Docker connection — the socket, a named pipe or a socket proxy.</p>
+        }
+        else if (ContainerReviews.All is { Count: > 0 } reviews)
+        {
+            <ul class="tile-meta mb-2">
+                @foreach (var review in reviews)
+                {
+                    <li>
+                        <strong>@review.ConnectionName</strong>, checked @Ago.Since(review.CheckedAt): @review.Summary.
+                        @if (review.Behind.Count > 0)
+                        {
+                            <span class="text-warning">@string.Join(", ", review.Behind.Take(8).Select(b => b.Name))@(review.Behind.Count > 8 ? $" and {review.Behind.Count - 8} more" : "")</span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+        else
+        {
+            <p class="tile-meta mb-2">
+                Asks each container's registry — Docker Hub, ghcr.io, lscr.io and the rest — whether its tag
+                now points at a newer image than the one running. Nothing is asked until you press the button.
+                The Containers tab shows the answer on each row, with an Update button for the ones behind.
+            </p>
+        }
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <label class="form-label mb-0 tile-meta" for="container-schedule">Check on their own</label>
+            <select id="container-schedule" class="form-select form-select-sm" style="width: auto"
+                    value="@_containerSchedule" @onchange="SaveContainerScheduleAsync">
+                @foreach (var (hours, label) in ContainerUpdates.Schedules)
+                {
+                    <option value="@hours">@label</option>
+                }
+            </select>
+        </div>
+        <div class="form-text">
+            Off unless you choose otherwise: a schedule means LabbyTwo contacts those registries by itself.
+            Docker Hub limits anonymous requests, so a few are asked at a time and each answer is reused for
+            ten minutes. Checking never updates anything — that is always a button.
+        </div>
+        <div class="form-text mt-3">
+            Rolling a failed update back by itself is <a href="settings/automation#safe-updates">Safe updates</a>,
+            under Automation.
+        </div>
+    </div>
+</div>
+
+@if (_confirmUpdate)
+{
+    <ConfirmDialog Title="Update LabbyTwo now?"
+                   Message="@(_self?.Mode == SelfUpdater.UpdateMode.WatchtowerApi
+                                ? "Watchtower will check for a newer image now and, if there is one, recreate LabbyTwo with it. LabbyTwo will disappear for a few seconds. Nothing in the database is touched."
+                                : $"A one-off Watchtower container will pull the newest image and recreate {_self?.Self?.Container}. LabbyTwo will disappear for a few seconds. Nothing in the database is touched.")"
+                   ConfirmText="Update now"
+                   OnCancel="() => _confirmUpdate = false"
+                   OnConfirm="StartUpdateAsync" />
+}
+
+@if (_confirmRestart)
+{
+    <ConfirmDialog Title="Restart LabbyTwo?"
+                   Message="This page will go away and come back when the container has restarted. Anything you have open elsewhere will reconnect on its own."
+                   ConfirmText="Restart it"
+                   OnCancel="() => _confirmRestart = false"
+                   OnConfirm="RestartSelfAsync" />
+}
+
+@code {
+    // ---- restarting the container this runs in ----
+
+    private bool _confirmRestart;
+    private bool _restartingSelf;
+
+    private async Task RestartSelfAsync()
+    {
+        _confirmRestart = false;
+        _restartingSelf = true;
+        try
+        {
+            await Updater.RestartSelfAsync();
+        }
+        catch (Exception ex)
+        {
+            // Docker stops this process partway through answering, so the exception that
+            // arrives is usually the circuit dropping rather than a refusal. Only the ones
+            // that explain themselves — no socket, cannot identify the container — are worth
+            // showing, and those arrive before anything is asked of Docker at all.
+            _updateError = ex.GetBaseException().Message;
+            _restartingSelf = false;
+        }
+    }
+
+    private UpdateChecker.Result? _update;
+    private bool _checking;
+
+    private SelfUpdater.Status? _self;
+    private bool _updating, _confirmUpdate;
+    private string? _updateError;
+    private string? _updateNote;
+
+    private async Task CheckForUpdatesAsync()
+    {
+        _checking = true;
+        try
+        {
+            _update = await Updates.CheckAsync();
+
+            // Only now is contacting a registry in scope, so the digest comparison happens
+            // on the same press rather than on page load.
+            _self = await Updater.StatusAsync(checkRegistry: true);
+        }
+        finally
+        {
+            _checking = false;
+        }
+    }
+
+    private static string Version => UpdateChecker.Installed;
+
+    /// <summary>Whether this build came from a release or from main, which changes what
+    /// "up to date" is measured against and so what the page should say.</summary>
+    private static UpdateChecker.Channel Channel => UpdateChecker.ChannelOf(Version);
+
+    private string? _helperEndpoint;
+
+    private bool _checkingContainers, _hasDocker;
+    private int _containerSchedule;
+    private Tab? _containersTab;
+
+    /// <summary>Every enabled Docker connection, now. Runs on the pool: it reads the connection list.</summary>
+    private async Task CheckContainersAsync()
+    {
+        _checkingContainers = true;
+        try
+        {
+            await Task.Run(() => ContainerReviews.CheckDueAsync(TimeSpan.Zero));
+        }
+        finally
+        {
+            _checkingContainers = false;
+        }
+    }
+
+    private async Task SaveContainerScheduleAsync(ChangeEventArgs args)
+    {
+        _containerSchedule = int.TryParse(args.Value?.ToString(), out var hours) ? Math.Max(0, hours) : 0;
+        var value = _containerSchedule.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await Task.Run(() => AppSettings.SaveAsync(ContainerUpdates.ScheduleKey, value));
+    }
+
+    private async Task StartUpdateAsync()
+    {
+        _confirmUpdate = false;
+        _updating = true;
+        _updateError = null;
+        _updateNote = null;
+
+        try
+        {
+            // Usually no success path to render: if that worked, this process is killed
+            // within seconds, and leaving _updating set keeps the button disabled until it
+            // happens. An answer means Watchtower finished while this process was still alive
+            // to hear it — it found nothing to do — so the button comes back.
+            if (await Updater.StartUpdateAsync() is { } answered)
+            {
+                _updateNote = answered;
+                _updating = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _updateError = ex.GetBaseException().Message;
+            _updating = false;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _containerSchedule = (await AppSettings.AllAsync()).GetInt(ContainerUpdates.ScheduleKey, 0);
+
+        var tabs = await Config.TabsAsync();
+        _containersTab = tabs.FirstOrDefault(t => t.Kind == "containers" && t.Enabled);
+        _hasDocker = (await Config.ConnectionsAsync()).Any(c => c.Provider == "docker" && c.Enabled);
+
+        // Show a previous result if one was fetched this session, without checking again.
+        _update ??= Updates.Last;
+
+        // Local only: which container this is and whether the socket is there. Nothing
+        // leaves the machine until the user asks for a check.
+        _self = await Updater.StatusAsync();
+
+        // Where a one-shot update helper would be, so one left running is shown here too.
+        // Only when LabbyTwo starts its own: a Watchtower reached by its API is not ours to judge.
+        if (_self?.Mode == SelfUpdater.UpdateMode.DockerApi)
+            _helperEndpoint = await Updater.HelperEndpointAsync();
+    }
+}

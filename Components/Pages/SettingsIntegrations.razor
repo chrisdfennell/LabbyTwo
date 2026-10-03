@@ -1,0 +1,23 @@
+@page "/settings/integrations"
+@layout SettingsLayout
+@rendermode InteractiveServer
+
+<SettingsSectionHead Key="integrations" />
+
+<div class="row g-3">
+    <div class="col-12">
+        <HomeAssistantCard />
+    </div>
+
+    <div class="col-12" id="outside-alarm">
+        <OutsideAlarmCard />
+    </div>
+
+    <div class="col-12">
+        <FamilyPageSettings />
+    </div>
+
+    <div class="col-12">
+        <PublicStatusSettings />
+    </div>
+</div>

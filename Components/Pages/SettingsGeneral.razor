@@ -1,0 +1,29 @@
+@page "/settings/general"
+@layout SettingsLayout
+@rendermode InteractiveServer
+
+<SettingsSectionHead Key="general" />
+
+<div class="row g-3">
+    <div class="col-12">
+        <HomeLocationSettings />
+    </div>
+
+    <div class="col-12">
+        <MenuSettings />
+    </div>
+
+    <div class="col-12">
+        @* Kept where they already were, and linked from here, rather than drawn twice. *@
+        <div class="widget" id="elsewhere">
+            <div class="widget-head"><h2 class="widget-title">Name, units and login</h2></div>
+            <div class="widget-body">
+                <ul class="mb-0">
+                    <li>The dashboard's name and the units readings are shown in are under
+                        <a href="settings/appearance#brand">Appearance</a>.</li>
+                    <li>Whether a login is needed is under <a href="settings/security#login">Security</a>.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>

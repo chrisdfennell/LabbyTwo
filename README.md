@@ -80,7 +80,7 @@ compares against the right thing: a release install against the newest release, 
 install against the tip of `main`. A build tracking main is deliberately *ahead* of the
 last release, and reporting that as "behind" would be backwards.
 
-| | Version shown in Settings | Compared against |
+| | Version shown in Settings → System | Compared against |
 |---|---|---|
 | Release channel | `v1.0.0` | the newest published release |
 | Main channel | `v1.0.0-3-gabc1234` — three commits past v1.0.0 | the tip of `main` |
@@ -137,7 +137,7 @@ works the same as an Intel box.
 
 ### Already have a dashboard?
 
-**Settings → Import a dashboard** reads what you already built somewhere else, so you are
+**Settings → Data & storage → Import a dashboard** reads what you already built somewhere else, so you are
 not retyping thirty bookmarks to try this.
 
 | From | Upload | What comes across |
@@ -151,6 +151,43 @@ Nothing is overwritten — an import only ever adds — and you see exactly what
 before you commit to it.
 
 ---
+
+## Where things are
+
+The sidebar holds your tabs, then three groups that fold away (each browser remembers which
+you folded), then **Settings**. The badges for services that are down and reports from the
+family stay at the top, above everything.
+
+| Sidebar group | Pages |
+|---|---|
+| **Monitor** | What changed · Incidents · Logs · LabbyTwo health |
+| **Lab** | Power · Backups · Dependency map |
+| **Views & actions** | Phone view · Wall mode · Scheduled actions |
+
+Pages you never use can be taken out of the sidebar in **Settings → General → Menu**; they
+still open at their address, from the command palette (**Ctrl+K**) and from the settings
+search.
+
+**Settings** is a hub: a search box that finds a section or a single setting by name, and
+these sections down the side (a list at the top on a phone).
+
+| Section | What is in it | Address |
+|---|---|---|
+| **General** | Where you are, which pages the menu shows | `settings/general` |
+| **Appearance** | Themes, day and night, per screen, colour, fonts, name and units, background, wall mode, custom CSS | `settings/appearance` |
+| **Connections & tabs** | Connections, Tabs, Dependency map | `settings/connections`, `settings/tabs`, `settings/connections/map` |
+| **Alerts** | Alert rules, quiet hours, mute windows, escalation, self-healing | `settings/alerts` |
+| **Notifications** | Alert channels, Browser push, weekly summary, monthly report | `settings/notifications`, `settings/push` |
+| **Automation** | Scheduled actions, safe updates | `settings/automation`, `settings/scheduled` |
+| **Updates** | Updating LabbyTwo and the containers, restarting LabbyTwo | `settings/updates` |
+| **Integrations** | Home Assistant (MQTT), outside alarm, family status page, public status page | `settings/integrations` |
+| **Data & storage** | Database download and export, off-site copies, imports, Storage, Import a dashboard | `settings/data`, `settings/storage`, `settings/import` |
+| **Security** | Secrets in containers, login | `settings/security` |
+| **System** | This install, installed extensions, plugins, LabbyTwo health | `settings/system`, `settings/health` |
+
+Every address that worked before still does: the pages that had one kept it, and an old
+`settings#family`-style link to a card on the former single Settings page is sent on to the
+section that card is in now.
 
 ## The three ideas
 
@@ -521,7 +558,7 @@ shows the real state, so a rule that fired overnight is red in the morning.
 
 ### A weekly summary
 
-Once a week, on the day and at the time you pick in **Settings → Weekly summary**, LabbyTwo
+Once a week, on the day and at the time you pick in **Settings → Notifications → Weekly summary**, LabbyTwo
 sends a short note through the same alert channels: the week's uptime, each outage and how
 long it lasted, the least reliable and slowest services, disks that are filling and when
 they will be full, certificates and renewals coming up, speed test averages, what the
@@ -533,7 +570,7 @@ shows a preview and can send one on demand.
 ### A monthly report
 
 Once a month — the 1st at 08:00 unless you pick another day and time in **Settings →
-Monthly report** — LabbyTwo writes up the month before as a note on a **Monthly reports**
+Notifications → Monthly report** — LabbyTwo writes up the month before as a note on a **Monthly reports**
 tab: a line saying how the month went, each service's uptime, outages and time down in one
 table, the incidents with how long each lasted and what probably caused it, the total time
 down, the alerts that fired most, backups proven and restores tested, what the electricity
@@ -818,7 +855,7 @@ The guardrails:
 
 #### Scheduled actions
 
-Self-healing acts when something breaks; **Settings → Alerts → Scheduled actions** acts when
+Self-healing acts when something breaks; **Settings → Automation → Scheduled actions** acts when
 the clock says so — *"restart the flaky container every Sunday at 4am"*, *"trigger the backup
 script nightly"*. Each one is a name, a target and a schedule:
 
@@ -873,7 +910,7 @@ added to the Home Screen.
 
 Every alert above needs LabbyTwo running and the house online. A power cut, a tripped breaker
 or a dead router takes both away at once, and nothing inside the house can tell you. So
-**Settings → Outside alarm** turns it round: LabbyTwo checks in with a service *outside* the
+**Settings → Integrations → Outside alarm** turns it round: LabbyTwo checks in with a service *outside* the
 house every minute, and when the check-ins stop, that service alerts you.
 
 It is a Settings section rather than a connection on purpose. A connection is something
@@ -902,7 +939,7 @@ the same as its message — counts only, never names, addresses or anything a pr
 2. Set **Period** to your check-in interval (1 minute) and **Grace** to 5 minutes.
 3. Add an integration for how you want to hear — email is built in; SMS, Signal, ntfy,
    Pushover and Telegram are there too. It must not depend on your house.
-4. Copy the ping URL (`https://hc-ping.com/<uuid>`) into **Settings → Outside alarm**, save,
+4. Copy the ping URL (`https://hc-ping.com/<uuid>`) into **Settings → Integrations → Outside alarm**, save,
    and press **Send test ping**. The check turns green.
 
 A self-hosted Healthchecks works the same with its own `https://hc.example.com/ping/<uuid>`
@@ -930,7 +967,7 @@ the recovery.
 
 ### Home Assistant: LabbyTwo as sensors and buttons
 
-LabbyTwo already *reads* Home Assistant as a connection. **Settings → Home Assistant (MQTT)**
+LabbyTwo already *reads* Home Assistant as a connection. **Settings → Integrations → Home Assistant (MQTT)**
 is the other direction: it publishes LabbyTwo into Home Assistant through your MQTT broker,
 using MQTT discovery, so the entities appear by themselves — no YAML. It is off until you
 switch it on, and nothing is sent, not even a connection attempt, before then.
@@ -941,7 +978,7 @@ switch it on, and nothing is sent, not even a connection attempt, before then.
 2. **Settings → People → Users**, add a user for LabbyTwo (say `labbytwo`) with a password.
    The Mosquitto add-on accepts any Home Assistant user.
 3. **Settings → Devices & services**: the MQTT integration is offered as discovered; accept it.
-4. In LabbyTwo, **Settings → Home Assistant (MQTT)**: broker address = your Home Assistant
+4. In LabbyTwo, **Settings → Integrations → Home Assistant (MQTT)**: broker address = your Home Assistant
    machine (`homeassistant.local` or its IP — it has to resolve from inside LabbyTwo's container),
    port `1883`, the user and password from step 2. Press **Test connection**, tick
    **Publish to Home Assistant**, and **Save**.
@@ -1392,7 +1429,7 @@ Each item is proven by one source:
 |---|---|
 | A connection's reading | any metric that is an age or a timestamp: Proxmox Backup Server's and Duplicati's `hours_since_backup` (Duplicati also per job, `hours_since_backup:<job>`), a Healthchecks check your backup script pings (`hours_since_ping:<check>`), or a last-success Unix timestamp from a JSON or Prometheus connection. Hours unless the unit or name says minutes, days or seconds |
 | LabbyTwo's nightly backup | the newest `labbytwo-*.db` in its backup folder — which, unlike the job's own last run, survives a restart |
-| An off-site copy | the destination's last success, from **Settings → Off-site copies** |
+| An off-site copy | the destination's last success, from **Settings → Data & storage → Off-site copies** |
 | You | **Mark backed up** — for the USB disk in a drawer. It records who and when |
 
 Each is **on time**, **late** (the newest backup is older than its frequency plus a grace —
@@ -2191,7 +2228,7 @@ the title of notes made from it, and the Markdown) and **✕** to delete it.
 
 ### Weather and radar
 
-**Settings → Where you are** holds one location for the whole install, and the forecast,
+**Settings → General → Where you are** holds one location for the whole install, and the forecast,
 the weather warnings, air quality and the radar all fall back to it unless a particular
 connection is given its own. It is *searched* rather than typed — a town, city or postcode
 goes to Open-Meteo's geocoder and comes back as coordinates — because nobody knows their
@@ -2266,7 +2303,7 @@ regenerating it after a Unicode update picks up whatever was added.
 
 ### A status page you can share
 
-**Settings → Public status page** creates a link that works without signing in — service
+**Settings → Integrations → Public status page** creates a link that works without signing in — service
 names, uptime percentages and the daily bars. It is deliberately *not* the internal status
 page: probe messages carry hostnames, ports and API errors, so none of them appear. The
 link is a long random token, rotating it invalidates the old one immediately, and a wrong
@@ -2276,7 +2313,7 @@ token is a plain 404.
 
 ### A status page for the family
 
-The public status page is for people who like numbers. **Settings → Family status page** is
+The public status page is for people who like numbers. **Settings → Integrations → Family status page** is
 for the people you live with, who want to know one thing: is Plex broken, or is it the TV?
 
 - **You choose what is on it.** Add the connections people actually ask about, give each the
@@ -2289,7 +2326,7 @@ for the people you live with, who want to know one thing: is Plex broken, or is 
   Something that stays up during maintenance still says *Working*.
 - **"Something's broken?"** Anyone on the page can say what is not working — one of the
   things on it, or "something else" — with an optional short message and name. It lands in
-  **Settings → Family status page**, in **What changed** as a *report*, as "3 reports from
+  **Settings → Integrations → Family status page**, in **What changed** as a *report*, as "3 reports from
   the family" at the top of the sidebar, and through your alert channels. Maintenance and a
   silenced connection hold the notification (you are already on it) and quiet hours hold it
   like any other non-urgent alert; the report itself is always kept until you dismiss it.
@@ -2473,7 +2510,7 @@ Under the gallery, **Day and night** decides which end of the theme shows:
 - **Follow the device** — light or dark as each phone, tablet or PC is set (the default).
 - **Dark** or **Light** — always that one.
 - **Follow the sun** — light from sunrise to sunset at the place set under **Settings →
-  Where you are**, dark the rest of the time. Sunrise and sunset are worked out on the
+  General → Where you are**, dark the rest of the time. Sunrise and sunset are worked out on the
   server (the same NOAA arithmetic the weather card uses), so nothing is looked up online.
   Either switch can be moved up to three hours: "dark from −30 minutes after sunset" goes
   dark half an hour before the sun does. With no location set it says how to set one and
@@ -2614,14 +2651,14 @@ costs one draw however long the wall runs. Like the theme, its CSS is built once
 from fixed property names, clamped numbers and parsed colours — nothing typed reaches it.
 
 The picture lives in the `backdrops` folder beside the database, like an uploaded font. A
-copy of the data volume includes it; the database download on the Settings page does not.
+copy of the data volume includes it; the database download in Settings → Data & storage does not.
 
 ### Wall mode
 
 `/wall` is the dashboard for a tablet or a TV nobody sits in front of: no sidebar, one tab
 after another, and nothing reloads between them — the cards on each tab stay live, and an
 embedded page is not fetched again every time it comes round. Open it from **📺 Wall mode**
-at the bottom of the sidebar, the command palette, or **Settings → Appearance**, which also
+under **Views & actions** in the sidebar, the command palette, or **Settings → Appearance**, which also
 sets which tabs it shows and for how long. Walls that are already open pick a change up
 straight away.
 
@@ -2752,7 +2789,7 @@ working example of each.
 
 ### Plugins
 
-**Settings → Plugins → Browse available plugins** lists what this release publishes and
+**Settings → System → Plugins → Browse available plugins** lists what this release publishes and
 installs any of them with a button — no terminal, no `docker cp`. The release *is* the catalogue: every bundled plugin
 is attached to it, so the list cannot drift from what actually ships, and a plugin built
 for a different version is not offered at all rather than half-loading later. Removing one
@@ -2790,7 +2827,7 @@ does not fail cleanly: it *half*-loads, keeping the types that still resolve and
 the rest, so a tab kind can appear in the picker and then throw when opened. Settings now
 compares the two versions and says so instead of leaving you to find out that way.
 
-**Settings → Plugins** lists what loaded and what each one contributed, and reports the
+**Settings → System → Plugins** lists what loaded and what each one contributed, and reports the
 reason for anything that did not — a plugin built against an older LabbyTwo says so
 rather than vanishing. A plugin declaring a key that already exists replaces the built-in
 of that name, which is the supported way to fix a provider you disagree with.
@@ -2923,7 +2960,7 @@ range is ignored with a warning in the log.
 
 ### Storage: what takes the space, and keeping less
 
-**Settings → Storage** (also linked from the health page) shows what the database holds:
+**Settings → Data & storage → Storage** (also linked from the health page) shows what the database holds:
 its size on disk and how much of that is free space inside the file, the free space on the
 disk, how much it grew in the last day against its usual day, and — per connection, and per
 metric within each — how many readings and hourly summaries it keeps, how many megabytes
@@ -3117,7 +3154,7 @@ What each feature asks Docker for, and what the proxy has to allow:
 | Containers tab: watching after a safe update | `GET /containers/{name}/json` once a minute while a watch is on | `CONTAINERS=1` |
 | Containers tab: **↶** roll back, by hand or by a failed watch | `POST /images/{id}/tag`, `POST /images/create` (only if the old image was deleted), `POST /containers/{id}/stop`, `/rename`, `POST /containers/create`, `POST /networks/{name}/connect`, `POST /containers/{id}/start`, `DELETE /containers/{id}` | `CONTAINERS=1`, `IMAGES=1`, `NETWORKS=1`, `POST=1` — the same power as the raw socket |
 | Config history | `GET /containers/{id}/json` for a container with a new id, `GET /images/{id}/json` once per image | `CONTAINERS=1`; `IMAGES=1` to leave the image's defaults out |
-| Settings → Secrets in containers | `GET /containers/json?all=1` (the list the probe already fetched), then `GET /containers/{id}/json` for each container checked, four at a time — only when you press **Check now**, once a day if switched on, or once for a recreated container if notifications are on | `CONTAINERS=1` |
+| Settings → Security → Secrets in containers | `GET /containers/json?all=1` (the list the probe already fetched), then `GET /containers/{id}/json` for each container checked, four at a time — only when you press **Check now**, once a day if switched on, or once for a recreated container if notifications are on | `CONTAINERS=1` |
 | Terminal plugin (`docker exec`) | `POST /containers/{id}/exec`, `POST /exec/{id}/start` | `CONTAINERS=1`, `EXEC=1`, `POST=1` — root-equivalent too |
 
 When the proxy refuses something, LabbyTwo says which flag to set rather than "HTTP 403".
@@ -3459,7 +3496,7 @@ locally built image cannot do — the page says so). One previous image is kept 
 the next update's tag replaces the last.
 
 **After the update**, once the container is seen on its new image, it is watched for
-**10 minutes** (Settings → Updates: 5 to 60). The watch fails, and the previous image is put
+**10 minutes** (Settings → Automation → Safe updates: 5 to 60). The watch fails, and the previous image is put
 back, if in that time:
 
 - the container stops, crash-restarts (Docker's restart count goes up), or its
@@ -3520,7 +3557,7 @@ the incident if one is open. The row says where it has got to: *watching after u
 left*, *rolled back: it crashed and restarted*. A container whose previous image is kept has
 a **↶** button to roll it back by hand at any time, watched or not.
 
-Safe update is on by default. Turn it off for everything in **Settings → Updates**, or for
+Safe update is on by default. Turn it off for everything in **Settings → Automation → Safe updates**, or for
 one tab with **Safe updates** in its settings; the previous image is still kept either way.
 The newer image stays published, so the next check offers it again — and a Watchtower of
 your own running on a schedule will update it again too, so label the container
@@ -3559,7 +3596,7 @@ of common passwords.
 #### Secrets in containers
 
 A compose file is easy to paste into a chat or push to GitHub, and the VPN login in it
-goes with it. **Settings → Secrets in containers** looks through every container's
+goes with it. **Settings → Security → Secrets in containers** looks through every container's
 environment, command and labels for passwords, tokens and keys written in plain text and
 says which ones — "3 containers have 5 plain-text secrets" — grouped by container, worst
 first:
@@ -3618,7 +3655,7 @@ Everything — connections, tabs, widgets, notes, history, appearance, plugins, 
 keyring that decrypts your stored credentials — is in the `labbytwo-data` volume. Copy
 that and you have copied the entire installation. Nothing else is worth backing up.
 
-**Settings** offers three ways to get it out:
+**Settings → Data & storage** offers three ways to get it out:
 
 - **Download database** — a consistent copy of the whole SQLite file, taken without
   stopping the app.
@@ -3637,7 +3674,7 @@ each off-site copy) on the [Backups](#backups--dates-not-hope) page to be told w
 ### Off-site copies
 
 That nightly copy sits on the same disk as the database it protects, so it is no help when
-the NAS dies, is stolen, or is encrypted by ransomware. **Settings → Off-site copies** sends
+the NAS dies, is stolen, or is encrypted by ransomware. **Settings → Data & storage → Off-site copies** sends
 each night's copy somewhere else, straight after it is taken — and **Back up now** runs the
 whole chain on demand. Add as many destinations as you like:
 
@@ -3687,7 +3724,7 @@ Changing the passphrase only affects new copies.
    `--endpoint-url https://…` for anything but AWS).
 2. **If it is an `.l2backup`, decrypt it** into a zip of `labbytwo.db` and `keys/`. Either
    in the browser — any LabbyTwo, including a fresh install on a new machine:
-   **Settings → Off-site copies → Open an encrypted backup**, give it the passphrase and
+   **Settings → Data & storage → Off-site copies → Open an encrypted backup**, give it the passphrase and
    the file, and the zip downloads — or on any machine with Python:
 
    ```bash
@@ -3722,7 +3759,7 @@ silently dropped.
 
 The whole-install export above is for restoring *your* dashboard. Handing somebody a page
 you built is a different thing, and has its own button: **Export** next to any tab under
-Settings → Tabs, and next to any card under **Edit layout** on a dashboard.
+Settings → Connections & tabs → Tabs, and next to any card under **Edit layout** on a dashboard.
 
 What comes out is a small readable JSON file with no ids in it, because a shared tab is a
 *copy*. Import it twice and you get two — it can never land on top of a tab of yours, which
