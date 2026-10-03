@@ -1,0 +1,24 @@
+@page "/settings/data"
+@layout SettingsLayout
+@rendermode InteractiveServer
+
+<SettingsSectionHead Key="data">
+    <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-sm btn-outline-secondary" href="settings/storage">💽 What takes the space?</a>
+        <a class="btn btn-sm btn-outline-secondary" href="backups">🛟 Backups and restore tests</a>
+    </div>
+</SettingsSectionHead>
+
+<div class="row g-3">
+    <div class="col-12">
+        <DatabaseBackupCard />
+    </div>
+
+    <div class="col-12" id="offsite">
+        <OffsiteBackupSettings />
+    </div>
+
+    <div class="col-12">
+        <ImportSettings />
+    </div>
+</div>

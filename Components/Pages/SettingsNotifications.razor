@@ -1,0 +1,59 @@
+@page "/settings/notifications"
+@layout SettingsLayout
+@rendermode InteractiveServer
+@inject AlertService Alerts
+
+<SettingsSectionHead Key="notifications" />
+
+<div class="row g-3">
+    <div class="col-12">
+        @* Channels are connections — they are probed and edited like one — so they stay on the
+           Connections page, and this says what there is and where to change it. *@
+        <div class="widget" id="channels">
+            <div class="widget-head">
+                <h2 class="widget-title">Alert channels</h2>
+                <a class="btn btn-sm btn-outline-secondary" href="settings/connections">Add or change on Connections</a>
+            </div>
+            <div class="widget-body">
+                @if (_channels is null)
+                {
+                    <p class="tile-meta mb-0">Reading…</p>
+                }
+                else if (_channels.Count == 0)
+                {
+                    <p class="tile-meta mb-0">
+                        None yet — nothing is sent anywhere. Add ntfy, Discord, Telegram, email or another
+                        channel as a connection on the <a href="settings/connections">Connections</a> page.
+                    </p>
+                }
+                else
+                {
+                    <ul class="mb-0">
+                        @foreach (var name in _channels)
+                        {
+                            <li>@name</li>
+                        }
+                    </ul>
+                }
+                <p class="tile-meta mb-0 mt-2">
+                    Notifications in this browser, without a channel, are <a href="settings/push">Browser push</a>.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12" id="weekly-summary">
+        <WeeklySummarySettings />
+    </div>
+
+    <div class="col-12" id="monthly-report">
+        <MonthlyReportSettings />
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<string>? _channels;
+
+    protected override async Task OnInitializedAsync() =>
+        _channels = [.. (await Alerts.ChannelsAsync()).Select(c => $"{c.Channel.Icon} {c.Connection.Name}".Trim())];
+}

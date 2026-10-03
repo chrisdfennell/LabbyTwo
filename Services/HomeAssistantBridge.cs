@@ -362,7 +362,7 @@ public sealed class HomeAssistantBridge : BackgroundService, IHomeAssistantSourc
                 case HaCommandKind.MaintenanceStart or HaCommandKind.MaintenanceEnd when !s.MaintenanceButtons:
                     title = "Home Assistant: refused a maintenance button";
                     action = ChangeActions.Skipped;
-                    detail = "The maintenance buttons are switched off on the Settings page.";
+                    detail = "The maintenance buttons are switched off in Settings → Integrations.";
                     break;
 
                 case HaCommandKind.MaintenanceStart:
@@ -404,7 +404,7 @@ public sealed class HomeAssistantBridge : BackgroundService, IHomeAssistantSourc
         var connection = connections.FirstOrDefault(c => HaTopics.Id(c.Id) == command.ConnectionId);
         if (!s.ActionButtons)
             return (connection?.Id, "Home Assistant: refused an action button", ChangeActions.Skipped,
-                "Action buttons are switched off on the Settings page.");
+                "Action buttons are switched off in Settings → Integrations.");
         if (connection is null || !_monitor.IsMonitored(connection) || !s.Publishes(connection.Id))
             return (connection?.Id, "Home Assistant: refused an action on a connection it is not given", ChangeActions.Skipped,
                 $"No published connection matches “{command.ConnectionId}”.");

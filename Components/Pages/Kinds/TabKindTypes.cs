@@ -77,7 +77,7 @@ public sealed class WeatherStationTabKind : ITabKind
 
         new("latitude", "Latitude", FieldKind.Text,
             Help: "Only for the radar and for sunrise and sunset, which are computed here rather than " +
-                  "fetched. Blank uses the location set in Settings.") { Advanced = true },
+                  "fetched. Blank uses the location set in Settings → General.") { Advanced = true },
         new("longitude", "Longitude", FieldKind.Text) { Advanced = true },
         new("radar", "Show radar", FieldKind.Bool, Default: "true"),
         new("radar_source", "Radar source", FieldKind.Select, Default: "rainviewer", Options: RadarSource.Options),

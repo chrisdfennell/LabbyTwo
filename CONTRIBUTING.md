@@ -100,7 +100,7 @@ bash scripts/smoke-boot.sh
 ## Reporting a bug
 
 Include what you were connecting to and what LabbyTwo said. The exact text of a failed
-probe is usually the whole diagnosis. Settings → This install has the version.
+probe is usually the whole diagnosis. Settings → System → This install has the version.
 
 For anything security-sensitive, please open a private advisory rather than a public
 issue. LabbyTwo holds credentials for people's NAS boxes.

@@ -1,0 +1,74 @@
+@inject Registry Registry
+@inject DashboardImportService Imports
+@inject IEnumerable<IEndpointExtension> Endpoints
+
+@* The "Installed extensions" card from the old single Settings page, moved to
+   Settings → System. The background-jobs column it used to end with is on LabbyTwo health,
+   which shows the same runs with when each is next due. *@
+
+<div class="widget" id="extensions">
+    <div class="widget-head"><h2 class="widget-title">Installed extensions</h2></div>
+    <div class="widget-body">
+        <p class="tile-meta">
+            What this build can talk to and display. Everything here was found by scanning for
+            classes, not from a list — adding to it is one file.
+        </p>
+        <div class="row g-3">
+            <div class="col-md-3">
+                <div class="tile-meta mb-1">Providers (@Registry.Providers.Count)</div>
+                <ul class="small mb-0 ps-3">
+                    @foreach (var provider in Registry.Providers)
+                    {
+                        <li>@provider.Icon @provider.DisplayName <span class="tile-meta">— @provider.Category</span></li>
+                    }
+                </ul>
+            </div>
+            <div class="col-md-3">
+                <div class="tile-meta mb-1">Widgets (@Registry.Widgets.Count)</div>
+                <ul class="small mb-0 ps-3">
+                    @foreach (var widget in Registry.Widgets)
+                    {
+                        <li>@widget.Icon @widget.DisplayName</li>
+                    }
+                </ul>
+            </div>
+            <div class="col-md-3">
+                <div class="tile-meta mb-1">Tab kinds (@Registry.TabKinds.Count)</div>
+                <ul class="small mb-0 ps-3">
+                    @foreach (var kind in Registry.TabKinds)
+                    {
+                        <li>@kind.Icon @kind.DisplayName</li>
+                    }
+                </ul>
+            </div>
+            <div class="col-md-3">
+                <div class="tile-meta mb-1">Importers (@Imports.Importers.Count)</div>
+                <ul class="small mb-0 ps-3">
+                    @foreach (var importer in Imports.Importers)
+                    {
+                        <li>@importer.Icon @importer.DisplayName</li>
+                    }
+                </ul>
+            </div>
+
+            @* Only shown when something contributed one, because the app itself
+               ships none — an empty column would read as a missing feature. *@
+            @if (Endpoints.Any())
+            {
+                <div class="col-md-3">
+                    <div class="tile-meta mb-1">Endpoints (@Endpoints.Count())</div>
+                    <ul class="small mb-0 ps-3 font-monospace">
+                        @foreach (var endpoint in Endpoints.OrderBy(e => e.Key))
+                        {
+                            <li>@ExtensionRoutes.PathFor(endpoint.Key)</li>
+                        }
+                    </ul>
+                </div>
+            }
+        </div>
+        <p class="tile-meta mb-0 mt-3">
+            When each background job last ran, and whether it worked, is on
+            <a href="settings/health">LabbyTwo health</a>.
+        </p>
+    </div>
+</div>

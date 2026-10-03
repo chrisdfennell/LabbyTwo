@@ -1,0 +1,13 @@
+@inherits LayoutComponentBase
+@layout MainLayout
+
+@* Every settings page inside the main shell, with the sections down the side. On a phone the
+   two stack: the sections become a short list above the page. *@
+
+<div class="settings-shell">
+    @* Interactive on its own, like the main menu, so the search works on a page that is not. *@
+    <SettingsNav @rendermode="InteractiveServer" />
+    <div class="settings-body">
+        @Body
+    </div>
+</div>

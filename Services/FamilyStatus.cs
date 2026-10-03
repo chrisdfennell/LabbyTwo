@@ -165,7 +165,7 @@ public sealed class FamilyStatus(
         {
             Markdown = markdown + "\nSent from the family status page.",
             Tag = "family-report",
-            Link = "settings#family",
+            Link = "settings/integrations#family",
         };
     }
 

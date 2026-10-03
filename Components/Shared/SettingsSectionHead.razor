@@ -1,0 +1,21 @@
+@* The heading of one settings section, from SettingsMap, so the name in the sub-navigation,
+   the search and the page itself cannot drift apart. *@
+
+<PageTitle>@($"{Section.Title} · Settings · LabbyTwo")</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>@Section.Icon @Section.Title</h1>
+        <p class="subtitle">@Section.Summary</p>
+    </div>
+    @ChildContent
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Key { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private SettingsSection Section =>
+        SettingsMap.Sections.FirstOrDefault(s => s.Key == Key)
+        ?? throw new InvalidOperationException($"No settings section is called “{Key}”.");
+}

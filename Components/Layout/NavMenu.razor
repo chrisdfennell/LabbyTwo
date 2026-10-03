@@ -4,8 +4,9 @@
 @inject NavigationManager Nav
 @inject AppSettingsStore AppSettings
 @inject FamilyReportStore FamilyReports
+@inject IJSRuntime JS
 
-<nav class="app-nav">
+<nav class="app-nav" aria-label="Main">
     <a class="nav-brand" href="/">
         <span class="nav-brand-mark">◆</span>
         <span class="nav-brand-text">@_brand</span>
@@ -13,7 +14,7 @@
 
     @if (_downCount > 0)
     {
-        <a class="nav-alert" href="/settings/connections">
+        <a class="nav-alert" href="settings/connections">
             @_downCount @(_downCount == 1 ? "service is" : "services are") down
         </a>
     }
@@ -22,12 +23,13 @@
        says something is broken, and the place to read what they said is one tap away. *@
     @if (_familyReports > 0)
     {
-        <a class="nav-alert" href="settings#family">
+        <a class="nav-alert" href="settings/integrations#family">
             @FamilyPageSettings.ReportsText(_familyReports) from the family
         </a>
     }
 
     <div class="nav-links">
+        <h2 class="visually-hidden">Tabs</h2>
         @foreach (var tab in _tabs)
         {
             <NavLink class="nav-item-link" href="@($"t/{tab.Slug}")">
@@ -42,44 +44,45 @@
         }
     </div>
 
+    @* Everything that is not a tab, in a few groups that fold away (NavMap). Which are folded
+       is remembered by this browser only: it is how you like your sidebar, not a setting of
+       the lab. *@
     <div class="nav-footer">
-        @* A plain link, not a NavLink: it is somewhere you go on a different device, and
-           while you are on it this sidebar is not there to be highlighted. *@
-        <a class="nav-item-link" href="wall" title="Rotate through the tabs full screen, for a wall display">
-            <span class="nav-icon">📺</span><span class="nav-text">Wall mode</span>
-        </a>
-        @* Plain for the same reason: it has a layout of its own, made for a phone. *@
-        <a class="nav-item-link" href="m" title="Only what needs attention, with the fixes one tap away — for a phone">
-            <span class="nav-icon">📱</span><span class="nav-text">Phone view</span>
-        </a>
-        <NavLink class="nav-item-link" href="changes">
-            <span class="nav-icon">🕘</span><span class="nav-text">What changed</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="incidents">
-            <span class="nav-icon">🔥</span><span class="nav-text">Incidents</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="logs">
-            <span class="nav-icon">📜</span><span class="nav-text">Logs</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="power">
-            <span class="nav-icon">⚡</span><span class="nav-text">Power</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="backups">
-            <span class="nav-icon">🛟</span><span class="nav-text">Backups</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="settings/tabs">
-            <span class="nav-icon">🗂️</span><span class="nav-text">Tabs</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="settings/connections">
-            <span class="nav-icon">🔌</span><span class="nav-text">Connections</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="settings/alerts">
-            <span class="nav-icon">🚨</span><span class="nav-text">Alerts</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="settings/appearance">
-            <span class="nav-icon">🎨</span><span class="nav-text">Appearance</span>
-        </NavLink>
-        <NavLink class="nav-item-link" href="settings" Match="NavLinkMatch.All">
+        @foreach (var group in _groups)
+        {
+            var open = !_collapsed.Contains(group.Key);
+            var listId = $"nav-group-{group.Key}";
+            <div class="nav-group @(open ? "is-open" : null)" @key="group.Key">
+                <h2 class="nav-group-heading">
+                    <button type="button" class="nav-group-toggle" aria-expanded="@(open ? "true" : "false")"
+                            aria-controls="@listId" @onclick="() => ToggleAsync(group.Key)">
+                        <span class="nav-group-chevron" aria-hidden="true">▸</span>
+                        <span>@group.Label</span>
+                    </button>
+                </h2>
+                <div class="nav-group-items" id="@listId" hidden="@(!open)">
+                    @foreach (var item in group.Items)
+                    {
+                        @if (item.Plain)
+                        {
+                            @* A plain link, not a NavLink: it has a layout of its own, and while you
+                               are on it this sidebar is not there to be highlighted. *@
+                            <a class="nav-item-link" href="@item.Href" title="@item.Hint">
+                                <span class="nav-icon">@item.Icon</span><span class="nav-text">@item.Label</span>
+                            </a>
+                        }
+                        else
+                        {
+                            <NavLink class="nav-item-link" href="@item.Href" title="@item.Hint">
+                                <span class="nav-icon">@item.Icon</span><span class="nav-text">@item.Label</span>
+                            </NavLink>
+                        }
+                    }
+                </div>
+            </div>
+        }
+
+        <NavLink class="nav-item-link nav-settings" href="settings">
             <span class="nav-icon">⚙️</span><span class="nav-text">Settings</span>
         </NavLink>
     </div>
@@ -87,6 +90,8 @@
 
 @code {
     private IReadOnlyList<Tab> _tabs = [];
+    private IReadOnlyList<NavGroup> _groups = NavMap.Groups;
+    private HashSet<string> _collapsed = new(StringComparer.Ordinal);
     private int _downCount;
     private int _familyReports;
     private string _brand = Appearance.Default.BrandName;
@@ -104,7 +109,12 @@
     {
         _tabs = [.. (await Config.TabsAsync()).Where(t => t.Enabled)];
         _downCount = Health.Snapshot.Count(s => s.IsUp == false);
-        _brand = (await AppSettings.AllAsync()).Get(Appearance.BrandKey, Appearance.Default.BrandName);
+
+        // The same cached settings the name comes from — the pages hidden from the menu add no
+        // read of their own. AllAsync answers from memory once anything has asked for it.
+        var settings = await AppSettings.AllAsync();
+        _brand = settings.Get(Appearance.BrandKey, Appearance.Default.BrandName);
+        _groups = NavMap.Visible(NavMap.Hidden(settings));
 
         // Never awaited while the page is drawn. This menu is on every page, and awaiting the
         // count through Offload put every page load in the same four-at-a-time queue as the
@@ -116,6 +126,41 @@
             _familyReports = known;
         else
             _ = CountReportsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        try
+        {
+            // Only once the browser is there to ask: the server's first draw has every group
+            // open, and this folds the ones this browser folded last time.
+            var folded = await JS.InvokeAsync<string[]?>("labbyNav.folded");
+            if (folded is { Length: > 0 })
+            {
+                _collapsed = new HashSet<string>(folded, StringComparer.Ordinal);
+                StateHasChanged();
+            }
+        }
+        catch (Exception)
+        {
+            // No storage (a private window, a blocked site), or no script yet: everything open.
+        }
+    }
+
+    private async Task ToggleAsync(string key)
+    {
+        if (!_collapsed.Remove(key))
+            _collapsed.Add(key);
+        try
+        {
+            await JS.InvokeVoidAsync("labbyNav.fold", _collapsed.ToArray());
+        }
+        catch (Exception)
+        {
+            // Remembering is a courtesy; the group still folds for this visit.
+        }
     }
 
     private async Task CountReportsAsync()

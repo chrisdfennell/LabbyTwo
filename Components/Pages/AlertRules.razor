@@ -1,4 +1,5 @@
 @page "/settings/alerts"
+@layout SettingsLayout
 @rendermode InteractiveServer
 @implements IDisposable
 @inject AlertRuleStore Rules
@@ -45,7 +46,7 @@
 
 @* Quiet hours sit above the rules on purpose: with forty things able to alert, when they
    are allowed to speak matters more than what any one of them says. *@
-<div class="widget mb-3">
+<div class="widget mb-3" id="quiet-hours">
     <div class="widget-head">
         <h2 class="widget-title">Quiet hours</h2>
         <span class="tile-meta">@_policy.Describe()</span>
@@ -89,7 +90,7 @@
 
 @* Mute windows sit with quiet hours because they answer the same question — when — but
    about particular things rather than about you. *@
-<div class="widget mb-3">
+<div class="widget mb-3" id="mute-windows">
     <div class="widget-head">
         <h2 class="widget-title">Mute windows</h2>
         <button class="btn btn-sm btn-outline-secondary" @onclick="StartNewWindow">+ New window</button>
@@ -147,7 +148,7 @@
     </div>
 </div>
 
-<div class="widget mb-3">
+<div class="widget mb-3" id="escalation">
     <div class="widget-head">
         <h2 class="widget-title">Escalation</h2>
         <span class="tile-meta">@_escalation.Describe(ChannelName)</span>
@@ -199,7 +200,7 @@
 @* Self-healing sits with escalation because it is the other half of the same question —
    what happens when an alert is not dealt with — and because the switch that stops all of
    it has to be somewhere obvious. *@
-<div class="widget mb-3">
+<div class="widget mb-3" id="self-healing">
     <div class="widget-head">
         <h2 class="widget-title">Self-healing</h2>
         <span class="tile-meta">

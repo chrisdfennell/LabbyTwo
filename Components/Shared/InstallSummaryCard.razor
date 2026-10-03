@@ -1,0 +1,108 @@
+@inject ConfigStore Config
+@inject AlertService Alerts
+@inject Db Database
+@inject UpdateChecker Updates
+@inject Microsoft.Extensions.Options.IOptions<LabbyOptions> Options
+
+@* The "This install" card from the old single Settings page, moved to Settings → System
+   unchanged. *@
+
+<div class="widget h-100" id="install">
+    <div class="widget-head"><h2 class="widget-title">This install</h2></div>
+    <div class="widget-body">
+        <dl class="row mb-0 small">
+            <dt class="col-6 tile-meta">Version</dt>
+            <dd class="col-6">
+                @if (Version == "dev")
+                {
+                    <span title="@($"Assembly reports: “{UpdateChecker.Raw}”")">not stamped</span>
+                }
+                else
+                {
+                    <span class="font-monospace">@Version</span>
+                }
+                @if (_update is { Known: true, Behind: false })
+                {
+                    <span class="text-success"> · up to date</span>
+                }
+                else if (_update is { Behind: true })
+                {
+                    <a class="text-warning" href="settings/updates#labbytwo"> · update available</a>
+                }
+            </dd>
+            <dt class="col-6 tile-meta">Probe interval</dt><dd class="col-6">@Options.Value.ProbeSeconds s</dd>
+            <dt class="col-6 tile-meta">Failures before down</dt><dd class="col-6">@Options.Value.FailuresBeforeDown</dd>
+            <dt class="col-6 tile-meta">History retention</dt><dd class="col-6">@RetentionText</dd>
+            <dt class="col-6 tile-meta">Login</dt>
+            <dd class="col-6">@(Options.Value.Auth.Enabled ? $"on ({Options.Value.Auth.Username})" : "off — open on this network")</dd>
+            <dt class="col-6 tile-meta">Database</dt><dd class="col-6">@Size</dd>
+            <dt class="col-6 tile-meta">Contents</dt>
+            <dd class="col-6">@_connectionCount connections · @_tabCount tabs · @_widgetCount widgets</dd>
+            <dt class="col-6 tile-meta">Alert channels</dt>
+            <dd class="col-6">
+                @if (_channelCount == 0)
+                {
+                    <a href="settings/connections">none configured</a>
+                }
+                else
+                {
+                    @($"{_channelCount} configured")
+                }
+            </dd>
+        </dl>
+        @* The monitor, jobs, plugins, DNS and database in one place — the questions
+           that otherwise need a shell on the box to answer. *@
+        <a class="btn btn-sm btn-outline-secondary mt-3" href="settings/health">🩺 Is LabbyTwo healthy?</a>
+        <a class="btn btn-sm btn-outline-secondary mt-3" href="settings/storage">💾 What takes the space?</a>
+    </div>
+</div>
+
+@code {
+    private int _connectionCount, _tabCount, _widgetCount, _channelCount;
+    private UpdateChecker.Result? _update;
+
+    private static string Version => UpdateChecker.Installed;
+
+    private string Size
+    {
+        get
+        {
+            double bytes = Database.SizeBytes;
+            string[] units = ["B", "KB", "MB", "GB"];
+            var unit = 0;
+            while (bytes >= 1024 && unit < units.Length - 1)
+            {
+                bytes /= 1024;
+                unit++;
+            }
+            return $"{bytes:0.#} {units[unit]}";
+        }
+    }
+
+    /// <summary>
+    /// Both halves, since "7 days" alone now reads as though a chart cannot go back
+    /// further than a week, when a year of hourly summaries sits behind it.
+    /// </summary>
+    private string RetentionText
+    {
+        get
+        {
+            var raw = (int)Options.Value.RawRetention.TotalDays;
+            var hourly = (int)Options.Value.HourlyRetention.TotalDays;
+            return hourly > raw
+                ? $"every reading for {raw} days, then hourly for {hourly} days"
+                : $"every reading for {raw} days";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _connectionCount = (await Config.ConnectionsAsync()).Count;
+        _tabCount = (await Config.TabsAsync()).Count;
+        _widgetCount = (await Config.WidgetsAsync()).Count;
+        _channelCount = (await Alerts.ChannelsAsync()).Count;
+
+        // Show a previous result if one was fetched this session, without checking again.
+        _update = Updates.Last;
+    }
+}

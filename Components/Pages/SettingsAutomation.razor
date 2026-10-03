@@ -1,0 +1,41 @@
+@page "/settings/automation"
+@layout SettingsLayout
+@rendermode InteractiveServer
+
+<SettingsSectionHead Key="automation" />
+
+<div class="row g-3">
+    <div class="col-12">
+        <div class="widget" id="scheduled-actions">
+            <div class="widget-head">
+                <h2 class="widget-title">Scheduled actions</h2>
+                <a class="btn btn-sm btn-outline-secondary" href="settings/scheduled">Open scheduled actions</a>
+            </div>
+            <div class="widget-body">
+                <p class="tile-meta mb-0">
+                    A connection's action — restart a container, reboot the router, wake a PC — run on a
+                    timetable you choose, with what happened in What changed.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12">
+        <SafeUpdatesSettings />
+    </div>
+
+    <div class="col-12">
+        <div class="widget" id="self-healing">
+            <div class="widget-head">
+                <h2 class="widget-title">Self-healing</h2>
+                <a class="btn btn-sm btn-outline-secondary" href="settings/alerts#self-healing">Open in Alerts</a>
+            </div>
+            <div class="widget-body">
+                <p class="tile-meta mb-0">
+                    Acting by itself when something breaks — restarting what went down — is set up next to
+                    the alerts that trigger it.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,19 @@
+@page "/settings/system"
+@layout SettingsLayout
+@rendermode InteractiveServer
+
+<SettingsSectionHead Key="system" />
+
+<div class="row g-3">
+    <div class="col-12">
+        <InstallSummaryCard />
+    </div>
+
+    <div class="col-12">
+        <ExtensionsCard />
+    </div>
+
+    <div class="col-12">
+        <PluginSettings />
+    </div>
+</div>

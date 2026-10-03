@@ -408,13 +408,13 @@ public sealed class SnapshotEndpoints(ConfigStore config) : IEndpointExtension
 - **Everything is mapped under `/ext/{Key}`.** That is what stops a plugin from claiming
   `/login`, or colliding with the next plugin, and it makes a URL say which extension
   answered it. A key that would not survive being a URL segment — a slash, a route brace —
-  is refused and reported on the Settings page rather than mapped.
+  is refused and reported under Settings → System rather than mapped.
 - **Login applies by default.** On an install with a password, an extension's routes
   require it like every other page. Override `RequiresAuthorization => false` only for
   something that genuinely has to answer without one, like a share link — and then make the
   token in the link the thing that authorises it.
 - **Throwing takes you out, not the app.** If `Map` throws, that extension's routes are
-  skipped and the reason appears under Settings → Plugins. The dashboard still starts.
+  skipped and the reason appears under Settings → System → Plugins. The dashboard still starts.
 - **Pass Range headers through.** If you are streaming a file from somewhere else, copy the
   request's `Range` header up and the `206`, `Content-Range` and `Accept-Ranges` back down.
   That pair is the difference between a video that seeks and a video that has to be
@@ -475,14 +475,14 @@ public sealed class DropCleanupJob(Db db, ILogger<DropCleanupJob> log) : IBackgr
   plugin that hangs in `StartAsync` hangs the whole app. This is a method with an interval;
   `BackgroundJobRunner` owns the loop, so a job that throws or overruns is only its own
   problem.
-- **Throwing is survivable.** The failure is logged, shown under Settings, and the job runs
+- **Throwing is survivable.** The failure is logged, shown on LabbyTwo health, and the job runs
   again next interval — so make the message say what a person should do about it.
 - **Every job gets its own loop**, and a slow one delays only itself.
 - **The interval has a floor of one minute.** Anything that wants to be faster is really
   reacting to something rather than polling, and should be triggered by that instead.
 - **`RunAtStartup` is false unless you say otherwise.** A dozen plugins all doing their
   daily sweep during boot is how a dashboard comes up slowly and nobody can tell why.
-- **Settings shows when each job last ran** and what happened. Work nobody watches needs
+- **LabbyTwo health (Settings → System) shows when each job last ran** and what happened. Work nobody watches needs
   somewhere to say it stopped.
 
 ---
@@ -533,7 +533,7 @@ cp bin/Release/net10.0/MyLabbyPlugin.dll /path/to/labbytwo-data/plugins/
 docker compose restart labbytwo
 ```
 
-Settings → Plugins lists what loaded, what it contributed, and the reason for anything
+Settings → System → Plugins lists what loaded, what it contributed, and the reason for anything
 that did not.
 
 ### Publishing it
